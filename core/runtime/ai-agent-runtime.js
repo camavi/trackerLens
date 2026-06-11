@@ -428,6 +428,9 @@ window.TrackerLensAiAgentRuntime = (() => {
           inputs: agentInputs(node, runtime.dependencies || []),
           outputs: node.outputs || [],
           config: nodeConfig(node),
+          incomingMappings: (runtime.dependencies || [])
+            .filter((dependency) => dependency.targetNodeId === node.id)
+            .map((dependency) => ({ id: dependency.id, channel: dependency.channel, metadata: dependency.metadata || {} })),
         }));
       return JSON.stringify(agents);
     }
@@ -459,6 +462,49 @@ window.TrackerLensAiAgentRuntime = (() => {
         });
       });
       return this;
+    }
+
+    async applyIncomingMapping({ node, payload, event } = {}) {
+      const dependency = window.TrackerLensRuntimeContract?.incomingDependencyForEvent?.({
+        runtime: this.runtime,
+        node,
+        event,
+      });
+      const mapping = dependency?.metadata || null;
+      if (!mapping || !window.TrackerLensRuntimeContract?.applyConnectionMapping) {
+        return { payload, event, dependency, mappingResult: null };
+      }
+      const result = window.TrackerLensRuntimeContract.applyConnectionMapping(payload, mapping);
+      if (result.changed || result.warnings.length) {
+        await this.log({
+          node,
+          level: result.warnings.length ? "warning" : "info",
+          message: result.warnings.length ? `Connection mapping warning: ${node.label || node.id}` : `Connection mapping applied: ${node.label || node.id}`,
+          context: {
+            action: "connection-mapping-applied",
+            dependencyId: dependency.id || "",
+            inputChannel: event?.channel || "",
+            mode: result.mapping.mode,
+            payloadPath: result.mapping.payloadPath,
+            transformed: result.changed,
+            warnings: result.warnings,
+          },
+        });
+      }
+      return {
+        payload: result.payload,
+        event: {
+          ...event,
+          meta: {
+            ...(event?.meta || {}),
+            mappedPayload: result.changed,
+            mappingMode: result.mapping.mode,
+            mappingDependencyId: dependency.id || "",
+          },
+        },
+        dependency,
+        mappingResult: result,
+      };
     }
 
     async performExecution({ node, payload, event }) {
@@ -594,6 +640,9 @@ window.TrackerLensAiAgentRuntime = (() => {
       if (this.executionKeys.size > 300) this.executionKeys = new Set([...this.executionKeys].slice(-180));
       const startedAt = performance.now();
       try {
+        const mapped = await this.applyIncomingMapping({ node, payload, event });
+        payload = mapped.payload;
+        event = mapped.event;
         const result = await this.execute({ node, payload, event });
         const latencyMs = Math.round(performance.now() - startedAt);
         const channel = agentOutput(node, await resolveNodeConfig(node));

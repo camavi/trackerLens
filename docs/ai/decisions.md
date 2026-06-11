@@ -17,6 +17,9 @@ Last updated: 2026-06-11.
 - Global Library assets are not automatically Flow Map nodes.
 - Runtime graph nodes/dependencies live in runtime stores.
 - Channels are first-class runtime objects.
+- The official contract is `Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -> Channels -> Events/Flow Logs`.
+- `tl_pages` remains the workspace/page store; do not introduce `tl_workspaces` without an explicit migration.
+- Schema-driven Flow Map config should use `TrackerLensRuntimeContract` instead of a parallel form system.
 
 ## Safety
 

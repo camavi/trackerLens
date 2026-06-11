@@ -22,6 +22,9 @@ Last updated: 2026-06-11.
 - Dependencies represent runtime graph edges.
 - Channels are shared runtime contracts, not just labels.
 - Flow Map should reload runtime after structural mutations.
+- The canonical chain is `Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -> Channels -> Events/Flow Logs`.
+- `tl_pages` is the workspace/page store; there is no active `tl_workspaces` store.
+- Connection mapping is stored on `tl_connections.mapping` and mirrored into dependency `metadata`.
 
 ## Helpers
 
@@ -30,3 +33,4 @@ Last updated: 2026-06-11.
 - `TrackerLensRuntimeSnapshotStore`
 - `TrackerLensGraphEngine`
 - `TrackerLensEventLogStore`
+- `TrackerLensRuntimeContract`

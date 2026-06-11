@@ -129,6 +129,11 @@ const readConfigMap = (form) =>
     .map((field) => [field.dataset.configKey, field.type === "checkbox" ? field.checked : field.value?.trim?.() || ""])
     .filter(([key]) => key));
 
+const runtimeContractSchemaFields = (schema = {}) =>
+  window.TrackerLensRuntimeContract?.normalizeSettingsSchema
+    ? window.TrackerLensRuntimeContract.normalizeSettingsSchema(schema)
+    : Object.entries(schema || {}).map(([key, type]) => ({ key, label: key, type: String(type || "string") }));
+
 const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const label = values.label ?? defaults.label;
@@ -204,50 +209,56 @@ const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
 const configFieldDefinitions = (node = {}) => {
   const subtype = nodeSubtype(node);
   const category = nodeCategory(node);
+  const schema = node.metadata?.settingsSchema || node.metadata?.manifest?.settingsSchema || {};
+  const schemaFields = runtimeContractSchemaFields(schema);
+  const mergeSchemaFields = (fields = []) => [
+    ...fields,
+    ...schemaFields.filter((field) => !fields.some((item) => item.key === field.key)),
+  ];
   if (subtype === "condition") {
-    return [
+    return mergeSchemaFields([
       { key: "conditionField", label: "Field / Path", placeholder: "payload.price" },
       { key: "conditionOperator", label: "Operator", type: "select", options: [">", ">=", "<", "<=", "==", "!=", "contains", "exists"] },
       { key: "conditionValue", label: "Compare Value", placeholder: "100000" },
       { key: "trueOutput", label: "True output port", placeholder: "true" },
       { key: "falseOutput", label: "False output port", placeholder: "false" },
-    ];
+    ]);
   }
   if (subtype === "filter") {
-    return [
+    return mergeSchemaFields([
       { key: "filterPath", label: "Field / Path", placeholder: "payload.status" },
       { key: "filterOperator", label: "Operator", type: "select", options: ["==", "!=", ">", ">=", "<", "<=", "contains", "exists"] },
       { key: "filterValue", label: "Value", placeholder: "active" },
-    ];
+    ]);
   }
   if (subtype === "transform" || subtype === "map" || subtype === "formatter") {
-    return [
+    return mergeSchemaFields([
       { key: "expression", label: "Transform Expression", type: "textarea", placeholder: "return { ...payload, normalized: true }" },
-    ];
+    ]);
   }
   if (["throttle", "debounce"].includes(subtype)) {
-    return [
+    return mergeSchemaFields([
       { key: "windowMs", label: "Window (ms)", placeholder: "1000" },
       { key: "strategy", label: "Strategy", type: "select", options: ["leading", "trailing", "latest"] },
-    ];
+    ]);
   }
   if (["merge", "split", "reduce", "aggregator"].includes(subtype)) {
-    return [
+    return mergeSchemaFields([
       { key: "strategy", label: "Strategy", placeholder: subtype === "split" ? "by path / predicate" : "merge by timestamp" },
       { key: "windowSize", label: "Window size", placeholder: "100" },
-    ];
+    ]);
   }
   if (subtype === "validator") {
-    return [
+    return mergeSchemaFields([
       { key: "schema", label: "Validation Schema", type: "textarea", placeholder: "{ \"required\": [\"price\"] }" },
-    ];
+    ]);
   }
   if (subtype === "agent-bridge") {
-    return [];
+    return mergeSchemaFields([]);
   }
   if (category === "sources") {
     if (subtype === "task") {
-      return [
+      return mergeSchemaFields([
         { key: "objective", label: "Objective", type: "textarea", placeholder: "Describe what the agent must achieve." },
         { key: "context", label: "Context", type: "textarea", placeholder: "Operational context, data notes or user intent." },
         { key: "priority", label: "Priority", type: "select", options: ["normal", "high", "urgent"] },
@@ -257,50 +268,50 @@ const configFieldDefinitions = (node = {}) => {
         { key: "timeoutMs", label: "Timeout (ms)", placeholder: "30000" },
         { key: "payloadJson", label: "Payload JSON", type: "textarea", placeholder: "{ \"itemId\": \"demo-1\", \"value\": 42 }" },
         { key: "emitChannel", label: "Emit channel", placeholder: "task" },
-      ];
+      ]);
     }
     if (subtype === "manual-json") {
-      return [
+      return mergeSchemaFields([
         { key: "json", label: "JSON Payload", type: "textarea", placeholder: "{ \"mela\": \"prova\" } oppure {mela:'prova'}" },
         { key: "emitChannel", label: "Emit channel", placeholder: "raw" },
-      ];
+      ]);
     }
     if (subtype === "text-input" || subtype === "manual-input") {
-      return [
+      return mergeSchemaFields([
         { key: "text", label: "Text Payload", type: "textarea", placeholder: "Scrivi qui il dato da passare al flow..." },
         { key: "emitChannel", label: "Emit channel", placeholder: "raw" },
-      ];
+      ]);
     }
     if (subtype === "image-source") {
-      return [
+      return mergeSchemaFields([
         { key: "imageUrl", label: "Image URL", placeholder: "https://example.com/image.png" },
         { key: "imageDataUrl", label: "Upload image", type: "image-file", placeholder: "Select image file" },
         { key: "alt", label: "Alt / caption", placeholder: "Image description" },
         { key: "emitChannel", label: "Emit channel", placeholder: "image" },
-      ];
+      ]);
     }
     if (subtype === "audio-source") {
-      return [
+      return mergeSchemaFields([
         { key: "audioUrl", label: "Audio URL", placeholder: "https://example.com/audio.mp3" },
         { key: "audioDataUrl", label: "Upload audio", type: "audio-file", placeholder: "Select audio file" },
         { key: "transcript", label: "Transcript / notes", type: "textarea", placeholder: "Optional transcript or notes" },
         { key: "emitChannel", label: "Emit channel", placeholder: "audio" },
-      ];
+      ]);
     }
     if (subtype === "file-source") {
-      return [
+      return mergeSchemaFields([
         { key: "fileDataUrl", label: "Upload file", type: "file", placeholder: "Select file" },
         { key: "fileName", label: "File name", placeholder: "payload.csv" },
         { key: "mimeType", label: "MIME type", placeholder: "text/csv" },
         { key: "emitChannel", label: "Emit channel", placeholder: "file" },
-      ];
+      ]);
     }
     if (subtype === "files-source") {
-      return [
+      return mergeSchemaFields([
         { key: "filesJson", label: "Files metadata JSON", type: "textarea", placeholder: "[{ \"name\": \"image.png\", \"type\": \"image/png\" }]" },
         { key: "batchLabel", label: "Batch label", placeholder: "import batch" },
         { key: "emitChannel", label: "Emit channel", placeholder: "files" },
-      ];
+      ]);
     }
     const fields = [
       { key: "endpoint", label: "Endpoint / Source", placeholder: "https://api.example.com/data" },
@@ -312,18 +323,18 @@ const configFieldDefinitions = (node = {}) => {
       { key: "testPayload", label: "Manual Test Payload", type: "textarea", placeholder: "{ \"value\": 100, \"status\": \"active\" }" },
     ];
     if (subtype === "websocket") fields.splice(2, 0, { key: "keepWebSocketOpen", label: "Keep WebSocket open", type: "checkbox" });
-    return fields;
+    return mergeSchemaFields(fields);
   }
   if (category === "trackers") {
-    return [
+    return mergeSchemaFields([
       { key: "emitChannel", label: "Emit channel", placeholder: "sensor.value" },
       { key: "parser", label: "Parser path", placeholder: "payload.data" },
       { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
       { key: "testPayload", label: "Test Payload", type: "textarea", placeholder: "{ \"price\": 100000, \"status\": \"active\" }" },
-    ];
+    ]);
   }
   if (category === "ai-agents") {
-    return [
+    return mergeSchemaFields([
       { key: "provider", label: "Provider", placeholder: "openai/local" },
       { key: "model", label: "Model", placeholder: "gpt-4.1-mini" },
       { key: "prompt", label: "Prompt / Instruction", type: "textarea", placeholder: "Analyze incoming payload and emit a decision." },
@@ -334,79 +345,79 @@ const configFieldDefinitions = (node = {}) => {
       { key: "assertValue", label: "Assert value", placeholder: "ok" },
       { key: "inputCostPer1k", label: "Input cost / 1k", placeholder: "0" },
       { key: "outputCostPer1k", label: "Output cost / 1k", placeholder: "0" },
-    ];
+    ]);
   }
   if (category === "lens") {
-    return [
+    return mergeSchemaFields([
       { key: "viewMode", label: "View mode", type: "select", options: ["chart", "stat", "table", "feed", "terminal"] },
       { key: "refreshMs", label: "Refresh (ms)", placeholder: "1000" },
       { key: "displayPath", label: "Display path", placeholder: "payload.value" },
-    ];
+    ]);
   }
   if (category === "actions") {
     if (subtype === "runtime-trigger") {
-      return [
+      return mergeSchemaFields([
         { key: "targetChannel", label: "Target channel", placeholder: "alerts.price" },
         { key: "template", label: "Payload Template", type: "textarea", placeholder: "{ \"triggered\": true, \"value\": \"{{payload.value}}\" }" },
-      ];
+      ]);
     }
     if (subtype === "telegram") {
-      return [
+      return mergeSchemaFields([
         { key: "botToken", label: "Bot token", placeholder: "123456:ABC..." },
         { key: "chatId", label: "Chat ID", placeholder: "-1001234567890" },
         { key: "target", label: "Override URL", placeholder: "https://api.telegram.org/bot.../sendMessage" },
         { key: "template", label: "Message Template", type: "textarea", placeholder: "{ \"text\": \"{{payload.value}}\" } oppure testo semplice" },
         { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
-      ];
+      ]);
     }
     if (subtype === "whatsapp") {
-      return [
+      return mergeSchemaFields([
         { key: "target", label: "API / Provider URL", placeholder: "https://graph.facebook.com/v19.0/<phone_number_id>/messages" },
         { key: "accessToken", label: "Access token", placeholder: "Bearer token opzionale" },
         { key: "to", label: "Recipient", placeholder: "+391234567890" },
         { key: "template", label: "Message Template", type: "textarea", placeholder: "{ \"text\": \"{{payload.value}}\" } oppure payload provider" },
         { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
-      ];
+      ]);
     }
     if (subtype === "http-write") {
-      return [
+      return mergeSchemaFields([
         { key: "target", label: "URL", placeholder: "https://api.example.com/resource/1" },
         { key: "method", label: "Method", type: "select", options: ["PUT", "PATCH", "POST"] },
         { key: "headers", label: "Headers JSON", type: "textarea", placeholder: "{ \"Authorization\": \"Bearer ...\" }" },
         { key: "template", label: "Payload Template", type: "textarea", placeholder: "{ \"value\": \"{{payload.value}}\" }" },
         { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
-      ];
+      ]);
     }
     if (["webhook-post", "webhook-call", "discord", "slack", "email"].includes(subtype)) {
-      return [
+      return mergeSchemaFields([
         { key: "target", label: "Target URL", placeholder: "https://..." },
         { key: "headers", label: "Headers JSON", type: "textarea", placeholder: "{ \"Authorization\": \"Bearer ...\" }" },
         { key: "template", label: "Payload Template", type: "textarea", placeholder: "{ \"text\": \"{{payload.value}}\" }" },
         { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
-      ];
+      ]);
     }
-    return [
+    return mergeSchemaFields([
       { key: "target", label: "Target", placeholder: "webhook/chat/email" },
       { key: "template", label: "Payload Template", type: "textarea", placeholder: "{ \"text\": \"{{payload.value}}\" }" },
       { key: "retryPolicy", label: "Retry policy", type: "select", options: ["none", "linear", "exponential"] },
-    ];
+    ]);
   }
   if (category === "storage") {
-    return [
+    return mergeSchemaFields([
       { key: "storeName", label: "Store / Bucket", placeholder: "tl_history" },
       { key: "keyPath", label: "Key path", placeholder: "id" },
       { key: "retention", label: "Retention", placeholder: "30d" },
-    ];
+    ]);
   }
   if (category === "dev") {
-    return [
+    return mergeSchemaFields([
       { key: "previewMode", label: "Preview mode", type: "select", options: ["auto", "json", "raw"] },
       { key: "maxChars", label: "Max chars", placeholder: "2000" },
-    ];
+    ]);
   }
-  return [
+  return mergeSchemaFields([
     { key: "config", label: "Runtime Config", type: "textarea", placeholder: "JSON, rule, target or prompt" },
-  ];
+  ]);
 };
 
 const executionFieldDefinitions = () => [
@@ -701,11 +712,28 @@ const clearPreviewNodePayload = (node = {}) => {
 const previewTextForRecord = (record = null, mode = "auto", maxChars = 2000) => {
   if (!record) return "Nessun payload dati ricevuto.\nI pulse di routing/test sono ignorati dal Preview.";
   const payload = record.payload;
+  const originalPayload = record.originalPayload;
+  const hasOriginalPayload = originalPayload !== undefined && originalPayload !== null;
+  const mappingStatus = record.mappingWarnings?.length
+    ? "warning"
+    : record.mapping
+      ? (hasOriginalPayload ? "applied" : "pass-through")
+      : "raw";
+  const warningText = record.mappingWarnings?.length
+    ? `Mapping warnings:\n${record.mappingWarnings.map((warning) => `- ${warning}`).join("\n")}\n\n`
+    : "";
+  const mappingText = record.mapping
+    ? `Mapping: ${record.mapping.mode || "pass-through"} · ${mappingStatus}${record.mappingDependencyId ? ` · ${record.mappingDependencyId}` : ""}\n\n`
+    : "";
   const asRaw = typeof payload === "string" ? payload : prettyRuntimeValue(payload);
   const text = mode === "raw" && typeof payload !== "string"
     ? String(payload)
     : asRaw;
-  return text.length > maxChars ? `${text.slice(0, maxChars)}\n...` : text;
+  const originalText = hasOriginalPayload
+    ? `\n\nOriginal payload:\n${typeof originalPayload === "string" ? originalPayload : prettyRuntimeValue(originalPayload)}`
+    : "";
+  const fullText = `${warningText}${mappingText}Mapped payload:\n${text}${originalText}`;
+  return fullText.length > maxChars ? `${fullText.slice(0, maxChars)}\n...` : fullText;
 };
 
 const renderPreviewNodePanel = (node = {}) => {
@@ -721,6 +749,7 @@ const renderPreviewNodePanel = (node = {}) => {
       _.span(
         { class: "tl-flow-node-preview-actions" },
         record ? copyRuntimeButton(record.payload, "Copy preview payload") : null,
+        record?.originalPayload !== undefined && record.originalPayload !== null ? copyRuntimeButton(record.originalPayload, "Copy original payload") : null,
         record ? btn({
           class: "tl-flow-copy-btn is-clear",
           title: "Clear preview payload",
@@ -934,7 +963,7 @@ const renderInlineNodeSettings = (node) => {
         ...(definition.options || []).map((option) => _.option({ value: option, selected: option === value }, option))
       );
     }
-    if (definition.type === "checkbox") {
+    if (["checkbox", "boolean", "toggle"].includes(definition.type)) {
       return _.Toggle({
         class: "tl-flow-inline-toggle",
         checked: Boolean(value),
@@ -3344,6 +3373,227 @@ const connectionValidation = (source, target, sourcePortName = "all", targetPort
   return { ok: true, reason: "", channel, sourcePort, targetPort };
 };
 
+const normalizeRuntimeLinkMapping = (mapping = {}) =>
+  window.TrackerLensRuntimeContract?.normalizeConnectionMapping
+    ? window.TrackerLensRuntimeContract.normalizeConnectionMapping(mapping)
+    : {
+      sourcePort: mapping.sourcePort || "all",
+      targetPort: mapping.targetPort || "all",
+      channel: mapping.channel || "",
+      mode: mapping.mode || "pass-through",
+      payloadPath: mapping.payloadPath || "",
+      transform: mapping.transform || "",
+      note: mapping.note || "",
+      linkType: mapping.linkType || "data",
+    };
+
+const saveRuntimeLinkMapping = async ({ edge = null, source = null, target = null, mapping = {} } = {}) => {
+  if (!edge?.id && !edge?.connectionId) return null;
+  const now = new Date().toISOString();
+  const normalized = normalizeRuntimeLinkMapping({
+    ...(edge.mapping || {}),
+    ...(edge.metadata || {}),
+    ...mapping,
+  });
+  const workspaceId = normalizeRuntimeWorkspaceId(edge.workspaceId || source?.workspaceId || target?.workspaceId || state.filters.workspaceId || "workspace_global");
+  let savedConnection = null;
+
+  if (edge.connectionId && window.TrackerLensConnectionsStore?.upsert) {
+    const existingConnection = (state.connections || []).find((connection) => connection.id === edge.connectionId) || null;
+    savedConnection = {
+      ...(existingConnection?.raw || existingConnection || {}),
+      id: edge.connectionId,
+      workspaceId,
+      updatedAt: now,
+      sourceNodeId: edge.sourceNodeId || source?.id || existingConnection?.sourceNodeId || existingConnection?.fromBoxId || "",
+      targetNodeId: edge.targetNodeId || target?.id || existingConnection?.targetNodeId || existingConnection?.toBoxId || "",
+      fromBoxId: edge.sourceNodeId || source?.id || existingConnection?.fromBoxId || "",
+      toBoxId: edge.targetNodeId || target?.id || existingConnection?.toBoxId || "",
+      channel: normalized.channel || edge.channel || existingConnection?.channel || "runtime",
+      mapping: normalized,
+    };
+    await window.TrackerLensConnectionsStore.upsert(savedConnection);
+  }
+
+  const dependency = {
+    ...edge,
+    workspaceId,
+    channel: normalized.channel || edge.channel || "runtime",
+    metadata: {
+      ...(edge.metadata || {}),
+      source: edge.metadata?.source || "flow-map",
+      ...normalized,
+    },
+    updatedAt: now,
+  };
+  await window.TrackerLensRuntimeGraphStore?.upsertDependency?.({ dependency });
+  state.runtime.dependencies = (state.runtime.dependencies || []).map((item) =>
+    item.id === dependency.id ? dependency : item
+  );
+  if (savedConnection) {
+    state.connections = [
+      ...(state.connections || []).filter((item) => item.id !== savedConnection.id),
+      savedConnection,
+    ];
+  }
+  await recordFlowAction({
+    workspaceId,
+    connectionId: edge.connectionId || edge.id,
+    level: "info",
+    message: `Runtime link mapping updated: ${source?.label || edge.sourceNodeId || "source"} -> ${target?.label || edge.targetNodeId || "target"}`,
+    context: {
+      action: "runtime-link-mapping-updated",
+      dependencyId: edge.id || "",
+      connectionId: edge.connectionId || "",
+      sourceNodeId: edge.sourceNodeId || "",
+      targetNodeId: edge.targetNodeId || "",
+      mapping: normalized,
+    },
+  });
+  await loadRuntime({ force: true, silent: true });
+  const refreshed = (state.runtime.dependencies || []).find((item) => item.id === edge.id) || dependency;
+  selectEdge(refreshed);
+  mount({ preserveScroll: true });
+  return refreshed;
+};
+
+const requestRuntimeLinkMappingDialog = ({ source, target, validation, sourcePort = "all", targetPort = "all", channel = "runtime", edge = null, initialMapping = null } = {}) => {
+  const formId = `tl-flow-link-map-${Date.now()}`;
+  let formRef = null;
+  const editing = Boolean(edge?.id || edge?.connectionId);
+  const currentMapping = normalizeRuntimeLinkMapping({
+    sourcePort,
+    targetPort,
+    channel,
+    ...(initialMapping || {}),
+    ...(edge?.mapping || {}),
+    ...(edge?.metadata || {}),
+  });
+  const sourcePortLabel = `${validation.sourcePort?.name || sourcePort}:${validation.sourcePort?.type || "any"}`;
+  const targetPortLabel = `${validation.targetPort?.name || targetPort}:${validation.targetPort?.type || "any"}`;
+  const read = (name, fallback = "") => {
+    const root = formRef || document.getElementById(formId);
+    const field = root?.querySelector?.(`[data-mapping-key="${name}"], [name="${name}"]`);
+    const value = field?.value ?? field?.textContent ?? "";
+    return String(value).trim() || fallback;
+  };
+  const validateMappingDraft = (mapping = {}) => {
+    if (mapping.mode === "json-map") {
+      if (!mapping.transform) return "json-map richiede un oggetto JSON nel campo Transform / mapping.";
+      try {
+        const parsed = JSON.parse(mapping.transform);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return "json-map deve essere un oggetto JSON, per esempio { \"prezzo\": \"prova\" }.";
+        }
+      } catch (error) {
+        return `json-map non valido: ${error.message || error}`;
+      }
+    }
+    if (mapping.mode === "template" && !mapping.transform) {
+      return "template richiede un testo nel campo Transform / mapping.";
+    }
+    return "";
+  };
+  const dialog = _.Dialog({
+    class: "tl-flow-config-dialog",
+    panelClass: "tl-flow-config-panel",
+    title: "Connection Mapping",
+    subtitle: `${source?.label || source?.id || "Source"} -> ${target?.label || target?.id || "Target"}`,
+    icon: "route",
+    closeButton: true,
+    content: () => {
+      formRef = _.form(
+        {
+          id: formId,
+          class: "tl-flow-config-grid",
+          onsubmit: async (event) => {
+            event.preventDefault();
+            const mapping = normalizeRuntimeLinkMapping({
+              sourcePort,
+              targetPort,
+              channel,
+              mode: read("mode", "pass-through"),
+              payloadPath: read("payloadPath", ""),
+              transform: read("transform", ""),
+              note: read("note", ""),
+              linkType: validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE
+                ? AGENT_CONTROL_PORT_TYPE
+                : "data",
+            });
+            dialog.close();
+            try {
+              if (editing) {
+                await saveRuntimeLinkMapping({ edge, source, target, mapping });
+                return;
+              }
+              await createRuntimeLink(source, target, { sourcePort, targetPort, mapping, configure: false });
+            } catch (error) {
+              state.error = error?.message || "Mapping non salvato.";
+              mount({ preserveScroll: true });
+            }
+          },
+        },
+        _.label(
+          { class: "tl-flow-config-field" },
+          _.span("Source port"),
+          _.input({ value: sourcePortLabel, disabled: true })
+        ),
+        _.label(
+          { class: "tl-flow-config-field" },
+          _.span("Target port"),
+          _.input({ value: targetPortLabel, disabled: true })
+        ),
+        _.label(
+          { class: "tl-flow-config-field" },
+          _.span("Channel"),
+          _.input({ value: currentMapping.channel || channel, disabled: true })
+        ),
+        _.label(
+          { class: "tl-flow-config-field" },
+          _.span("Mapping mode"),
+          _.select(
+            { name: "mode", "data-mapping-key": "mode", value: currentMapping.mode || "pass-through" },
+            ...["pass-through", "path", "json-map", "template", "custom-transform"].map((mode) =>
+              _.option({ value: mode, selected: mode === (currentMapping.mode || "pass-through") }, mode))
+          )
+        ),
+        _.label(
+          { class: "tl-flow-config-field is-wide" },
+          _.span("Payload path"),
+          _.input({ name: "payloadPath", "data-mapping-key": "payloadPath", value: currentMapping.payloadPath || "", placeholder: "payload.data.price oppure lascia vuoto per payload completo", autocomplete: "off" })
+        ),
+        _.label(
+          { class: "tl-flow-config-field is-wide" },
+          _.span("Transform / mapping"),
+          _.textarea({
+            name: "transform",
+            "data-mapping-key": "transform",
+            value: currentMapping.transform || "",
+            rows: 5,
+            placeholder: "{ \"prezzo\": \"prova\", \"symbol\": \"data.s\", \"price\": \"number:data.c\" }",
+          }, currentMapping.transform || "")
+        ),
+        _.label(
+          { class: "tl-flow-config-field is-wide" },
+          _.span("Note"),
+          _.input({ name: "note", "data-mapping-key": "note", value: currentMapping.note || "", placeholder: "Intento del mapping o vincoli runtime", autocomplete: "off" })
+        )
+      );
+      return formRef;
+    },
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        onclick: () => {
+          formRef?.requestSubmit?.();
+        },
+      }, icon("save", "sm"), editing ? "Save Mapping" : "Create Link")
+    ),
+  });
+  dialog.open();
+};
+
 const startLinkFromNode = (node) => {
   if (!node?.id) return;
   state.linkingSourceId = node.id;
@@ -3408,6 +3658,18 @@ const createRuntimeLink = async (source, target, options = {}) => {
     mount();
     return;
   }
+  const agentControlLink = validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE;
+  if (options.configure !== false && !options.mapping && !agentControlLink) {
+    requestRuntimeLinkMappingDialog({ source, target, validation, sourcePort, targetPort, channel });
+    return;
+  }
+  const linkMapping = normalizeRuntimeLinkMapping({
+    sourcePort,
+    targetPort,
+    channel,
+    ...(options.mapping || {}),
+    linkType: agentControlLink ? AGENT_CONTROL_PORT_TYPE : (options.mapping?.linkType || "data"),
+  });
   const connectionId = `flow_conn_${Date.now()}`;
   const connection = {
     id: connectionId,
@@ -3436,13 +3698,7 @@ const createRuntimeLink = async (source, target, options = {}) => {
     sourceName: source.label || source.id,
     targetName: target.label || target.id,
     channel,
-    mapping: {
-      sourcePort,
-      targetPort,
-      linkType: validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE
-        ? AGENT_CONTROL_PORT_TYPE
-        : "data",
-    },
+    mapping: linkMapping,
   };
   let runtimeConnection = connection;
   let workspaceSync = null;
@@ -3471,11 +3727,7 @@ const createRuntimeLink = async (source, target, options = {}) => {
       status: "active",
       metadata: {
         source: "flow-map",
-        sourcePort,
-        targetPort,
-        linkType: validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE
-          ? AGENT_CONTROL_PORT_TYPE
-          : "data",
+        ...linkMapping,
       },
       createdAt: now,
       updatedAt: now,

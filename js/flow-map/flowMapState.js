@@ -551,6 +551,7 @@ const mergeConnectionDependencies = (nodes = [], dependencies = [], connections 
       metadata: {
         virtual: false,
         source: "tl_connections",
+        ...(connection.mapping || {}),
         sourcePort: connection.mapping?.sourcePort || "all",
         targetPort: connection.mapping?.targetPort || "all",
       },
@@ -864,12 +865,18 @@ const isPreviewNode = (node = {}) =>
 const dependencyChannelForEvent = (dependency = {}) =>
   dependency.channel || normalizePortChannel(dependency.metadata?.sourcePort || dependency.sourcePort) || "";
 
+const previewDependenciesForEvent = (event = {}) => {
+  const nodesById = new Map((state.runtime.nodes || []).map((node) => [node.id, node]));
+  return (state.runtime.dependencies || [])
+    .filter((dependency) => dependencyChannelForEvent(dependency) === event.channel)
+    .filter((dependency) => isPreviewNode(nodesById.get(dependency.targetNodeId)));
+};
+
 const previewNodesForEvent = (event = {}) => {
   const nodesById = new Map((state.runtime.nodes || []).map((node) => [node.id, node]));
   const previewIncomingDependencies = (state.runtime.dependencies || [])
     .filter((dependency) => isPreviewNode(nodesById.get(dependency.targetNodeId)));
-  const directTargets = (state.runtime.dependencies || [])
-    .filter((dependency) => dependencyChannelForEvent(dependency) === event.channel)
+  const directTargets = previewDependenciesForEvent(event)
     .map((dependency) => nodesById.get(dependency.targetNodeId))
     .filter(isPreviewNode);
   const inputTargets = (state.runtime.nodes || [])
@@ -877,6 +884,27 @@ const previewNodesForEvent = (event = {}) => {
     .filter((node) => !previewIncomingDependencies.some((dependency) => dependency.targetNodeId === node.id))
     .filter((node) => (node.inputs || []).includes(event.channel) || (node.channels || []).includes(event.channel));
   return [...new Map([...directTargets, ...inputTargets].filter(Boolean).map((node) => [node.id, node])).values()];
+};
+
+const previewPayloadForNodeEvent = (node = {}, event = {}) => {
+  const dependency = previewDependenciesForEvent(event)
+    .find((item) => item.targetNodeId === node.id && (!event.sourceNodeId || !item.sourceNodeId || item.sourceNodeId === event.sourceNodeId)) ||
+    previewDependenciesForEvent(event).find((item) => item.targetNodeId === node.id) ||
+    null;
+  const mapping = dependency?.metadata || null;
+  if (!mapping || !window.TrackerLensRuntimeContract?.applyConnectionMapping) {
+    return {
+      payload: event.payload,
+      mappingResult: null,
+      dependency,
+    };
+  }
+  const mappingResult = window.TrackerLensRuntimeContract.applyConnectionMapping(event.payload, mapping);
+  return {
+    payload: mappingResult.payload,
+    mappingResult,
+    dependency,
+  };
 };
 
 const updateAiProcessingFromEvent = (event = {}) => {
@@ -941,12 +969,17 @@ const updatePreviewPayloads = (event = {}) => {
     const clearedAt = Date.parse(state.previewClearedAt[node.id] || "");
     const eventAt = Date.parse(event.createdAt || "");
     if (clearedAt && eventAt && eventAt <= clearedAt) return;
+    const mapped = previewPayloadForNodeEvent(node, event);
     state.previewPayloads[node.id] = {
       eventId: event.id,
       channel: event.channel || "default",
       eventType: event.eventType || "event",
       sourceNodeId: event.sourceNodeId || "",
-      payload: event.payload,
+      payload: mapped.payload,
+      originalPayload: mapped.mappingResult?.changed ? event.payload : null,
+      mapping: mapped.mappingResult?.mapping || null,
+      mappingWarnings: mapped.mappingResult?.warnings || [],
+      mappingDependencyId: mapped.dependency?.id || "",
       createdAt: event.createdAt || new Date().toISOString(),
       sizeBytes: event.sizeBytes || 0,
     };

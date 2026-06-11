@@ -15,11 +15,20 @@ Sources -> Trackers -> Channels -> Processors -> AI Agents -> Lens -> Actions/St
 
 Flow Map is the visual/runtime graph for this model.
 
+The official persistence contract is:
+
+```txt
+Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -> Channels -> Events/Flow Logs
+```
+
+`tl_pages` is the current workspace/page store; do not add `tl_workspaces` unless the architecture is explicitly migrated.
+
 ## Persistence
 
 Use IndexedDB and existing stores/helpers.
 Prefer `core/runtime/` modules for runtime behavior.
 Do not add parallel stores unless the existing model cannot represent the data.
+Use `core/runtime/runtime-contract.js` for shared runtime contract/schema normalization.
 
 ## Safety
 

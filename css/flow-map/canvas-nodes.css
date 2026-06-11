@@ -397,7 +397,7 @@ textarea.tl-flow-menu-input {
   position: absolute;
   left: var(--x);
   top: var(--y);
-  z-index: 2;
+  z-index: 12;
   max-width: 118px;
   min-height: 20px;
   padding: 2px 7px;
@@ -427,7 +427,7 @@ textarea.tl-flow-menu-input {
   position: absolute;
   left: 80%;
   top: -12px;
-  z-index: 99;
+  z-index: 80;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -461,9 +461,14 @@ textarea.tl-flow-menu-input {
 
 .tl-flow-edge-label:hover,
 .tl-flow-edge-label.is-selected {
+  z-index: 70;
   color: #fff;
   border-color: rgba(250, 204, 21, 0.62);
   box-shadow: 0 0 18px rgba(250, 204, 21, 0.18);
+}
+
+.tl-flow-edge-label:focus-within {
+  z-index: 72;
 }
 
 .tl-flow-edge-label.is-related {

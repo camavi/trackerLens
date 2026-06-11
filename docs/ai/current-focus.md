@@ -7,7 +7,7 @@ Last updated: 2026-06-11.
 
 ## Active Area
 
-Flow Map Prompt Chat / Flow Agent hardening.
+Runtime contract hardening / Flow Map schema-driven configuration and connection mapping.
 
 ## Completed Sequence
 
@@ -17,6 +17,21 @@ Flow Map Prompt Chat / Flow Agent hardening.
 4. Step 4: real compound commands.
 
 ## Latest Completed Work
+
+Runtime contract base is complete:
+
+- official Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -> Channels -> Events/Flow Logs contract documented;
+- `core/runtime/runtime-contract.js` added as shared contract/schema/mapping helper;
+- Flow Map runtime config now normalizes manifest `settingsSchema` before rendering config fields;
+- Flow Map link creation now captures explicit connection mapping metadata;
+- connection mapping is mirrored from `tl_connections.mapping` into runtime dependency metadata and shown in the edge inspector.
+- Processor, AI Agent, Orchestrator Agent, Action and Storage runtimes now execute supported mapping modes before node-specific processing;
+- mapping execution logs applied transforms and warnings in flow logs;
+- `custom-transform` is intentionally stored but not executed until sandboxing is implemented.
+- Preview nodes now display mapped payload, original payload and mapping warnings separately;
+- Edge inspector mapping details now show mapping status and copy actions for transform/mapped payload;
+- Existing runtime links can reopen `Connection Mapping` from Edge Inspector and persist mapping edits back to connection/dependency metadata;
+- Flow Map topbar includes a `Mapping Test` diagnostic that creates Manual JSON -> Preview with a BTC `json-map` transform and emits a mapped test payload.
 
 Step 5 base is complete:
 
@@ -47,7 +62,7 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Step 5 hardening: memory controls and stronger retrieval.
+Runtime contract hardening: browser-verify the new `Mapping Test`, add mapped Storage flow coverage, then return to Step 5 memory controls and stronger retrieval.
 
 Target behavior:
 

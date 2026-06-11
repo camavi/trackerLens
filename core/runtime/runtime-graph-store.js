@@ -157,6 +157,7 @@ window.TrackerLensRuntimeGraphStore = (() => {
       connectionId: connection.id,
       status: "active",
       metadata: {
+        ...(connection.mapping || {}),
         sourcePort: connection.mapping?.sourcePort || "all",
         targetPort: connection.mapping?.targetPort || "all",
       },

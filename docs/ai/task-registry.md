@@ -7,6 +7,32 @@ Last updated: 2026-06-11.
 
 ## Active
 
+### TASK-025: Runtime Contract And Schema Config
+
+Status: Base complete, mapped Preview diagnostic added; Storage/browser verification pending.
+Priority: High.
+Risk: Medium/High because it defines Workspace/Page persistence boundaries and connection mapping.
+
+Current sub-steps:
+
+- Official runtime contract documentation: complete.
+- Shared runtime contract helper: complete.
+- Flow Map schema normalization for config forms: complete base.
+- Connection mapping metadata capture/editing: complete base.
+- Runtime execution of supported mapping modes: complete base.
+- UI/runtime regression tests for mapped flows: Preview diagnostic complete, Storage coverage pending.
+
+Main files:
+
+- `core/runtime/runtime-contract.js`
+- `flowMap.html`
+- `js/flow-map/flowMapRuntimeNodes.js`
+- `js/flow-map/flowMapRuntimeTests.js`
+- `js/flow-map/flowMapState.js`
+- `js/flow-map/flowMapCanvasInspector.js`
+- `core/runtime/runtime-graph-store.js`
+- `docs/ai/runtime/contract.md`
+
 ### TASK-024: Flow Map Prompt Chat Node Creator
 
 Status: Complete, still active as the hardening surface.

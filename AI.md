@@ -28,6 +28,7 @@ Last updated: 2026-06-11.
 - Endpoint research: `docs/ai/flow-map/endpoint-research.md`
 - Runtime graph: `docs/ai/flow-map/runtime-graph.md`
 - Runtime stores/channels/dependencies: `docs/ai/runtime/`
+- Runtime contract: `docs/ai/runtime/contract.md`
 
 ## Non-Negotiable Rules
 

@@ -28,7 +28,7 @@ window.TrackerLensProcessorRuntime = (() => {
     String(node.runtime?.status || node.metadata?.runtimeStatus || node.status || "idle").toLowerCase();
 
   const isRunnableProcessor = (node = {}) =>
-    node.type === "processor" && !node.metadata?.library && !node.metadata?.draft && !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
+    node.type === "processor" && !node.metadata?.library && !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
 
   const unique = (values = []) =>
     [...new Set(values.filter(Boolean).map(String))];
@@ -81,6 +81,9 @@ window.TrackerLensProcessorRuntime = (() => {
   const runTransformExpression = ({ payload, event, config }) => {
     const expression = String(config.expression || "").trim();
     if (!expression) return clonePayload(payload);
+    if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[\d+\])*$/.test(expression)) {
+      return getPath(payload, expression);
+    }
     const body = /\breturn\b/.test(expression) ? expression : `return (${expression});`;
     // Runtime transforms are local workspace code. Errors are caught and logged by the caller.
     return Function("payload", "event", "config", body)(clonePayload(payload), event, config);
@@ -147,6 +150,7 @@ window.TrackerLensProcessorRuntime = (() => {
       this.unsubscribers = [];
       this.signature = "";
       this.bus = null;
+      this.runtime = { nodes: [], dependencies: [] };
       this.execution = window.TrackerLensNodeExecutionController?.get?.(this.workspaceId) || null;
     }
 
@@ -184,12 +188,16 @@ window.TrackerLensProcessorRuntime = (() => {
           inputs: nodeInputs(node, runtime.dependencies || []),
           outputs: nodeOutputs(node),
           config: nodeConfig(node),
+          incomingMappings: (runtime.dependencies || [])
+            .filter((dependency) => dependency.targetNodeId === node.id)
+            .map((dependency) => ({ id: dependency.id, channel: dependency.channel, metadata: dependency.metadata || {} })),
         }));
       return JSON.stringify(processors);
     }
 
     start({ runtime = {}, workspaceId = this.workspaceId } = {}) {
       this.workspaceId = workspaceId || this.workspaceId || "workspace_global";
+      this.runtime = runtime || { nodes: [], dependencies: [] };
       this.execution = window.TrackerLensNodeExecutionController?.get?.(this.workspaceId) || this.execution;
       const nextSignature = this.buildSignature(runtime);
       if (nextSignature === this.signature && this.bus) return this;
@@ -217,6 +225,49 @@ window.TrackerLensProcessorRuntime = (() => {
       return this;
     }
 
+    async applyIncomingMapping({ node, payload, event } = {}) {
+      const dependency = window.TrackerLensRuntimeContract?.incomingDependencyForEvent?.({
+        runtime: this.runtime,
+        node,
+        event,
+      });
+      const mapping = dependency?.metadata || null;
+      if (!mapping || !window.TrackerLensRuntimeContract?.applyConnectionMapping) {
+        return { payload, event, dependency, mappingResult: null };
+      }
+      const result = window.TrackerLensRuntimeContract.applyConnectionMapping(payload, mapping);
+      if (result.changed || result.warnings.length) {
+        await this.log({
+          node,
+          level: result.warnings.length ? "warning" : "info",
+          message: result.warnings.length ? `Connection mapping warning: ${node.label || node.id}` : `Connection mapping applied: ${node.label || node.id}`,
+          context: {
+            action: "connection-mapping-applied",
+            dependencyId: dependency.id || "",
+            inputChannel: event?.channel || "",
+            mode: result.mapping.mode,
+            payloadPath: result.mapping.payloadPath,
+            transformed: result.changed,
+            warnings: result.warnings,
+          },
+        });
+      }
+      return {
+        payload: result.payload,
+        event: {
+          ...event,
+          meta: {
+            ...(event?.meta || {}),
+            mappedPayload: result.changed,
+            mappingMode: result.mapping.mode,
+            mappingDependencyId: dependency.id || "",
+          },
+        },
+        dependency,
+        mappingResult: result,
+      };
+    }
+
     async handleEvent({ node, payload, event }) {
       if (!node?.id || event?.sourceNodeId === node.id || event?.meta?.processorRuntime === node.id) return;
       const runner = () => this.performEvent({ node, payload, event });
@@ -237,6 +288,9 @@ window.TrackerLensProcessorRuntime = (() => {
     async performEvent({ node, payload, event }) {
       const startedAt = performance.now();
       try {
+        const mapped = await this.applyIncomingMapping({ node, payload, event });
+        payload = mapped.payload;
+        event = mapped.event;
         const result = processPayload({ node, payload, event });
         const latencyMs = Math.round(performance.now() - startedAt);
         if (!result.emitted) {

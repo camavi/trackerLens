@@ -1654,6 +1654,176 @@ const stopFlowMapTestRun = async () => {
   mount({ preserveScroll: true });
 };
 
+const runMappingPreviewTest = async () => {
+  if (state.testRun.running) return;
+  if (!window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode) {
+    state.error = "Mapping test non disponibile: Runtime Graph Store non pronto.";
+    mount({ preserveScroll: true });
+    return;
+  }
+  const workspaceId = state.filters.workspaceId || "workspace_global";
+  const runId = testRunId().replace("flow_test", "flow_mapping");
+  const now = Date.now();
+  const sourceId = `mapping_test_source_${now}`;
+  const previewId = `mapping_test_preview_${now}`;
+  const payload = {
+    symbol: "BTCUSDT",
+    price: "123.45",
+  };
+  const mapping = {
+    mode: "json-map",
+    sourcePort: "raw",
+    targetPort: "raw",
+    channel: "raw",
+    transform: JSON.stringify({ symbol: "symbol", price: "number:price" }),
+    note: "Preset test Manual JSON -> Preview",
+  };
+  const source = {
+    id: sourceId,
+    workspaceId,
+    type: "source",
+    label: "Manual JSON Test",
+    sourceRef: sourceId,
+    assetId: sourceId,
+    inputs: [],
+    outputs: ["raw"],
+    channels: ["raw"],
+    status: "active",
+    flowPosition: { x: 9, y: 14 },
+    metadata: {
+      configured: true,
+      draft: false,
+      paletteLabel: "Manual JSON",
+      paletteAction: "Source: Manual JSON",
+      tone: "green",
+      icon: "data_object",
+      runtimeType: "source",
+      subtype: "manual-json",
+      category: "sources",
+      settingsSchema: { json: "object" },
+      config: {
+        testPayload: prettyRuntimeValue(payload),
+      },
+    },
+  };
+  const preview = {
+    id: previewId,
+    workspaceId,
+    type: "devPreview",
+    label: "Preview Mapping Test",
+    sourceRef: previewId,
+    assetId: previewId,
+    inputs: ["raw"],
+    outputs: ["output"],
+    channels: ["raw"],
+    status: "active",
+    flowPosition: { x: 40, y: 14 },
+    metadata: {
+      configured: true,
+      draft: false,
+      paletteLabel: "Preview",
+      paletteAction: "Mapping preview test",
+      tone: "blue",
+      icon: "visibility",
+      runtimeType: "devPreview",
+      subtype: "preview",
+      category: "dev",
+      settingsSchema: { mode: "raw|json" },
+      config: {
+        previewMode: "json",
+        maxChars: 4000,
+      },
+    },
+  };
+
+  state.testRun = {
+    running: true,
+    runId,
+    nodeIds: [sourceId, previewId],
+    edgeIds: [],
+    activeNodeIds: [sourceId],
+    activeEdgeIds: [],
+    startedAt: new Date().toISOString(),
+    completedAt: "",
+    summary: "Running mapping preview test",
+    timeoutId: 0,
+    abortController: null,
+    liveSockets: [],
+    keepOpen: false,
+    cancelRequested: false,
+    verification: null,
+  };
+  state.error = "";
+  setFiltersState({ ...state.filters, runId });
+  syncFilterQuery();
+  mount({ preserveScroll: true });
+
+  try {
+    await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node: source });
+    await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node: preview });
+    await loadRuntime({ force: true, silent: true });
+    const savedSource = nodeById(sourceId) || source;
+    const savedPreview = nodeById(previewId) || preview;
+    await createRuntimeLink(savedSource, savedPreview, {
+      sourcePort: "raw",
+      targetPort: "raw",
+      mapping,
+      configure: false,
+    });
+    await loadRuntime({ force: true, silent: true });
+    const dependency = (state.runtime.dependencies || []).find((item) =>
+      item.sourceNodeId === sourceId && item.targetNodeId === previewId);
+    state.testRun = {
+      ...state.testRun,
+      edgeIds: dependency?.id ? [dependency.id] : [],
+      activeEdgeIds: dependency?.id ? [dependency.id] : [],
+    };
+    await mergeTestEvent({
+      workspaceId,
+      channel: "raw",
+      eventType: "flow_mapping_test",
+      sourceNodeId: sourceId,
+      targetNodeId: previewId,
+      connectionId: dependency?.connectionId || dependency?.id || "",
+      payload: {
+        ...payload,
+        __test: true,
+        runId,
+        sourceNodeId: sourceId,
+        emittedAt: new Date().toISOString(),
+      },
+      latencyMs: 1,
+      meta: { runId, origin: "mapping-preview-test", rootNodeId: sourceId },
+    });
+    const mapped = window.TrackerLensRuntimeContract?.applyConnectionMapping?.(payload, mapping);
+    const ok = mapped?.payload?.symbol === "BTCUSDT" && mapped?.payload?.price === 123.45;
+    finishFlowMapTestRun({
+      runId,
+      summary: ok ? "Mapping test completed: Preview shows mapped BTC payload" : "Mapping test completed with warnings",
+      error: ok ? "" : "Mapping test output inatteso",
+    });
+    await recordFlowAction({
+      workspaceId,
+      level: ok ? "info" : "warning",
+      message: ok ? "Mapping preview test completed" : "Mapping preview test completed with unexpected output",
+      context: { action: "flow-map-mapping-preview-test", runId, mappedPayload: mapped?.payload || null, warnings: mapped?.warnings || [] },
+    });
+    setFocusState({ mode: "nodes", nodeId: previewId, nodeType: "devPreview", channel: "raw", connectionId: "" });
+    mount({ preserveScroll: true });
+  } catch (error) {
+    console.error("Flow Map mapping test error:", error);
+    state.error = error?.message || "Errore mapping test Flow Map";
+    finishFlowMapTestRun({ runId, summary: `Mapping test error: ${error.message || error}`, error: state.error });
+    await recordFlowAction({
+      workspaceId,
+      level: "error",
+      message: state.error,
+      context: { action: "flow-map-mapping-preview-test-error", runId, error: error.message || String(error) },
+    });
+    mount({ preserveScroll: true });
+  }
+};
+
 const runFlowMapTest = async (starterNode = null) => {
   if (state.testRun.running) return;
   const graph = runtimeRuleGraph();
@@ -2261,6 +2431,11 @@ const renderHeader = () =>
         disabled: state.testRun.running,
         onclick: () => runFlowMapLiveTest(),
       }, icon(state.testRun.running ? "hourglass_top" : "play_arrow", "sm"), state.testRun.running ? "Testing" : "Live Test"),
+      btn({
+        title: "Create and run Manual JSON -> Preview json-map diagnostic",
+        disabled: state.testRun.running,
+        onclick: () => runMappingPreviewTest(),
+      }, icon("rule", "sm"), "Mapping Test"),
       state.testRun.running
         ? btn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, icon("stop", "sm"), "Stop")
         : null,

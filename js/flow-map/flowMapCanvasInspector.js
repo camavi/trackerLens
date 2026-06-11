@@ -1221,6 +1221,14 @@ const renderCanvas = () => {
               class: "tl-flow-edge-label-delete",
               title: "Delete link",
               "aria-label": `Delete link ${edgeDisplayLabel(dependency)}`,
+              onpointerdown: (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              },
+              onmousedown: (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              },
               onclick: (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -2222,7 +2230,38 @@ const renderEdgeInspector = (edge) => {
   const sourcePortDef = portByName(source, "out", sourcePort);
   const targetPortDef = portByName(target, "in", targetPort);
   const typeCompatible = portsAreCompatible(sourcePortDef, targetPortDef, target || {});
+  const mappingMode = edge.metadata?.mode || edge.mapping?.mode || "pass-through";
+  const mappingPath = edge.metadata?.payloadPath || edge.mapping?.payloadPath || "";
+  const mappingTransform = edge.metadata?.transform || edge.mapping?.transform || "";
+  const mappingNote = edge.metadata?.note || edge.mapping?.note || "";
   const lastEvent = events[0];
+  const mapping = {
+    ...(edge.mapping || {}),
+    ...(edge.metadata || {}),
+    mode: mappingMode,
+    payloadPath: mappingPath,
+    transform: mappingTransform,
+    note: mappingNote,
+  };
+  let mappedLastEvent = null;
+  if (lastEvent?.payload !== undefined && window.TrackerLensRuntimeContract?.applyConnectionMapping) {
+    try {
+      mappedLastEvent = window.TrackerLensRuntimeContract.applyConnectionMapping(lastEvent.payload, mapping);
+    } catch (error) {
+      mappedLastEvent = {
+        payload: lastEvent.payload,
+        changed: false,
+        warnings: [error?.message || "mapping failed"],
+      };
+    }
+  }
+  const mappingStatus = mappedLastEvent?.warnings?.length
+    ? "warning"
+    : mappedLastEvent?.changed
+      ? "applied"
+      : mappingMode === "pass-through"
+        ? "pass-through"
+        : "configured";
   const panels = [
     {
       id: "connection",
@@ -2249,9 +2288,22 @@ const renderEdgeInspector = (edge) => {
         { class: "tl-flow-detail-list" },
         ...[
           ["Route", `${source?.label || edge.sourceNodeId || "source"}:${sourcePort} -> ${target?.label || edge.targetNodeId || "target"}:${targetPort}`],
+          ["Mode", mappingMode],
+          ["Status", mappingStatus],
           ["Payload", sourcePort === "all" ? "full payload" : `field ${sourcePort}`],
+          ["Payload path", mappingPath || "N/D"],
+          ["Transform", mappingTransform || "N/D"],
+          ["Note", mappingNote || "N/D"],
           ["Last value", lastEvent?.payloadPreview || edge.metadata?.lastPayloadPreview || "N/D"],
-        ].map(([label, value]) => _.div(_.span(label), _.strong(value)))
+        ].map(([label, value]) => _.div(_.span(label), _.strong(value))),
+        _.div(
+          { class: "tl-flow-mapping-actions" },
+          _.span("Actions"),
+          _.strong(
+            mappingTransform ? copyRuntimeButton(mappingTransform, "Copy transform") : null,
+            mappedLastEvent ? copyRuntimeButton(mappedLastEvent.payload, "Copy mapped payload") : null
+          )
+        )
       ),
     },
     { id: "impact", title: "Impact Analysis", content: renderImpactSummary(selectedImpact()) },
@@ -2298,6 +2350,21 @@ const renderEdgeInspector = (edge) => {
         { class: "tl-flow-node-actions is-edge-actions" },
         inspectorActionButton({ label: "Source", iconName: "input", onclick: () => viewEdgeNode(source), disabled: !source }),
         inspectorActionButton({ label: "Target", iconName: "output", onclick: () => viewEdgeNode(target), disabled: !target }),
+        inspectorActionButton({
+          label: "Edit Mapping",
+          iconName: "route",
+          onclick: () => requestRuntimeLinkMappingDialog({
+            source,
+            target,
+            validation: { sourcePort: sourcePortDef, targetPort: targetPortDef },
+            sourcePort,
+            targetPort,
+            channel: edge.channel || mapping.channel || "runtime",
+            edge,
+            initialMapping: mapping,
+          }),
+          disabled: !source || !target || !edge.id,
+        }),
         edge.connectionId
           ? inspectorActionButton({ label: "Delete Link", iconName: "link_off", className: "is-danger", onclick: () => requestEdgeDelete(edge) })
           : inspectorActionButton({ label: "Read Only", iconName: "lock", disabled: true })

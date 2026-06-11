@@ -882,6 +882,16 @@ body.is-flow-inspector-card-dragging {
   gap: 5px;
 }
 
+.tl-flow-detail-list div.tl-flow-mapping-actions {
+  align-items: center;
+}
+
+.tl-flow-detail-list div.tl-flow-mapping-actions strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .tl-flow-port-manager {
   gap: 6px;
 }
