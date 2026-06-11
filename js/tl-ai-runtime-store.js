@@ -468,15 +468,28 @@ window.TrackerLensAiRuntimeStore = (() => {
     }
   };
 
+  const memoryQueryScore = (item = {}, query = "") => {
+    const q = normalizeText(query).toLowerCase();
+    if (!q) return 1;
+    const haystack = [item.name, item.kind, item.meta, item.text, item.tags.join(" ")]
+      .join(" ")
+      .toLowerCase();
+    if (haystack.includes(q)) return 100;
+    const tokens = q.split(/[^a-z0-9._:-]+/i).filter((token) => token.length > 2);
+    if (!tokens.length) return 0;
+    return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0);
+  };
+
   const listMemory = async ({ scope = "", workspaceId = "", agentId = "", query = "", limit = 50 } = {}) => {
     const records = await readMemoryRecords();
-    const q = normalizeText(query).toLowerCase();
     return records
       .filter((item) => !scope || item.scope === scope)
       .filter((item) => !workspaceId || item.workspaceId === workspaceId || item.scope === "global")
       .filter((item) => !agentId || item.agentId === agentId || item.agentId === "shared")
-      .filter((item) => !q || [item.name, item.meta, item.text, item.tags.join(" ")].join(" ").toLowerCase().includes(q))
-      .sort((a, b) => (b.weight - a.weight) || (new Date(b.updatedAt) - new Date(a.updatedAt)))
+      .map((item) => ({ item, queryScore: memoryQueryScore(item, query) }))
+      .filter(({ queryScore }) => !query || queryScore > 0)
+      .sort((a, b) => (b.queryScore - a.queryScore) || (b.item.weight - a.item.weight) || (new Date(b.item.updatedAt) - new Date(a.item.updatedAt)))
+      .map(({ item }) => item)
       .slice(0, limit);
   };
 
@@ -490,9 +503,13 @@ window.TrackerLensAiRuntimeStore = (() => {
       id: item.id,
       scope: item.scope,
       kind: item.kind,
+      name: item.name,
       text: item.text || item.meta || item.name,
+      summary: item.raw?.summary || item.meta || "",
+      meta: item.meta || "",
       weight: item.weight,
       tags: item.tags,
+      updatedAt: item.updatedAt,
     }));
   };
 

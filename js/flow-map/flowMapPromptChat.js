@@ -997,6 +997,60 @@ const flowPromptReadWorkspaceMemory = async (prompt = "") => {
   }).catch(() => []);
 };
 
+const flowPromptParseMemoryMeta = (memory = {}) => {
+  const raw = memory.meta || memory.raw?.meta || "";
+  if (!raw || typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+};
+
+const flowPromptMemorySearchText = (memory = {}) =>
+  flowPromptNormalize([
+    memory.id,
+    memory.kind,
+    memory.name,
+    memory.text,
+    memory.summary,
+    Array.isArray(memory.tags) ? memory.tags.join(" ") : "",
+  ].filter(Boolean).join(" "));
+
+const flowPromptContextWithMemory = (context = {}, memory = []) => {
+  if (!Array.isArray(memory) || !memory.length) return context;
+  const nodeAliases = new Map();
+  const nodeEndpoints = new Map();
+  memory.forEach((item) => {
+    const meta = flowPromptParseMemoryMeta(item);
+    const rawKind = String(item.kind || meta.kind || "");
+    const kind = flowPromptNormalize(rawKind);
+    const nodeId = meta.nodeId || "";
+    if (!nodeId) return;
+    if (rawKind === "node-alias" || kind === "node alias" || flowPromptMemorySearchText(item).includes("node alias")) {
+      const aliases = [meta.previousLabel, meta.nextLabel, ...(Array.isArray(meta.aliases) ? meta.aliases : [])]
+        .map(String)
+        .filter(Boolean);
+      if (aliases.length) nodeAliases.set(nodeId, [...new Set([...(nodeAliases.get(nodeId) || []), ...aliases])]);
+    }
+    if ((rawKind === "endpoint-choice" || kind === "endpoint choice") && meta.endpoint) nodeEndpoints.set(nodeId, meta);
+  });
+  if (!nodeAliases.size && !nodeEndpoints.size) return context;
+  return {
+    ...context,
+    memory,
+    nodes: (context.nodes || []).map((node) => ({
+      ...node,
+      aliases: [...new Set([...flowPromptNodeAliases(node), ...(nodeAliases.get(node.id) || [])])],
+      memory: {
+        ...(node.memory || {}),
+        endpointChoice: nodeEndpoints.get(node.id) || node.memory?.endpointChoice || null,
+      },
+    })),
+  };
+};
+
 const flowPromptRememberWorkspaceEvent = async ({ kind = "note", prompt = "", summary = "", result = null } = {}) => {
   if (!window.TrackerLensAiRuntimeStore?.remember) return null;
   const workspaceId = currentWorkspaceId() || "runtime";
@@ -1014,6 +1068,96 @@ const flowPromptRememberWorkspaceEvent = async ({ kind = "note", prompt = "", su
     weight: kind === "apply" ? 4 : 2,
     meta: result ? JSON.stringify(result).slice(0, 1200) : "",
   }).catch(() => null);
+};
+
+const flowPromptRememberConfirmedFact = async ({ kind = "fact", name = "", text = "", tags = [], weight = 3, meta = {} } = {}) => {
+  if (!window.TrackerLensAiRuntimeStore?.remember || !text) return null;
+  const workspaceId = currentWorkspaceId() || "runtime";
+  const stableId = [
+    "mem",
+    "workspace",
+    workspaceId,
+    "flow-map-agent",
+    kind,
+    meta.nodeId || "",
+    meta.previousLabel || meta.endpoint || meta.nextLabel || name,
+  ].map((value) => safeRuntimeId(value)).filter(Boolean).join("_");
+  return window.TrackerLensAiRuntimeStore.remember({
+    id: stableId,
+    scope: "workspace",
+    workspaceId,
+    agentId: "flow-map-agent",
+    kind,
+    name: name || "Flow Agent memory",
+    text: text.slice(0, 600),
+    summary: text.slice(0, 180),
+    tags: ["flow-map", "flow-agent", kind, ...tags].filter(Boolean),
+    weight,
+    meta: JSON.stringify({ kind, ...meta }).slice(0, 1200),
+  }).catch(() => null);
+};
+
+const flowPromptRememberAppliedActions = async ({ prompt = "", applied = [], actions = [] } = {}) => {
+  if (!Array.isArray(applied) || !applied.length) return [];
+  const actionByStep = new Map((actions || []).map((action) => [action.stepId || `${action.type}:${action.nodeId || action.source?.id || ""}`, action]));
+  const records = [];
+  for (const result of applied) {
+    const action = actionByStep.get(result.stepId) || (actions || []).find((item) => item.type === result.type && (item.nodeId === result.nodeId || item.nodeId === result.focusNodeId));
+    if (result.type === "renameNode" && action?.nodeId && action.previousLabel && action.nextLabel) {
+      records.push(await flowPromptRememberConfirmedFact({
+        kind: "node-alias",
+        name: `Alias nodo ${action.nextLabel}`,
+        text: `${action.previousLabel} ora si chiama ${action.nextLabel}. Usa ${action.nextLabel} per il nodo ${action.nodeId}.`,
+        tags: ["alias", "rename", action.nodeId],
+        weight: 5,
+        meta: {
+          nodeId: action.nodeId,
+          previousLabel: action.previousLabel,
+          nextLabel: action.nextLabel,
+          aliases: [action.previousLabel, action.nextLabel],
+          prompt,
+          appliedAt: result.appliedAt || flowPromptNow(),
+        },
+      }));
+    }
+    if (result.type === "duplicateNode" && action?.newNodeId && action?.nextLabel) {
+      records.push(await flowPromptRememberConfirmedFact({
+        kind: "node-alias",
+        name: `Alias nodo ${action.nextLabel}`,
+        text: `${action.nextLabel} e un duplicato confermato di ${action.node?.label || action.nodeId}.`,
+        tags: ["alias", "duplicate", action.newNodeId],
+        weight: 4,
+        meta: {
+          nodeId: action.newNodeId,
+          previousLabel: action.node?.label || action.nodeId || "",
+          nextLabel: action.nextLabel,
+          aliases: [action.nextLabel],
+          sourceNodeId: action.nodeId,
+          prompt,
+          appliedAt: result.appliedAt || flowPromptNow(),
+        },
+      }));
+    }
+    if (result.type === "updateNodeConfig" && action?.field === "endpoint" && action?.nodeId && action?.value) {
+      records.push(await flowPromptRememberConfirmedFact({
+        kind: "endpoint-choice",
+        name: `Endpoint ${action.node?.label || action.nodeId}`,
+        text: `Endpoint confermato per ${action.node?.label || action.nodeId}: ${action.value}.`,
+        tags: ["endpoint", action.nodeId, action.validation?.method || ""],
+        weight: 5,
+        meta: {
+          nodeId: action.nodeId,
+          nodeLabel: action.node?.label || "",
+          endpoint: action.value,
+          method: action.validation?.method || action.node?.metadata?.config?.method || "GET",
+          validation: action.validation || null,
+          prompt,
+          appliedAt: result.appliedAt || flowPromptNow(),
+        },
+      }));
+    }
+  }
+  return records.filter(Boolean);
 };
 
 const flowPromptRuntimeQueryInsights = (context = {}, query = {}) => {
@@ -1146,8 +1290,14 @@ const flowPromptDiagnoseContext = (context = {}) => {
   return issues.slice(0, 12);
 };
 
+const flowPromptNodeAliases = (node = {}) => {
+  const metadataAliases = Array.isArray(node.metadata?.aliases) ? node.metadata.aliases : [];
+  const runtimeAliases = Array.isArray(node.aliases) ? node.aliases : [];
+  return [...new Set([...metadataAliases, ...runtimeAliases].map(String).filter(Boolean))];
+};
+
 const flowPromptNodeSearchText = (node = {}) =>
-  flowPromptNormalize([node.id, node.label, node.type, node.subtype, node.category].filter(Boolean).join(" "));
+  flowPromptNormalize([node.id, node.label, node.type, node.subtype, node.category, ...flowPromptNodeAliases(node)].filter(Boolean).join(" "));
 
 const flowPromptFindNodeByText = (context = {}, text = "") => {
   const normalized = flowPromptNormalize(text);
@@ -2797,13 +2947,14 @@ const flowPromptBuildActionPlanFromNormalized = (context = {}, command = {}) => 
   return null;
 };
 
-const flowPromptNormalizeCommandWithAi = async (context = {}, prompt = "") => {
+const flowPromptNormalizeCommandWithAi = async (context = {}, prompt = "", memory = []) => {
   const aiSettings = await flowPromptReadAiSettings();
   const provider = await flowPromptPickProvider(aiSettings);
   if (!provider) return null;
   const nodeContext = (context.nodes || []).map((node) => ({
     id: node.id,
     label: node.label,
+    aliases: flowPromptNodeAliases(node),
     type: node.type,
     subtype: node.subtype,
     category: node.category,
@@ -2831,9 +2982,11 @@ const flowPromptNormalizeCommandWithAi = async (context = {}, prompt = "") => {
     "{\"action\":\"fix\"}",
     "Rules:",
     "- Use only labels or ids that best match existingNodes.",
+    "- Treat memory aliases as confirmed previous/current labels for existing nodes.",
     "- Do not invent nodes.",
     "- Return only one JSON object. For multi-step commands, return {\"actions\":[...]} or {\"steps\":[...]} in execution order.",
     `existingNodes: ${JSON.stringify(nodeContext)}`,
+    `confirmedMemory: ${JSON.stringify((memory || []).slice(0, 6))}`,
     `userCommand: ${prompt}`,
   ].join("\n");
   const model = aiSettings.model || provider.model;
@@ -2848,7 +3001,7 @@ const flowPromptNormalizeCommandWithAi = async (context = {}, prompt = "") => {
   }
 };
 
-const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "", debug = {}) => {
+const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "", debug = {}, memory = []) => {
   const localPlan = flowPromptFinalizeDependencyAwarePlan(context, flowPromptBuildActionPlan(context, prompt), prompt);
   debug.localPlan = flowPromptDebugPlan(localPlan);
   if (localPlan && localPlan.status !== "blocked") {
@@ -2869,7 +3022,7 @@ const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "
     debug.selectedPlan = localPlan ? "local" : "none";
     return localPlan;
   }
-  const normalized = await flowPromptNormalizeCommandWithAi(context, prompt);
+  const normalized = await flowPromptNormalizeCommandWithAi(context, prompt, memory);
   debug.normalizedCommand = normalized || null;
   const aiPlan = normalized
     ? flowPromptFinalizeDependencyAwarePlan(context, flowPromptBuildActionPlanFromNormalized(context, normalized), prompt)
@@ -2885,8 +3038,8 @@ const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "
 };
 
 const flowPromptBuildAgentReport = async (prompt = "") => {
-  const context = await flowPromptAgentContext();
   const memory = await flowPromptReadWorkspaceMemory(prompt);
+  const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
   const diagnostics = flowPromptDiagnoseContext(context);
   const intent = flowPromptAgentIntent(prompt);
   const query = flowPromptAgentQuery(context, prompt);
@@ -2917,7 +3070,7 @@ const flowPromptBuildAgentReport = async (prompt = "") => {
     queryModel,
     memory,
   };
-  let pendingAction = await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug);
+  let pendingAction = await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug, memory);
   pendingAction = await flowPromptEnrichEndpointResearchPlan(pendingAction, prompt);
   if (pendingAction && typeof pendingAction === "object") pendingAction.prompt = prompt;
   const agentPlan = flowPromptBuildGenericAgentPlan(pendingAction, {
@@ -4256,6 +4409,11 @@ const openFlowPromptChatDialog = async () => {
         prompt: action.prompt || action.summary || "",
         summary: `Apply completato: ${applied.map((item) => item.label).join("; ")}.`,
         result: { applied, snapshotId },
+      });
+      await flowPromptRememberAppliedActions({
+        prompt: action.prompt || action.summary || "",
+        applied,
+        actions: runnable,
       });
       await appendMessage({
         role: "assistant",

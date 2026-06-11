@@ -18,6 +18,17 @@ Flow Map Prompt Chat / Flow Agent hardening.
 
 ## Latest Completed Work
 
+Step 5 base is complete:
+
+- Flow Agent memory now stores typed, confirmed workspace facts after successful Apply;
+- rename and duplicate actions write node alias memory;
+- endpoint config updates write endpoint-choice memory only after validation and Apply;
+- Flow Agent planning enriches runtime context with confirmed memory aliases;
+- AI command normalization receives confirmed memory context;
+- DevTools AI memory table exposes memory kind for inspection without flooding normal chat replies.
+
+Previous work:
+
 Step 4 base is complete:
 
 - local compound prompts are split into ordered steps;
@@ -36,14 +47,14 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Step 5: useful workspace memory.
+Step 5 hardening: memory controls and stronger retrieval.
 
 Target behavior:
 
-- remember user-confirmed decisions, not guesses;
-- store command outcomes, endpoint choices, node aliases and recurring preferences;
-- retrieve memory during Flow Agent planning and runtime diagnosis;
-- expose memory in Dev inspector without flooding normal responses.
+- add explicit forget/pin controls for workspace memory;
+- add preference memory from explicit user "remember" style prompts;
+- surface memory provenance in Dev inspector detail;
+- add focused runtime tests for alias recall after rename/duplicate.
 
 ## Required Updates When Work Changes
 

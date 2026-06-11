@@ -19,7 +19,7 @@ Current sub-steps:
 - Step 2 dependency-aware commands: complete.
 - Step 3 endpoint research more realistic: complete base.
 - Step 4 compound commands: complete base.
-- Step 5 workspace memory: planned next.
+- Step 5 workspace memory: complete base.
 
 Main files:
 
@@ -51,7 +51,7 @@ Main files:
 
 ## Planned / Future
 
-- Step 5: useful workspace memory.
+- Step 5 hardening: forget/pin memory controls, explicit preference capture and alias recall tests.
 - Endpoint research hardening with OpenAPI/provider-specific parsing.
 - Background/service-worker persistence when pages are closed.
 - Cloud sync, if explicitly prioritized.

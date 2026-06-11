@@ -483,9 +483,10 @@ const renderAi = () => {
     _.div(
       { class: "tl-devtools-section" },
       _.h2("Memory"),
-      table(["Name", "Scope", "Workspace", "Updated", ""], memory.map((item) =>
+      table(["Name", "Kind", "Scope", "Workspace", "Updated", ""], memory.map((item) =>
         _.tr(
           _.td(item.name || item.id || "Memory"),
+          _.td(item.kind || item.tags?.[0] || "summary"),
           _.td(item.scope || "workspace"),
           _.td(item.workspaceId || "global"),
           _.td(formatDate(item.updatedAt)),
