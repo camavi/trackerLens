@@ -1788,6 +1788,128 @@ const renderInspectorRuntime = (node, events = []) => {
   );
 };
 
+const storageInspectorStoreName = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  const raw = String(config.storeName || config.bucket || "tl_history").trim();
+  return raw.replace(/[^A-Za-z0-9_-]/g, "_") || "tl_history";
+};
+
+const readStorageInspectorRecords = async (storeName = "tl_history") => {
+  if (!window.indexedDB) return [];
+  return new Promise((resolve) => {
+    const request = indexedDB.open("TrackersLens");
+    request.onerror = () => resolve([]);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.close();
+          resolve([]);
+          return;
+        }
+        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+        read.onsuccess = () => {
+          db.close();
+          resolve(Array.isArray(read.result) ? read.result : []);
+        };
+        read.onerror = () => {
+          db.close();
+          resolve([]);
+        };
+      } catch (_) {
+        db.close();
+        resolve([]);
+      }
+    };
+  });
+};
+
+const loadStorageInspectorRecord = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || (node.type !== "storage" && nodeCategory(node) !== "storage")) return;
+  const storeName = storageInspectorStoreName(node);
+  const cached = state.storageInspectorRecords[node.id];
+  if (!force && cached?.storeName === storeName && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.storageInspectorRecords = {
+    ...state.storageInspectorRecords,
+    [node.id]: {
+      ...(cached || {}),
+      storeName,
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const records = await readStorageInspectorRecords(storeName);
+    const latest = records
+      .filter((record) => record.nodeId === node.id)
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))[0] || null;
+    state.storageInspectorRecords = {
+      ...state.storageInspectorRecords,
+      [node.id]: {
+        storeName,
+        loading: false,
+        record: latest,
+        count: records.filter((record) => record.nodeId === node.id).length,
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.storageInspectorRecords = {
+      ...state.storageInspectorRecords,
+      [node.id]: {
+        storeName,
+        loading: false,
+        record: null,
+        count: 0,
+        loadedAt: Date.now(),
+        error: error?.message || "Storage read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const renderInspectorStorageRecord = (node = {}) => {
+  if (node.type !== "storage" && nodeCategory(node) !== "storage") {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadStorageInspectorRecord(node);
+  const storeName = storageInspectorStoreName(node);
+  const stateRecord = state.storageInspectorRecords[node.id] || { storeName, loading: true, record: null, count: 0 };
+  const record = stateRecord.record || null;
+  const payload = record?.payload || null;
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("Last Stored Record"),
+    ...[
+      ["Store", storeName],
+      ["Records", stateRecord.loading ? "loading..." : stateRecord.count || 0],
+      ["Record ID", record?.id || "N/D"],
+      ["Created", record?.createdAt ? formatShortDate(record.createdAt) : "N/D"],
+      ["Input event", record?.inputEventId || "N/D"],
+      ["Format", record?.format || "N/D"],
+    ].map(([label, value]) => _.div(_.span(label), _.strong(String(value)))),
+    stateRecord.error ? _.p({ class: "tl-flow-muted" }, stateRecord.error) : null,
+    payload
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Payload"),
+        _.div(
+          { class: "tl-flow-storage-record-actions" },
+          copyRuntimeButton(payload, "Copy stored payload"),
+          btn({
+            class: "is-ghost is-compact",
+            title: "Refresh stored record",
+            onclick: () => loadStorageInspectorRecord(node, { force: true }),
+          }, icon("sync", "sm"), "Refresh")
+        ),
+        _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue(payload))
+      )
+      : _.p({ class: "tl-flow-muted" }, stateRecord.loading ? "Caricamento ultimo record salvato..." : "Nessun record salvato trovato per questo nodo.")
+  );
+};
+
 const renderInspectorMetrics = (node, dependencies, events, channelRecords, flowLogs = []) => {
   const live = recentActivity(graphModel()).nodeActivity?.get(node.id);
   const perf = nodePerformance(node);
@@ -2403,6 +2525,9 @@ const renderInspector = () => {
       ),
     },
     { id: "runtime", title: "Runtime", content: renderInspectorRuntime(node, events) },
+    ...(node.type === "storage" || nodeCategory(node) === "storage"
+      ? [{ id: "storage-record", title: "Last Stored Record", content: renderInspectorStorageRecord(node) }]
+      : []),
     { id: "logs", title: "Logs", content: renderInspectorLogs(events, flowLogs) },
     { id: "metrics", title: "Metrics", content: renderInspectorMetrics(node, dependencies, events, channelRecords, flowLogs) },
     { id: "permissions", title: "Permissions", content: renderInspectorPermissions(node) },

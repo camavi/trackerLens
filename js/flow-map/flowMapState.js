@@ -123,6 +123,7 @@ const state = {
   },
   previewPayloads: {},
   previewClearedAt: {},
+  storageInspectorRecords: {},
   aiProcessing: {},
   runtimeWorker: {
     available: false,

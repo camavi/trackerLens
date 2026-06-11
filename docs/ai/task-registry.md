@@ -9,7 +9,7 @@ Last updated: 2026-06-11.
 
 ### TASK-025: Runtime Contract And Schema Config
 
-Status: Base complete, mapped Preview diagnostic added; Storage/browser verification pending.
+Status: Base complete, mapped Preview/Storage diagnostics added; browser verification pending.
 Priority: High.
 Risk: Medium/High because it defines Workspace/Page persistence boundaries and connection mapping.
 
@@ -20,7 +20,8 @@ Current sub-steps:
 - Flow Map schema normalization for config forms: complete base.
 - Connection mapping metadata capture/editing: complete base.
 - Runtime execution of supported mapping modes: complete base.
-- UI/runtime regression tests for mapped flows: Preview diagnostic complete, Storage coverage pending.
+- UI/runtime regression tests for mapped flows: Preview and Storage diagnostics complete, browser verification pending.
+- Storage Inspector latest persisted record: complete base.
 
 Main files:
 

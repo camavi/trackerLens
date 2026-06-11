@@ -32,6 +32,8 @@ Runtime contract base is complete:
 - Edge inspector mapping details now show mapping status and copy actions for transform/mapped payload;
 - Existing runtime links can reopen `Connection Mapping` from Edge Inspector and persist mapping edits back to connection/dependency metadata;
 - Flow Map topbar includes a `Mapping Test` diagnostic that creates Manual JSON -> Preview with a BTC `json-map` transform and emits a mapped test payload.
+- Flow Map topbar includes a `Storage Test` diagnostic that creates Manual JSON -> Save DB Record, emits through EventBus and verifies the mapped record persisted to IndexedDB.
+- Storage node Inspector now shows the latest persisted IndexedDB record payload with copy/refresh actions.
 
 Step 5 base is complete:
 
@@ -62,7 +64,7 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Runtime contract hardening: browser-verify the new `Mapping Test`, add mapped Storage flow coverage, then return to Step 5 memory controls and stronger retrieval.
+Runtime contract hardening: browser-verify `Mapping Test` and `Storage Test`, then return to Step 5 memory controls and stronger retrieval.
 
 Target behavior:
 

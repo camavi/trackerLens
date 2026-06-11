@@ -1261,6 +1261,49 @@ const waitForMinimumTestAnimation = async (startedAt = "") => {
   if (remaining > 0) await wait(remaining);
 };
 
+const readStorageRuntimeRecords = async (storeName = "tl_history") => {
+  if (!window.indexedDB) return [];
+  return new Promise((resolve) => {
+    const request = indexedDB.open("TrackersLens");
+    request.onerror = () => resolve([]);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.close();
+          resolve([]);
+          return;
+        }
+        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+        read.onsuccess = () => {
+          db.close();
+          resolve(Array.isArray(read.result) ? read.result : []);
+        };
+        read.onerror = () => {
+          db.close();
+          resolve([]);
+        };
+      } catch (_) {
+        db.close();
+        resolve([]);
+      }
+    };
+  });
+};
+
+const waitForStorageRuntimeRecord = async ({ storeName = "tl_history", nodeId = "", runId = "", timeoutMs = 3000 } = {}) => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const records = await readStorageRuntimeRecords(storeName);
+    const record = records
+      .filter((item) => (!nodeId || item.nodeId === nodeId) && (!runId || item.payload?.runId === runId))
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))[0];
+    if (record) return record;
+    await wait(120);
+  }
+  return null;
+};
+
 const runtimeKindForNode = (node = {}) => {
   if (isOrchestratorAgentNode(node)) return "orchestrator";
   if (node.type === "aiAgent") return "ai";
@@ -1819,6 +1862,204 @@ const runMappingPreviewTest = async () => {
       level: "error",
       message: state.error,
       context: { action: "flow-map-mapping-preview-test-error", runId, error: error.message || String(error) },
+    });
+    mount({ preserveScroll: true });
+  }
+};
+
+const runMappingStorageTest = async () => {
+  if (state.testRun.running) return;
+  if (!window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode) {
+    state.error = "Storage mapping test non disponibile: Runtime Graph Store non pronto.";
+    mount({ preserveScroll: true });
+    return;
+  }
+  const workspaceId = state.filters.workspaceId || "workspace_global";
+  const runId = testRunId().replace("flow_test", "flow_storage_mapping");
+  const now = Date.now();
+  const sourceId = `storage_mapping_source_${now}`;
+  const storageId = `storage_mapping_target_${now}`;
+  const storeName = `tl_mapping_test_${now}`;
+  const payload = {
+    symbol: "BTCUSDT",
+    price: "123.45",
+    exchange: "binance",
+  };
+  const mapping = {
+    mode: "json-map",
+    sourcePort: "raw",
+    targetPort: "record",
+    channel: "raw",
+    transform: JSON.stringify({ symbol: "symbol", price: "number:price", venue: "exchange", runId: "runId" }),
+    note: "Preset test Manual JSON -> Storage",
+  };
+  const source = {
+    id: sourceId,
+    workspaceId,
+    type: "source",
+    label: "Manual JSON Storage Test",
+    sourceRef: sourceId,
+    assetId: sourceId,
+    inputs: [],
+    outputs: ["raw"],
+    channels: ["raw"],
+    status: "active",
+    flowPosition: { x: 9, y: 24 },
+    metadata: {
+      configured: true,
+      draft: false,
+      paletteLabel: "Manual JSON",
+      paletteAction: "Source: Manual JSON",
+      tone: "green",
+      icon: "data_object",
+      runtimeType: "source",
+      subtype: "manual-json",
+      category: "sources",
+      settingsSchema: { json: "object" },
+      config: {
+        testPayload: prettyRuntimeValue(payload),
+      },
+    },
+  };
+  const storage = {
+    id: storageId,
+    workspaceId,
+    type: "storage",
+    label: "Storage Mapping Test",
+    sourceRef: storageId,
+    assetId: storageId,
+    inputs: ["record"],
+    outputs: [],
+    channels: ["raw"],
+    status: "active",
+    flowPosition: { x: 40, y: 24 },
+    metadata: {
+      configured: true,
+      draft: false,
+      paletteLabel: "Save DB Record",
+      paletteAction: "Storage mapping test",
+      tone: "cyan",
+      icon: "database",
+      runtimeType: "storage",
+      subtype: "indexeddb",
+      category: "storage",
+      settingsSchema: { storeName: "string", keyPath: "string", retention: "string" },
+      config: {
+        storeName,
+        format: "json",
+      },
+    },
+  };
+
+  state.testRun = {
+    running: true,
+    runId,
+    nodeIds: [sourceId, storageId],
+    edgeIds: [],
+    activeNodeIds: [sourceId, storageId],
+    activeEdgeIds: [],
+    startedAt: new Date().toISOString(),
+    completedAt: "",
+    summary: "Running storage mapping test",
+    timeoutId: 0,
+    abortController: null,
+    liveSockets: [],
+    keepOpen: false,
+    cancelRequested: false,
+    verification: null,
+  };
+  state.error = "";
+  setFiltersState({ ...state.filters, runId });
+  syncFilterQuery();
+  mount({ preserveScroll: true });
+
+  try {
+    await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node: source });
+    await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node: storage });
+    await loadRuntime({ force: true, silent: true });
+    const savedSource = nodeById(sourceId) || source;
+    const savedStorage = nodeById(storageId) || storage;
+    await createRuntimeLink(savedSource, savedStorage, {
+      sourcePort: "raw",
+      targetPort: "record",
+      mapping,
+      configure: false,
+    });
+    await loadRuntime({ force: true, silent: true });
+    const dependency = (state.runtime.dependencies || []).find((item) =>
+      item.sourceNodeId === sourceId && item.targetNodeId === storageId);
+    state.testRun = {
+      ...state.testRun,
+      edgeIds: dependency?.id ? [dependency.id] : [],
+      activeEdgeIds: dependency?.id ? [dependency.id] : [],
+    };
+    const bus = workspaceEventBus(workspaceId);
+    const eventPayload = {
+      ...payload,
+      __test: true,
+      runId,
+      sourceNodeId: sourceId,
+      emittedAt: new Date().toISOString(),
+    };
+    const emitted = bus?.emit
+      ? await bus.emit("raw", eventPayload, {
+        workspaceId,
+        flowId: flowIdForWorkspace(workspaceId),
+        eventType: "flow_storage_mapping_test",
+        sourceNodeId: sourceId,
+        targetNodeId: storageId,
+        connectionId: dependency?.connectionId || dependency?.id || "",
+        latencyMs: 1,
+        meta: { test: true, runId, origin: "storage-mapping-test", rootNodeId: sourceId },
+      })
+      : await mergeTestEvent({
+        workspaceId,
+        channel: "raw",
+        eventType: "flow_storage_mapping_test",
+        sourceNodeId: sourceId,
+        targetNodeId: storageId,
+        connectionId: dependency?.connectionId || dependency?.id || "",
+        payload: eventPayload,
+        latencyMs: 1,
+        meta: { runId, origin: "storage-mapping-test", rootNodeId: sourceId },
+      });
+    if (emitted) mergeRuntimeEvent(emitted);
+    const record = await waitForStorageRuntimeRecord({ storeName, nodeId: storageId, runId, timeoutMs: 4000 });
+    const storedPayload = record?.payload || {};
+    const ok = storedPayload.symbol === "BTCUSDT" &&
+      storedPayload.price === 123.45 &&
+      storedPayload.venue === "binance" &&
+      storedPayload.runId === runId;
+    finishFlowMapTestRun({
+      runId,
+      summary: ok ? "Storage mapping test completed: mapped record persisted" : "Storage mapping test completed with warnings",
+      error: ok ? "" : "Storage mapping test output inatteso",
+    });
+    await recordFlowAction({
+      workspaceId,
+      nodeId: storageId,
+      level: ok ? "info" : "warning",
+      message: ok ? "Storage mapping test completed" : "Storage mapping test completed with unexpected output",
+      context: {
+        action: "flow-map-storage-mapping-test",
+        runId,
+        storeName,
+        recordId: record?.id || "",
+        storedPayload,
+      },
+    });
+    await loadRuntime({ force: true, silent: true });
+    setFocusState({ mode: "nodes", nodeId: storageId, nodeType: "storage", channel: "raw", connectionId: "" });
+    mount({ preserveScroll: true });
+  } catch (error) {
+    console.error("Flow Map storage mapping test error:", error);
+    state.error = error?.message || "Errore storage mapping test Flow Map";
+    finishFlowMapTestRun({ runId, summary: `Storage mapping test error: ${error.message || error}`, error: state.error });
+    await recordFlowAction({
+      workspaceId,
+      level: "error",
+      message: state.error,
+      context: { action: "flow-map-storage-mapping-test-error", runId, error: error.message || String(error) },
     });
     mount({ preserveScroll: true });
   }
@@ -2436,6 +2677,11 @@ const renderHeader = () =>
         disabled: state.testRun.running,
         onclick: () => runMappingPreviewTest(),
       }, icon("rule", "sm"), "Mapping Test"),
+      btn({
+        title: "Create and run Manual JSON -> Storage json-map diagnostic",
+        disabled: state.testRun.running,
+        onclick: () => runMappingStorageTest(),
+      }, icon("database", "sm"), "Storage Test"),
       state.testRun.running
         ? btn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, icon("stop", "sm"), "Stop")
         : null,

@@ -8,7 +8,7 @@
 
 .tl-flow-inspector-overlay {
   position: fixed;
-  z-index: 30;
+  z-index: 80;
   top: 84px;
   right: 16px;
   bottom: 44px;
@@ -837,6 +837,7 @@ body.is-flow-inspector-card-dragging {
 }
 
 @media (max-width: 860px) {
+
   .tl-flow-orchestrator-hero,
   .tl-flow-orchestrator-grid {
     grid-template-columns: 1fr;
@@ -1134,6 +1135,28 @@ body.is-flow-inspector-port-dragging {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+.tl-flow-storage-record-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.tl-flow-storage-record-preview {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: rgba(226, 232, 240, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.58);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .tl-flow-replay-btn {
