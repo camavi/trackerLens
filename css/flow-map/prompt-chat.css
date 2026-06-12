@@ -1299,6 +1299,25 @@
   padding-top: 6px;
 }
 
+.tl-flow-prompt-endpoint-source-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(255, 199, 44, 0.2);
+  border-radius: 8px;
+  color: rgba(254, 240, 138, 0.94);
+  background: rgba(255, 199, 44, 0.055);
+}
+
+.tl-flow-prompt-endpoint-source-warning span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tl-flow-prompt-endpoint-candidate {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

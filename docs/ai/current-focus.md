@@ -53,6 +53,10 @@ Step 5 base is complete:
 - Flow Map Mapping Test and Storage Test were browser-verified successfully.
 - Runtime error diagnosis memory now stores structured provenance: record id, node, cause, suggestion and fix hint.
 - Endpoint research helper now follows OpenAPI/Swagger specs, accepts explicit spec/doc URLs from the prompt as first-class sources and returns discovery provenance to the Flow Agent UI.
+- Flow Chat routes prompts such as "cerca endpoint da https://...openapi.json per ..." to non-mutating endpoint research instead of blocked config updates.
+- Flow Chat rejects OpenAPI/Swagger/docs/schema URLs as selectable runtime endpoint candidates; those URLs are allowed only as research sources.
+- Flow Chat can parse an explicit public OpenAPI JSON source directly in the browser when the same-origin endpoint research helper is unavailable.
+- Endpoint candidate cards show `researchSource`; AI fallback candidates are explicitly warned in the UI.
 
 Previous work:
 
@@ -78,7 +82,7 @@ Endpoint research hardening follow-up.
 
 Target behavior:
 
-- browser-test endpoint research from Flow Map AI Chat with an explicit OpenAPI/Swagger spec URL;
+- browser-test endpoint research from Flow Map AI Chat with an explicit OpenAPI/Swagger spec URL after the routing fix;
 - consider provider-specific scoring presets only when backed by fetched documentation;
 - keep Mapping/Storage diagnostics available for regression checks.
 

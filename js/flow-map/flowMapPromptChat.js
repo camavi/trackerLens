@@ -2427,6 +2427,25 @@ const flowPromptExtractExplicitUrl = (prompt = "") => {
   return String(match?.[0] || "").replace(/[),.;]+$/g, "");
 };
 
+const flowPromptUrlLooksLikeResearchSource = (url = "") => {
+  try {
+    const parsed = new URL(String(url || ""));
+    const haystack = `${parsed.pathname} ${parsed.search}`.toLowerCase();
+    return /(openapi|swagger|api-docs|\/docs?(?:\/|$)|documentation|\.ya?ml(?:\?|$)|\.json(?:\?|$))/i.test(haystack);
+  } catch (_) {
+    return false;
+  }
+};
+
+const flowPromptUsesExplicitUrlAsResearchSource = (prompt = "") => {
+  const explicitUrl = flowPromptExtractExplicitUrl(prompt);
+  if (!explicitUrl || !flowPromptLooksLikeEndpointLookup(prompt)) return false;
+  const text = flowPromptNormalize(prompt);
+  return flowPromptUrlLooksLikeResearchSource(explicitUrl) || flowPromptHasAny(text, [
+    " da ", " dal ", " dalla ", " from ", "source", "sorgente", "documentazione", "docs", "spec", "openapi", "swagger",
+  ]);
+};
+
 const flowPromptIsExplicitRuntimeUrl = (value = "") =>
   /^(https?|wss?):\/\/[^\s"'<>]+$/i.test(String(value || "").trim());
 
@@ -2445,6 +2464,14 @@ const flowPromptValidateEndpointCandidate = ({ value = "", method = "GET" } = {}
   if (!endpoint) return { ok: false, reason: "Endpoint vuoto.", endpoint, method: httpMethod };
   if (flowPromptLooksLikePlaceholderValue(endpoint)) {
     return { ok: false, reason: "Endpoint placeholder: serve un URL reale.", endpoint, method: httpMethod };
+  }
+  if (flowPromptUrlLooksLikeResearchSource(endpoint)) {
+    return {
+      ok: false,
+      reason: "Questo URL sembra uno spec/documentazione OpenAPI, non un endpoint runtime.",
+      endpoint,
+      method: httpMethod,
+    };
   }
   if (!flowPromptIsExplicitRuntimeUrl(endpoint)) {
     return { ok: false, reason: "L'endpoint deve iniziare con http://, https://, ws:// o wss://.", endpoint, method: httpMethod };
@@ -2476,11 +2503,105 @@ const flowPromptLooksLikeEndpointLookup = (prompt = "") => {
 
 const flowPromptEndpointResearchQuery = (prompt = "") => {
   const text = String(prompt || "").trim();
+  if (flowPromptUsesExplicitUrlAsResearchSource(text)) return text;
   const match = text.match(/(?:per|to)\s+(.+?)(?:\s+(?:e poi|poi|and then|then|metti|inserisci|configura|nel|nella|in)\b|$)/i);
   return String(match?.[1] || text)
     .replace(/\b(endpoint|url|api|rest api)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+};
+
+const flowPromptEndpointPathScore = (path = "", query = "") => {
+  const haystack = flowPromptNormalize(path);
+  const tokens = flowPromptNormalize(query).split(/\s+/).filter((token) => token.length > 2);
+  let score = 0;
+  if (/\/v\d+(\b|\/|:)/i.test(path)) score += 4;
+  if (/(quote|ticker|price|forecast|weather|current|search|lookup|feed|latest|market|symbol|asset|crypto|stock|currency|pet|user|store)/i.test(path)) score += 4;
+  if (/(test|mock|example|sandbox|admin|oauth|auth|login|logout|schema|docs?)/i.test(path)) score -= 4;
+  tokens.forEach((token) => {
+    if (haystack.includes(token)) score += 2;
+  });
+  return score;
+};
+
+const flowPromptOpenapiServers = (spec = {}, sourceUrl = "") => {
+  const servers = (Array.isArray(spec.servers) ? spec.servers : [])
+    .map((server) => typeof server === "string" ? server : server?.url)
+    .filter(Boolean)
+    .map((url) => {
+      try {
+        return new URL(url, sourceUrl).toString().replace(/\/+$/g, "");
+      } catch (_) {
+        return "";
+      }
+    })
+    .filter((url) => /^https?:\/\//i.test(url));
+  if (servers.length) return [...new Set(servers)];
+  try {
+    const parsed = new URL(sourceUrl);
+    return [`${parsed.protocol}//${parsed.host}`];
+  } catch (_) {
+    return [];
+  }
+};
+
+const flowPromptExtractOpenapiCandidates = ({ spec = {}, sourceUrl = "", query = "" } = {}) => {
+  if (!spec || typeof spec !== "object" || (!spec.openapi && !spec.swagger) || !spec.paths || typeof spec.paths !== "object") return [];
+  const server = flowPromptOpenapiServers(spec, sourceUrl)[0] || "";
+  if (!server) return [];
+  const candidates = [];
+  Object.entries(spec.paths || {}).forEach(([path, operations]) => {
+    if (!operations || typeof operations !== "object") return;
+    Object.entries(operations).forEach(([method, operation]) => {
+      const httpMethod = String(method || "").toUpperCase();
+      if (!FLOW_PROMPT_ENDPOINT_METHODS.has(httpMethod) || !operation || typeof operation !== "object") return;
+      let score = flowPromptEndpointPathScore(path, query);
+      if (httpMethod === "GET") score += 2;
+      if (operation.deprecated) score -= 6;
+      if (score < 2) return;
+      const endpoint = `${server}/${String(path).replace(/^\/+/g, "")}`;
+      candidates.push(flowPromptNormalizeEndpointCandidate({
+        title: operation.summary || operation.description || `${spec.info?.title || "OpenAPI"} ${path}`,
+        endpoint,
+        method: httpMethod,
+        sourceUrl,
+        reason: "Extracted in browser from explicit OpenAPI/Swagger source.",
+        confidence: "openapi-path",
+        sourceConfidence: "openapi-spec",
+        discoveryMethod: "openapi",
+        researchSource: "browser-openapi",
+        apiSpec: {
+          title: String(spec.info?.title || ""),
+          version: String(spec.info?.version || ""),
+          path,
+          operationId: String(operation.operationId || ""),
+          score,
+        },
+      }, query));
+    });
+  });
+  return candidates
+    .filter((candidate) => candidate.endpoint && candidate.validation.ok)
+    .sort((a, b) => (b.apiSpec?.score || 0) - (a.apiSpec?.score || 0))
+    .slice(0, 3);
+};
+
+const flowPromptCallExplicitOpenapiResearch = async ({ query = "", prompt = "" } = {}) => {
+  const sourceUrl = flowPromptExtractExplicitUrl(prompt);
+  if (!sourceUrl || !flowPromptUsesExplicitUrlAsResearchSource(prompt) || !/\.json(?:\?|$)|openapi|swagger/i.test(sourceUrl)) return [];
+  try {
+    const response = await flowPromptEndpointFetchWithTimeout(sourceUrl, {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      headers: { Accept: "application/json,*/*;q=0.8" },
+    }, 12000);
+    if (!response.ok) return [];
+    const spec = await response.json().catch(() => null);
+    return flowPromptExtractOpenapiCandidates({ spec, sourceUrl, query });
+  } catch (_) {
+    return [];
+  }
 };
 
 const flowPromptNormalizeEndpointCandidate = (candidate = {}, fallbackQuery = "") => {
@@ -2546,7 +2667,7 @@ const flowPromptCallLocalEndpointResearch = async ({ query = "", prompt = "", ta
           subtype: targetNode.subtype,
         } : null,
       }),
-    }, 12000);
+    }, 28000);
     if (!response.ok) return [];
     const data = await response.json().catch(() => null);
     const rawCandidates = Array.isArray(data?.candidates) ? data.candidates : [];
@@ -2555,6 +2676,7 @@ const flowPromptCallLocalEndpointResearch = async ({ query = "", prompt = "", ta
         ...candidate,
         sourceConfidence: candidate.sourceConfidence || data?.source || "local-helper",
         confidence: candidate.confidence || "source-discovered",
+        researchSource: candidate.researchSource || "local-helper",
       }, query))
       .filter((candidate) => candidate.endpoint)
       .map((candidate) => ({
@@ -2620,7 +2742,7 @@ const flowPromptVerifyEndpointCandidate = async (candidate = {}) => {
 
 const flowPromptResearchEndpointCandidates = async ({ query = "", prompt = "", targetNode = null } = {}) => {
   const explicitUrl = flowPromptExtractExplicitUrl(prompt);
-  if (explicitUrl) {
+  if (explicitUrl && !flowPromptUsesExplicitUrlAsResearchSource(prompt)) {
     const candidate = flowPromptNormalizeEndpointCandidate({
       title: query || "URL indicato dall'utente",
       endpoint: explicitUrl,
@@ -2634,6 +2756,8 @@ const flowPromptResearchEndpointCandidates = async ({ query = "", prompt = "", t
   }
   const localCandidates = await flowPromptCallLocalEndpointResearch({ query, prompt, targetNode });
   if (localCandidates.length) return localCandidates;
+  const explicitOpenapiCandidates = await flowPromptCallExplicitOpenapiResearch({ query, prompt });
+  if (explicitOpenapiCandidates.length) return explicitOpenapiCandidates;
   const aiSettings = await flowPromptReadAiSettings();
   const provider = await flowPromptPickProvider(aiSettings);
   if (!provider) return [];
@@ -2644,6 +2768,7 @@ const flowPromptResearchEndpointCandidates = async ({ query = "", prompt = "", t
     "Do not invent local placeholders. If unsure, return {\"candidates\":[]}.",
     "Each candidate must include: title, endpoint, method, sourceUrl, reason, confidence.",
     "The endpoint must be directly usable as a URL template or concrete URL and must start with http:// or https://.",
+    "Never return an OpenAPI/Swagger spec URL, docs page, JSON schema URL, YAML URL, or documentation asset as endpoint. Put those only in sourceUrl.",
     "If the API needs a key or path parameters, keep placeholders only when they are part of documented URL templates and explain it in reason.",
     `goal: ${query || prompt}`,
     `targetNode: ${targetNode?.label || targetNode?.id || "REST API"}`,
@@ -2663,8 +2788,13 @@ const flowPromptResearchEndpointCandidates = async ({ query = "", prompt = "", t
           ? [parsed]
           : [];
     const candidates = rawCandidates
-      .map((candidate) => flowPromptNormalizeEndpointCandidate(candidate, query))
-      .filter((candidate) => candidate.endpoint)
+      .map((candidate) => flowPromptNormalizeEndpointCandidate({
+        ...candidate,
+        sourceConfidence: candidate.sourceConfidence || "ai-fallback",
+        discoveryMethod: candidate.discoveryMethod || "ai-fallback",
+        researchSource: "ai-fallback",
+      }, query))
+      .filter((candidate) => candidate.endpoint && candidate.validation.ok)
       .slice(0, 3);
     for (const candidate of candidates) {
       candidate.verification = await flowPromptVerifyEndpointCandidate(candidate);
@@ -2711,7 +2841,7 @@ const flowPromptEnrichEndpointResearchPlan = async (plan = null, prompt = "") =>
 const flowPromptExtractConfigChange = (prompt = "") => {
   const text = String(prompt || "").trim();
   const explicitUrl = flowPromptExtractExplicitUrl(prompt);
-  const endpointLookup = flowPromptLooksLikeEndpointLookup(prompt) && !explicitUrl;
+  const endpointLookup = flowPromptLooksLikeEndpointLookup(prompt) && (!explicitUrl || flowPromptUsesExplicitUrlAsResearchSource(prompt));
   if (explicitUrl || endpointLookup) {
     const targetMatch = text.match(/\b(?:in|nel|nella|sul|su|al|alla)\s+(.+?)(?:\s+(?:al|alla|nel|nella|sul|su)\s+(?:url|endpoint))?\s*$/i);
     const nodeHint = String(targetMatch?.[1] || "REST API")
@@ -2835,7 +2965,27 @@ const flowPromptBuildConfigPlan = (context = {}, prompt = "") => {
   ], `Posso aggiornare ${node.label}: ${field.field} = ${value}.`);
 };
 
+const flowPromptBuildEndpointResearchPlan = (context = {}, prompt = "") => {
+  const researchQuery = flowPromptEndpointResearchQuery(prompt);
+  const node = flowPromptFindNodeByText(context, "REST API")
+    || (context.nodes || []).find((item) => flowPromptNormalize(item.subtype || item.type || "").includes("rest"));
+  return flowPromptBatchPlan([
+    {
+      type: "researchEndpoint",
+      tool: "researchEndpoint",
+      status: "ready",
+      query: researchQuery,
+      targetField: "endpoint",
+      targetNodeId: node?.id || "",
+      node: node || null,
+      summary: `Cerca endpoint affidabili per "${researchQuery || "la richiesta"}".`,
+      detail: "Il tool legge documentazione/spec e propone candidati senza scrivere nel grafo.",
+    },
+  ], `Piano agente: cercare endpoint per "${researchQuery || "la richiesta"}" senza modificare config.`);
+};
+
 const flowPromptBuildSingleActionPlan = (context = {}, prompt = "") => {
+  if (flowPromptUsesExplicitUrlAsResearchSource(prompt)) return flowPromptBuildEndpointResearchPlan(context, prompt);
   const intent = flowPromptAgentIntent(prompt);
   if (intent === "deleteNode") return flowPromptBuildDeleteNodePlan(context, prompt);
   if (intent === "duplicateNode") return flowPromptBuildDuplicateNodePlan(context, prompt);
@@ -3162,9 +3312,9 @@ const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "
     debug.reason = "Runtime error fixes must keep the local diagnosis plan even when blocked.";
     return localPlan;
   }
-  if (flowPromptLooksLikeEndpointLookup(prompt) && !flowPromptExtractExplicitUrl(prompt)) {
+  if (flowPromptLooksLikeEndpointLookup(prompt) && (!flowPromptExtractExplicitUrl(prompt) || flowPromptUsesExplicitUrlAsResearchSource(prompt))) {
     debug.selectedPlan = localPlan ? "local" : "none";
-    debug.reason = "Endpoint lookup without explicit URL must not be converted into an Apply plan.";
+    debug.reason = "Endpoint lookup must not be converted into an Apply plan before a candidate is selected.";
     return localPlan;
   }
   if (!flowPromptIsMutationRequest(prompt) && flowPromptAgentIntent(prompt) !== "connect") {
@@ -4892,8 +5042,18 @@ const openFlowPromptChatDialog = async () => {
     const renderEndpointCandidates = (item = {}) => {
       const candidates = (item.candidates || []).filter(Boolean);
       if (!candidates.length) return null;
+      const usesAiFallback = candidates.some((candidate) =>
+        candidate.researchSource === "ai-fallback" ||
+        candidate.sourceConfidence === "ai-fallback" ||
+        candidate.discoveryMethod === "ai-fallback"
+      );
       return _.div(
         { class: "tl-flow-prompt-endpoint-candidates" },
+        usesAiFallback ? _.div(
+          { class: "tl-flow-prompt-endpoint-source-warning" },
+          icon("warning", "sm"),
+          _.span("Fallback AI usata: verifica la documentazione prima di usare questi endpoint.")
+        ) : null,
         ...candidates.map((candidate) => {
           const targetLabel = item.node?.label || item.targetNodeId || "REST API";
           const prompt = `imposta endpoint di ${targetLabel} a ${candidate.endpoint}`;
@@ -4914,6 +5074,7 @@ const openFlowPromptChatDialog = async () => {
                 { class: "tl-flow-prompt-endpoint-meta" },
                 _.code(verificationLabel),
                 _.code(candidate.sourceConfidence || "ai-suggested"),
+                candidate.researchSource ? _.code(candidate.researchSource) : null,
                 candidate.verification?.verifier ? _.code(candidate.verification.verifier) : null,
                 candidate.discoveryMethod ? _.code(candidate.discoveryMethod) : null,
                 candidate.confidence ? _.code(`confidence: ${candidate.confidence}`) : null
