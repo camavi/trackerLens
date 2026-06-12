@@ -823,6 +823,54 @@ const flowPromptRuntimeErrorDiagnosis = (context = {}, record = {}) => {
   };
 };
 
+const flowPromptRuntimeErrorProvenance = (context = {}, record = {}, insight = null) => {
+  const diagnosis = insight || flowPromptRuntimeErrorDiagnosis(context, record);
+  const node = flowPromptRuntimeRecordNode(context, record);
+  const recordId = record.id || diagnosis.recordId || "";
+  const action = record.action || record.eventType || record.type || record.context?.action || "";
+  const level = record.level || record.status || record.severity || "error";
+  const createdAt = record.createdAt || record.time || record.updatedAt || flowPromptNow();
+  const fixHint = diagnosis.canPrepareEndpointConfig
+    ? "configure-explicit-endpoint"
+    : diagnosis.canRetry
+      ? "inspect-node-and-retry"
+      : "inspect-raw-log";
+  const title = [
+    diagnosis.nodeLabel || node?.label || "Runtime",
+    diagnosis.kind || action || "error",
+    diagnosis.status ? `status ${diagnosis.status}` : "",
+  ].filter(Boolean).join(" · ");
+  return {
+    kind: "runtime-error-diagnosis",
+    recordId,
+    action,
+    level,
+    createdAt,
+    nodeId: diagnosis.nodeId || node?.id || flowPromptRecordContextValue(record, ["nodeId"]) || "",
+    nodeLabel: diagnosis.nodeLabel || node?.label || flowPromptRecordContextValue(record, ["nodeLabel"]) || "",
+    url: diagnosis.url || "",
+    method: diagnosis.method || "",
+    status: diagnosis.status || "",
+    statusText: diagnosis.statusText || "",
+    errorKind: diagnosis.kind || "",
+    error: diagnosis.error || record.message || "",
+    cause: diagnosis.cause || "",
+    suggestion: diagnosis.suggestion || "",
+    fixHint,
+    canRetry: Boolean(diagnosis.canRetry),
+    canInspect: Boolean(diagnosis.canInspect),
+    canPrepareEndpointConfig: Boolean(diagnosis.canPrepareEndpointConfig),
+    title,
+    rawPreview: {
+      id: recordId,
+      message: record.message || "",
+      channel: record.channel || "",
+      sourceNodeId: record.sourceNodeId || record.context?.sourceNodeId || "",
+      targetNodeId: record.targetNodeId || record.context?.targetNodeId || "",
+    },
+  };
+};
+
 const flowPromptRuntimeErrorRecords = (context = {}, limit = 20) =>
   flowPromptRecentRecords([...(context.flowLogs || []), ...(context.events || [])], limit)
     .filter((record) =>
@@ -1153,6 +1201,42 @@ const flowPromptRememberPreference = async (prompt = "") => {
       explicit: true,
       capturedAt: flowPromptNow(),
     }).slice(0, 1200),
+  }).catch(() => null);
+};
+
+const flowPromptRememberRuntimeErrorDiagnosis = async ({ prompt = "", context = {}, record = {}, insight = null } = {}) => {
+  if (!window.TrackerLensAiRuntimeStore?.remember || !record) return null;
+  const provenance = flowPromptRuntimeErrorProvenance(context, record, insight);
+  const workspaceId = currentWorkspaceId() || "runtime";
+  const stableId = [
+    "mem",
+    "workspace",
+    workspaceId,
+    "flow-map-agent",
+    provenance.kind,
+    provenance.recordId || provenance.nodeId || provenance.nodeLabel || provenance.errorKind || provenance.error,
+  ].map((value) => safeRuntimeId(value)).filter(Boolean).join("_").slice(0, 180);
+  const text = [
+    provenance.nodeLabel ? `Nodo ${provenance.nodeLabel}` : "Errore runtime",
+    provenance.cause,
+    provenance.suggestion ? `Suggerimento: ${provenance.suggestion}` : "",
+  ].filter(Boolean).join(" · ");
+  return window.TrackerLensAiRuntimeStore.remember({
+    id: stableId,
+    scope: "workspace",
+    workspaceId,
+    agentId: "flow-map-agent",
+    kind: provenance.kind,
+    name: provenance.title || "Runtime error diagnosis",
+    text: text.slice(0, 700),
+    summary: provenance.cause || provenance.error || "Runtime error diagnosis",
+    tags: ["flow-map", "flow-agent", "runtime-error", provenance.errorKind, provenance.nodeId].filter(Boolean),
+    weight: 5,
+    meta: JSON.stringify({
+      ...provenance,
+      prompt,
+      capturedAt: flowPromptNow(),
+    }).slice(0, 1800),
   }).catch(() => null);
 };
 
@@ -2417,6 +2501,8 @@ const flowPromptNormalizeEndpointCandidate = (candidate = {}, fallbackQuery = ""
       : confidence === "user-provided"
         ? "user-provided"
         : "ai-suggested"),
+    discoveryMethod: String(candidate.discoveryMethod || candidate.discovery || "").trim(),
+    apiSpec: candidate.apiSpec && typeof candidate.apiSpec === "object" ? candidate.apiSpec : null,
     verification: candidate.verification || null,
     validation,
     usable: validation.ok,
@@ -3170,6 +3256,53 @@ const flowPromptRunMemoryRecallTests = async () => {
   };
 };
 
+const flowPromptRunRuntimeErrorMemoryTests = async () => {
+  const context = {
+    workspaceId: currentWorkspaceId() || "workspace_test",
+    nodes: [
+      { id: "node_rest", label: "REST API", type: "rest", subtype: "rest", category: "sources", outputs: ["raw"] },
+    ],
+    events: [],
+    flowLogs: [],
+  };
+  const record = {
+    id: "flow_log_error_1",
+    level: "error",
+    action: "live-rest-test",
+    message: "Failed to fetch",
+    createdAt: "2026-06-12T08:00:00.000Z",
+    context: {
+      nodeId: "node_rest",
+      endpoint: "https://api.example.invalid/ticker",
+      method: "GET",
+      errorKind: "network-or-cors",
+      status: "",
+    },
+  };
+  const insight = flowPromptRuntimeErrorDiagnosis(context, record);
+  const provenance = flowPromptRuntimeErrorProvenance(context, record, insight);
+  const tests = [
+    {
+      name: "diagnosis resolves node",
+      ok: insight.nodeId === "node_rest" && insight.nodeLabel === "REST API",
+      insight,
+    },
+    {
+      name: "provenance has cause and fix hint",
+      ok: provenance.kind === "runtime-error-diagnosis"
+        && provenance.recordId === "flow_log_error_1"
+        && provenance.fixHint === "inspect-node-and-retry"
+        && Boolean(provenance.cause)
+        && Boolean(provenance.suggestion),
+      provenance,
+    },
+  ];
+  return {
+    ok: tests.every((test) => test.ok),
+    tests,
+  };
+};
+
 const flowPromptBuildAgentReport = async (prompt = "") => {
   const memory = await flowPromptReadWorkspaceMemory(prompt);
   const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
@@ -3182,17 +3315,25 @@ const flowPromptBuildAgentReport = async (prompt = "") => {
   if (wantsRuntimeErrors && queryModel.runtime?.errors?.length) {
     const firstError = queryModel.runtime.errors[0];
     const firstInsight = queryModel.runtime.errorInsights?.[0] || flowPromptRuntimeErrorDiagnosis(context, firstError);
-    await flowPromptRememberWorkspaceEvent({
-      kind: "runtime-error",
+    const savedDiagnosis = await flowPromptRememberRuntimeErrorDiagnosis({
       prompt,
-      summary: [
-        firstInsight.nodeLabel ? `Nodo ${firstInsight.nodeLabel}` : "Errore runtime",
-        firstInsight.kind ? `kind ${firstInsight.kind}` : "",
-        firstInsight.status ? `status ${firstInsight.status}` : "",
-        firstInsight.url ? `url ${firstInsight.url}` : "",
-      ].filter(Boolean).join(" · "),
-      result: { record: firstError, diagnosis: firstInsight },
+      context,
+      record: firstError,
+      insight: firstInsight,
     });
+    if (!savedDiagnosis) {
+      await flowPromptRememberWorkspaceEvent({
+        kind: "runtime-error",
+        prompt,
+        summary: [
+          firstInsight.nodeLabel ? `Nodo ${firstInsight.nodeLabel}` : "Errore runtime",
+          firstInsight.kind ? `kind ${firstInsight.kind}` : "",
+          firstInsight.status ? `status ${firstInsight.status}` : "",
+          firstInsight.url ? `url ${firstInsight.url}` : "",
+        ].filter(Boolean).join(" · "),
+        result: { record: firstError, diagnosis: firstInsight },
+      });
+    }
   }
   const debug = {
     prompt,
@@ -4774,9 +4915,11 @@ const openFlowPromptChatDialog = async () => {
                 _.code(verificationLabel),
                 _.code(candidate.sourceConfidence || "ai-suggested"),
                 candidate.verification?.verifier ? _.code(candidate.verification.verifier) : null,
+                candidate.discoveryMethod ? _.code(candidate.discoveryMethod) : null,
                 candidate.confidence ? _.code(`confidence: ${candidate.confidence}`) : null
               ),
               candidate.sourceUrl ? _.small(`source: ${candidate.sourceUrl}`) : _.small("source: AI suggestion, verify before production"),
+              candidate.apiSpec?.path ? _.small(`openapi: ${candidate.method || "GET"} ${candidate.apiSpec.path}${candidate.apiSpec.operationId ? ` · ${candidate.apiSpec.operationId}` : ""}`) : null,
               candidate.verification?.reason ? _.small(`check: ${candidate.verification.reason}`) : null,
               candidate.reason ? _.small(candidate.reason) : null
             ),
@@ -5487,5 +5630,6 @@ const openFlowPromptChatDialog = async () => {
 window.TrackerLensOpenFlowPromptChat = openFlowPromptChatDialog;
 window.TrackerLensFlowPromptChat = {
   ...(window.TrackerLensFlowPromptChat || {}),
+  runRuntimeErrorMemoryTests: flowPromptRunRuntimeErrorMemoryTests,
   runMemoryRecallTests: flowPromptRunMemoryRecallTests,
 };

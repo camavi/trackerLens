@@ -44,9 +44,9 @@ Current sub-steps:
 
 - Step 1 runtime/DB query tools: complete.
 - Step 2 dependency-aware commands: complete.
-- Step 3 endpoint research more realistic: complete base.
+- Step 3 endpoint research more realistic: complete base, OpenAPI provenance and explicit spec URL seed included.
 - Step 4 compound commands: complete base.
-- Step 5 workspace memory: complete, preference capture and alias recall diagnostics included.
+- Step 5 workspace memory: complete, preference capture, alias recall diagnostics and runtime error provenance included.
 
 Main files:
 
@@ -78,8 +78,7 @@ Main files:
 
 ## Planned / Future
 
-- Step 5 follow-up: runtime error diagnosis provenance hardening.
-- Endpoint research hardening with OpenAPI/provider-specific parsing.
+- Endpoint research hardening follow-up: browser-test explicit OpenAPI discovery from Flow Map AI Chat and add provider scoring only from fetched documentation.
 - Background/service-worker persistence when pages are closed.
 - Cloud sync, if explicitly prioritized.
 - Workspace templates and AI-generated workspaces after runtime core is stable.

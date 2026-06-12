@@ -41,12 +41,13 @@ Base implemented 2026-06-11:
 - Flow Agent stores explicit user preference memory from "ricordati/remember" style prompts;
 - Flow Prompt Chat exposes focused memory recall diagnostics for rename/duplicate aliases.
 - Step 5 preference memory was manually verified in Flow Map AI Chat.
+- Runtime error diagnosis memory stores structured provenance: record id, node, cause, suggestion and fix hint.
 
 Remaining hardening:
 
 Memory should store confirmed facts:
 
-- latest useful runtime error diagnosis with clearer provenance
+- no active blocker; keep avoiding noisy transient logs unless summarized
 
 Memory should not store:
 

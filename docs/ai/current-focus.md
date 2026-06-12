@@ -51,6 +51,8 @@ Step 5 base is complete:
 - Flow Prompt Chat exposes focused memory recall diagnostics for rename/duplicate aliases.
 - Step 5 preference memory was manually verified in Flow Map AI Chat.
 - Flow Map Mapping Test and Storage Test were browser-verified successfully.
+- Runtime error diagnosis memory now stores structured provenance: record id, node, cause, suggestion and fix hint.
+- Endpoint research helper now follows OpenAPI/Swagger specs, accepts explicit spec/doc URLs from the prompt as first-class sources and returns discovery provenance to the Flow Agent UI.
 
 Previous work:
 
@@ -72,12 +74,12 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Runtime contract hardening follow-up or endpoint research hardening.
+Endpoint research hardening follow-up.
 
 Target behavior:
 
-- optionally harden runtime error diagnosis provenance as a later memory improvement;
-- harden endpoint research with OpenAPI/provider-specific parsing;
+- browser-test endpoint research from Flow Map AI Chat with an explicit OpenAPI/Swagger spec URL;
+- consider provider-specific scoring presets only when backed by fetched documentation;
 - keep Mapping/Storage diagnostics available for regression checks.
 
 ## Required Updates When Work Changes
