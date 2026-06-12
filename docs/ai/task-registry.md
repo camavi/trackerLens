@@ -9,7 +9,7 @@ Last updated: 2026-06-12.
 
 ### TASK-025: Runtime Contract And Schema Config
 
-Status: Base complete, mapped Preview/Storage diagnostics added; browser verification pending.
+Status: Complete base, mapped Preview/Storage diagnostics browser-verified.
 Priority: High.
 Risk: Medium/High because it defines Workspace/Page persistence boundaries and connection mapping.
 
@@ -20,7 +20,7 @@ Current sub-steps:
 - Flow Map schema normalization for config forms: complete base.
 - Connection mapping metadata capture/editing: complete base.
 - Runtime execution of supported mapping modes: complete base.
-- UI/runtime regression tests for mapped flows: Preview and Storage diagnostics complete, browser verification pending.
+- UI/runtime regression tests for mapped flows: Preview and Storage diagnostics complete and browser-verified.
 - Storage Inspector latest persisted record: complete base.
 
 Main files:
@@ -36,7 +36,7 @@ Main files:
 
 ### TASK-024: Flow Map Prompt Chat Node Creator
 
-Status: Complete, still active as the hardening surface.
+Status: Complete, Step 5 workspace memory closed.
 Priority: High.
 Risk: Medium/High because it touches planner, runtime graph and command execution.
 
@@ -46,7 +46,7 @@ Current sub-steps:
 - Step 2 dependency-aware commands: complete.
 - Step 3 endpoint research more realistic: complete base.
 - Step 4 compound commands: complete base.
-- Step 5 workspace memory: complete base, Pin/Forget controls complete.
+- Step 5 workspace memory: complete, preference capture and alias recall diagnostics included.
 
 Main files:
 
@@ -78,7 +78,7 @@ Main files:
 
 ## Planned / Future
 
-- Step 5 hardening: explicit preference capture and alias recall tests.
+- Step 5 follow-up: runtime error diagnosis provenance hardening.
 - Endpoint research hardening with OpenAPI/provider-specific parsing.
 - Background/service-worker persistence when pages are closed.
 - Cloud sync, if explicitly prioritized.

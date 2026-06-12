@@ -38,12 +38,14 @@ Base implemented 2026-06-11:
 - DevTools exposes Pin/Unpin and Forget controls for stored memory records;
 - pinned memory is ranked ahead of normal memory and short-memory cleanup does not delete it;
 - DevTools memory dialog surfaces text, tags and provenance from JSON `meta`.
+- Flow Agent stores explicit user preference memory from "ricordati/remember" style prompts;
+- Flow Prompt Chat exposes focused memory recall diagnostics for rename/duplicate aliases.
+- Step 5 preference memory was manually verified in Flow Map AI Chat.
 
 Remaining hardening:
 
 Memory should store confirmed facts:
 
-- recurring user preferences from explicit user confirmation
 - latest useful runtime error diagnosis with clearer provenance
 
 Memory should not store:

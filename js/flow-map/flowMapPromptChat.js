@@ -397,6 +397,28 @@ const flowPromptHasAny = (text, words = []) => {
   return words.some((word) => normalized.includes(flowPromptNormalize(word)));
 };
 
+const flowPromptExtractPreferenceMemory = (prompt = "") => {
+  const raw = String(prompt || "").trim();
+  const text = flowPromptNormalize(raw);
+  const prefixes = [
+    /^(?:ricordati|ricorda|memorizza|salva in memoria|tieni a mente|remember|memorize|save this|keep in mind)(?:\s+(?:che|di|that|to))?\s*[:,-]?\s+(.+)$/i,
+    /^(?:preferisco|la mia preferenza e|la mia preferenza è|my preference is)\s+(.+)$/i,
+  ];
+  const explicit = prefixes
+    .map((regex) => raw.match(regex)?.[1]?.trim())
+    .find(Boolean);
+  if (!explicit || explicit.length < 6) return null;
+  if (flowPromptHasAny(text, ["non ricordare", "non memorizzare", "forget", "dimentica"])) return null;
+  const normalizedValue = explicit.replace(/\s+/g, " ").slice(0, 500);
+  return {
+    kind: "user-preference",
+    name: "Preferenza utente",
+    text: normalizedValue,
+    summary: normalizedValue.slice(0, 180),
+    tags: ["preference", "explicit"],
+  };
+};
+
 const flowPromptIsInventoryQuestion = (prompt = "") => {
   const text = flowPromptNormalize(prompt);
   const asksInfo = [
@@ -1029,7 +1051,11 @@ const flowPromptContextWithMemory = (context = {}, memory = []) => {
     const nodeId = meta.nodeId || "";
     if (!nodeId) return;
     if (rawKind === "node-alias" || kind === "node alias" || flowPromptMemorySearchText(item).includes("node alias")) {
-      const aliases = [meta.previousLabel, meta.nextLabel, ...(Array.isArray(meta.aliases) ? meta.aliases : [])]
+      const aliases = [
+        ...(meta.sourceNodeId ? [] : [meta.previousLabel]),
+        meta.nextLabel,
+        ...(Array.isArray(meta.aliases) ? meta.aliases : []),
+      ]
         .map(String)
         .filter(Boolean);
       if (aliases.length) nodeAliases.set(nodeId, [...new Set([...(nodeAliases.get(nodeId) || []), ...aliases])]);
@@ -1094,6 +1120,39 @@ const flowPromptRememberConfirmedFact = async ({ kind = "fact", name = "", text 
     tags: ["flow-map", "flow-agent", kind, ...tags].filter(Boolean),
     weight,
     meta: JSON.stringify({ kind, ...meta }).slice(0, 1200),
+  }).catch(() => null);
+};
+
+const flowPromptRememberPreference = async (prompt = "") => {
+  const preference = flowPromptExtractPreferenceMemory(prompt);
+  if (!preference || !window.TrackerLensAiRuntimeStore?.remember) return null;
+  const workspaceId = currentWorkspaceId() || "runtime";
+  const stableId = [
+    "mem",
+    "workspace",
+    workspaceId,
+    "flow-map-agent",
+    preference.kind,
+    preference.text,
+  ].map((value) => safeRuntimeId(value)).filter(Boolean).join("_").slice(0, 180);
+  return window.TrackerLensAiRuntimeStore.remember({
+    id: stableId,
+    scope: "workspace",
+    workspaceId,
+    agentId: "flow-map-agent",
+    kind: preference.kind,
+    name: preference.name,
+    text: preference.text,
+    summary: preference.summary,
+    tags: ["flow-map", "flow-agent", ...preference.tags],
+    weight: 6,
+    pinned: true,
+    meta: JSON.stringify({
+      kind: preference.kind,
+      prompt,
+      explicit: true,
+      capturedAt: flowPromptNow(),
+    }).slice(0, 1200),
   }).catch(() => null);
 };
 
@@ -1309,6 +1368,10 @@ const flowPromptFindNodeByText = (context = {}, text = "") => {
     flowPromptNormalize(node.id || "") === normalized
   );
   if (exactVisible.length === 1) return exactVisible[0];
+  const exactAlias = nodes.filter((node) =>
+    flowPromptNodeAliases(node).some((alias) => flowPromptNormalize(alias) === normalized)
+  );
+  if (exactAlias.length === 1) return exactAlias[0];
   const exact = nodes.filter((node) => flowPromptNodeSearchText(node) === normalized);
   if (exact.length === 1) return exact[0];
   const visibleContains = nodes.filter((node) => {
@@ -3037,6 +3100,76 @@ const flowPromptBuildActionPlanWithAiNormalize = async (context = {}, prompt = "
   return aiPlan || localPlan;
 };
 
+const flowPromptRunMemoryRecallTests = async () => {
+  const baseContext = {
+    workspaceId: currentWorkspaceId() || "workspace_test",
+    nodes: [
+      { id: "node_rest", label: "Weather API", type: "rest", subtype: "rest", category: "sources", outputs: ["raw"], aliases: [] },
+      { id: "node_rest_copy", label: "REST API Copy", type: "rest", subtype: "rest", category: "sources", outputs: ["raw"], aliases: [] },
+      { id: "node_preview", label: "Preview", type: "preview", subtype: "preview", category: "dev", inputs: ["raw"], aliases: [] },
+    ],
+    edges: [],
+    channels: [],
+    events: [],
+    flowLogs: [],
+  };
+  const memory = [
+    {
+      id: "test_alias_rename",
+      kind: "node-alias",
+      name: "Alias nodo Weather API",
+      text: "REST API ora si chiama Weather API.",
+      meta: JSON.stringify({
+        kind: "node-alias",
+        nodeId: "node_rest",
+        previousLabel: "REST API",
+        nextLabel: "Weather API",
+        aliases: ["REST API", "Weather API"],
+      }),
+    },
+    {
+      id: "test_alias_duplicate",
+      kind: "node-alias",
+      name: "Alias nodo REST 2",
+      text: "REST 2 e un duplicato confermato di REST API.",
+      meta: JSON.stringify({
+        kind: "node-alias",
+        nodeId: "node_rest_copy",
+        previousLabel: "REST API",
+        nextLabel: "REST 2",
+        aliases: ["REST 2"],
+        sourceNodeId: "node_rest",
+      }),
+    },
+  ];
+  const context = flowPromptContextWithMemory(baseContext, memory);
+  const renamePlan = flowPromptBuildConnectPlan(context, "collega REST API a Preview");
+  const duplicatePlan = flowPromptBuildConnectPlan(context, "collega REST 2 a Preview");
+  const preference = flowPromptExtractPreferenceMemory("ricordati che preferisco endpoint HTTPS validati");
+  const tests = [
+    {
+      name: "rename alias recall",
+      ok: renamePlan?.status === "ready" && renamePlan.source?.id === "node_rest" && renamePlan.target?.id === "node_preview",
+      plan: renamePlan,
+    },
+    {
+      name: "duplicate alias recall",
+      ok: duplicatePlan?.status === "ready" && duplicatePlan.source?.id === "node_rest_copy" && duplicatePlan.target?.id === "node_preview",
+      plan: duplicatePlan,
+    },
+    {
+      name: "explicit preference parser",
+      ok: preference?.kind === "user-preference" && /endpoint HTTPS/i.test(preference.text),
+      preference,
+    },
+  ];
+  return {
+    ok: tests.every((test) => test.ok),
+    tests,
+    memoryCount: memory.length,
+  };
+};
+
 const flowPromptBuildAgentReport = async (prompt = "") => {
   const memory = await flowPromptReadWorkspaceMemory(prompt);
   const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
@@ -3868,6 +4001,33 @@ const openFlowPromptChatDialog = async () => {
         detail: "Sto decidendo se usare i comandi Flow Map o il planner di creazione.",
         steps: ["Prompt ricevuto", "Classificazione intento"],
       });
+      const preference = flowPromptExtractPreferenceMemory(prompt);
+      if (preference) {
+        setActivity({
+          label: "Memorizzo preferenza",
+          detail: "Sto salvando una preferenza workspace confermata nella memoria AI.",
+          steps: ["Preferenza esplicita", "Salvataggio memoria", "Conferma chat"],
+        });
+        const saved = await flowPromptRememberPreference(prompt);
+        draft.analysis = null;
+        await appendMessage({
+          role: "assistant",
+          kind: "agent-report",
+          content: saved
+            ? `Memorizzato: ${preference.text}`
+            : "Non sono riuscito a salvare la preferenza nella memoria AI.",
+          agentReport: {
+            kind: "memory-preference",
+            intent: "memory",
+            content: saved ? `Memorizzato: ${preference.text}` : "Memoria AI non disponibile.",
+            memory: saved ? [saved] : [],
+            debug: { preference, saved },
+          },
+        });
+        draft.prompt = "";
+        setActivity(null);
+        return;
+      }
       if (flowPromptIsAgentQuestion(prompt)) {
         setActivity({
           label: "Leggo il runtime",
@@ -5325,3 +5485,7 @@ const openFlowPromptChatDialog = async () => {
 };
 
 window.TrackerLensOpenFlowPromptChat = openFlowPromptChatDialog;
+window.TrackerLensFlowPromptChat = {
+  ...(window.TrackerLensFlowPromptChat || {}),
+  runMemoryRecallTests: flowPromptRunMemoryRecallTests,
+};

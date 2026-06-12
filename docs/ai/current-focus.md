@@ -47,6 +47,10 @@ Step 5 base is complete:
 - AI memory cleanup preserves pinned short-memory records;
 - AI memory dialog now surfaces text, tags and provenance parsed from memory `meta`.
 - DevTools AI memory dialog and Pin/Forget controls were manually verified in the AI tab.
+- Flow Agent now stores explicit user preference memory from prompts such as "ricordati che...";
+- Flow Prompt Chat exposes focused memory recall diagnostics for rename/duplicate aliases.
+- Step 5 preference memory was manually verified in Flow Map AI Chat.
+- Flow Map Mapping Test and Storage Test were browser-verified successfully.
 
 Previous work:
 
@@ -68,12 +72,13 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Runtime contract hardening: browser-verify `Mapping Test` and `Storage Test`, then continue Step 5 with stronger retrieval.
+Runtime contract hardening follow-up or endpoint research hardening.
 
 Target behavior:
 
-- add preference memory from explicit user "remember" style prompts;
-- add focused runtime tests for alias recall after rename/duplicate.
+- optionally harden runtime error diagnosis provenance as a later memory improvement;
+- harden endpoint research with OpenAPI/provider-specific parsing;
+- keep Mapping/Storage diagnostics available for regression checks.
 
 ## Required Updates When Work Changes
 
