@@ -51,6 +51,15 @@ const jsonPreview = (value) => {
   }
 };
 
+const scrollInspectorIntoView = () => {
+  window.requestAnimationFrame(() => {
+    document.querySelector(".tl-devtools-inspector")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  });
+};
+
 const selectDetail = (type, id) => {
   state.selected = { type, id: String(id || "") };
   const query = new URLSearchParams(window.location.search);
@@ -59,6 +68,7 @@ const selectDetail = (type, id) => {
   query.set("id", String(id || ""));
   history.replaceState(null, "", `${window.location.pathname}?${query.toString()}`);
   mount();
+  scrollInspectorIntoView();
 };
 
 const setTab = (tab) => {
@@ -131,6 +141,52 @@ const select = (value, options, onChange) =>
   );
 
 const option = (value, label = value) => ({ value, label });
+
+const parseMaybeJson = (value) => {
+  if (!value || typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+};
+
+const isStoredMemory = (item = {}) =>
+  Boolean(item.id && item.raw && !Array.isArray(item.raw.items) && !/^memory_(scope|widgets|workspaces|connections)/.test(item.id));
+
+const pinMemoryRecord = async (item, pinned) => {
+  if (!isStoredMemory(item) || !window.TrackerLensAiRuntimeStore?.pinMemory) return;
+  await window.TrackerLensAiRuntimeStore.pinMemory(item.id, pinned);
+  await loadDevTools();
+};
+
+const forgetMemoryRecord = async (item) => {
+  if (!isStoredMemory(item) || !window.TrackerLensAiRuntimeStore?.forgetMemory) return;
+  const label = item.name || item.id || "Memory";
+  if (!window.confirm(`Dimenticare questa memoria?\n\n${label}`)) return;
+  await window.TrackerLensAiRuntimeStore.forgetMemory(item.id);
+  if (state.selected.type === "aiMemory" && state.selected.id === item.id) {
+    state.selected = { type: "", id: "" };
+  }
+  await loadDevTools();
+};
+
+const memoryActionCell = (item) => {
+  if (!isStoredMemory(item)) return actionCell("Inspect", () => openAiMemoryDialog(item));
+  return _.td(
+    _.div(
+      { class: "tl-devtools-row-actions" },
+      btn({ class: "tl-devtools-row-action", onclick: () => openAiMemoryDialog(item) }, icon("open_in_new", "sm"), "Inspect"),
+      btn(
+        { class: "tl-devtools-row-action", onclick: () => pinMemoryRecord(item, !item.pinned) },
+        icon(item.pinned ? "keep_off" : "push_pin", "sm"),
+        item.pinned ? "Unpin" : "Pin"
+      ),
+      btn({ class: "tl-devtools-row-action is-danger", onclick: () => forgetMemoryRecord(item) }, icon("delete", "sm"), "Forget")
+    )
+  );
+};
 
 const renderOverview = () => {
   const data = state.data || {};
@@ -483,14 +539,15 @@ const renderAi = () => {
     _.div(
       { class: "tl-devtools-section" },
       _.h2("Memory"),
-      table(["Name", "Kind", "Scope", "Workspace", "Updated", ""], memory.map((item) =>
+      table(["Name", "Kind", "Scope", "Workspace", "Status", "Updated", ""], memory.map((item) =>
         _.tr(
           _.td(item.name || item.id || "Memory"),
           _.td(item.kind || item.tags?.[0] || "summary"),
           _.td(item.scope || "workspace"),
           _.td(item.workspaceId || "global"),
+          _.td(item.pinned ? badge("pinned", "gold") : item.status || "active"),
           _.td(formatDate(item.updatedAt)),
-          actionCell("Inspect", () => selectDetail("aiMemory", item.id))
+          memoryActionCell(item)
         )
       ))
     )
@@ -562,9 +619,110 @@ const selectedRecord = () => {
   return null;
 };
 
+const renderAiMemoryDetail = (record) => {
+  const meta = parseMaybeJson(record.meta) || parseMaybeJson(record.raw?.meta) || {};
+  const provenance = {
+    kind: meta.kind || record.kind || "note",
+    source: meta.source || meta.sourceNodeId || record.agentId || "shared",
+    nodeId: meta.nodeId || "",
+    nodeLabel: meta.nodeLabel || meta.nextLabel || record.name || "",
+    endpoint: meta.endpoint || "",
+    prompt: meta.prompt || "",
+    appliedAt: meta.appliedAt || record.pinnedAt || record.updatedAt || "",
+  };
+  return [
+    _.div(
+      { class: "tl-devtools-inspector-stats" },
+      _.span(record.pinned ? "pinned" : record.status || "active"),
+      _.span(record.scope || "workspace"),
+      _.span(record.workspaceId || "global"),
+      _.span(record.kind || "note")
+    ),
+    _.div(
+      { class: "tl-devtools-impact" },
+      _.h3("Memory"),
+      _.div(
+        { class: "tl-devtools-impact-grid" },
+        _.span("Text"), _.strong(record.text || record.summary || record.meta || "N/D"),
+        _.span("Summary"), _.strong(record.summary || record.meta || "N/D"),
+        _.span("Tags"), _.strong(Array.isArray(record.tags) && record.tags.length ? record.tags.join(", ") : "N/D"),
+        _.span("Weight"), _.strong(number(record.weight || 0))
+      )
+    ),
+    _.div(
+      { class: "tl-devtools-impact" },
+      _.h3("Provenance"),
+      _.div(
+        { class: "tl-devtools-impact-grid" },
+        _.span("Kind"), _.strong(provenance.kind),
+        _.span("Source"), _.strong(provenance.source || "N/D"),
+        _.span("Node"), _.strong([provenance.nodeLabel, provenance.nodeId].filter(Boolean).join(" / ") || "N/D"),
+        _.span("Endpoint"), _.strong(provenance.endpoint || "N/D"),
+        _.span("Prompt"), _.strong(provenance.prompt || "N/D"),
+        _.span("Applied"), _.strong(formatDate(provenance.appliedAt))
+      )
+    ),
+  ];
+};
+
+const openAiMemoryDialog = (record) => {
+  if (!record) return;
+  const dialog = _.Dialog({
+    class: "tl-devtools-memory-dialog",
+    panelClass: "tl-devtools-memory-dialog-panel",
+    size: "xl",
+    title: record.name || record.id || "AI Memory",
+    subtitle: `${record.scope || "workspace"} · ${record.kind || "note"} · ${record.workspaceId || "global"}`,
+    icon: "psychology",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-devtools-memory-dialog-body" },
+      ...renderAiMemoryDetail(record),
+      _.pre({ class: "tl-devtools-json" }, jsonPreview(record))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      isStoredMemory(record)
+        ? btn(
+          {
+            class: "tl-devtools-row-action",
+            onclick: async () => {
+              close();
+              await pinMemoryRecord(record, !record.pinned);
+            },
+          },
+          icon(record.pinned ? "keep_off" : "push_pin", "sm"),
+          record.pinned ? "Unpin memory" : "Pin memory"
+        )
+        : null,
+      isStoredMemory(record)
+        ? btn(
+          {
+            class: "tl-devtools-row-action is-danger",
+            onclick: async () => {
+              const label = record.name || record.id || "Memory";
+              if (!window.confirm(`Dimenticare questa memoria?\n\n${label}`)) return;
+              close();
+              await window.TrackerLensAiRuntimeStore.forgetMemory(record.id);
+              if (state.selected.type === "aiMemory" && state.selected.id === record.id) {
+                state.selected = { type: "", id: "" };
+              }
+              await loadDevTools();
+            },
+          },
+          icon("delete", "sm"),
+          "Forget memory"
+        )
+        : null,
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
 const renderInspector = () => {
   const record = selectedRecord();
-  if (!record) return null;
+  if (!record || state.selected.type === "aiMemory") return null;
   const title = record.label || record.name || record.id || state.selected.id;
   const dependencies = state.selected.type === "node"
     ? (graph().dependencies || []).filter((dependency) => dependency.sourceNodeId === record.id || dependency.targetNodeId === record.id)

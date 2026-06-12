@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-11.
+Last updated: 2026-06-12.
 
 ## Active Area
 
@@ -43,6 +43,10 @@ Step 5 base is complete:
 - Flow Agent planning enriches runtime context with confirmed memory aliases;
 - AI command normalization receives confirmed memory context;
 - DevTools AI memory table exposes memory kind for inspection without flooding normal chat replies.
+- DevTools AI memory table now has Pin/Unpin and Forget controls for stored memory records;
+- AI memory cleanup preserves pinned short-memory records;
+- AI memory dialog now surfaces text, tags and provenance parsed from memory `meta`.
+- DevTools AI memory dialog and Pin/Forget controls were manually verified in the AI tab.
 
 Previous work:
 
@@ -64,13 +68,11 @@ duplica REST API come REST 2 e collega REST 2 a Preview
 
 ## Next Logical Step
 
-Runtime contract hardening: browser-verify `Mapping Test` and `Storage Test`, then return to Step 5 memory controls and stronger retrieval.
+Runtime contract hardening: browser-verify `Mapping Test` and `Storage Test`, then continue Step 5 with stronger retrieval.
 
 Target behavior:
 
-- add explicit forget/pin controls for workspace memory;
 - add preference memory from explicit user "remember" style prompts;
-- surface memory provenance in Dev inspector detail;
 - add focused runtime tests for alias recall after rename/duplicate.
 
 ## Required Updates When Work Changes

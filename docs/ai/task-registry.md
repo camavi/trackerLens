@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-11.
+Last updated: 2026-06-12.
 
 ## Active
 
@@ -46,7 +46,7 @@ Current sub-steps:
 - Step 2 dependency-aware commands: complete.
 - Step 3 endpoint research more realistic: complete base.
 - Step 4 compound commands: complete base.
-- Step 5 workspace memory: complete base.
+- Step 5 workspace memory: complete base, Pin/Forget controls complete.
 
 Main files:
 
@@ -78,7 +78,7 @@ Main files:
 
 ## Planned / Future
 
-- Step 5 hardening: forget/pin memory controls, explicit preference capture and alias recall tests.
+- Step 5 hardening: explicit preference capture and alias recall tests.
 - Endpoint research hardening with OpenAPI/provider-specific parsing.
 - Background/service-worker persistence when pages are closed.
 - Cloud sync, if explicitly prioritized.

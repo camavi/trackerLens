@@ -280,8 +280,12 @@ window.TrackerLensAiRuntimeStore = (() => {
     const content = contentOf(record);
     const count = Array.isArray(content.items) ? content.items.length : Number(content.count || content.itemsCount || 0);
     const scope = MEMORY_SCOPES.includes(content.scope) ? content.scope : "workspace";
+    const pinned = Boolean(content.pinned || content.status === "pinned");
     return {
       id: normalizeText(record?.id || content.id, `memory_${index}`),
+      status: pinned ? "pinned" : normalizeText(content.status || record?.status, "active"),
+      pinned,
+      pinnedAt: normalizeText(content.pinnedAt || record?.pinnedAt),
       scope,
       workspaceId: normalizeText(content.workspaceId || record?.workspaceId, scope === "global" ? "global" : "workspace_global"),
       agentId: normalizeText(content.agentId || content.agent || record?.agentId, "shared"),
@@ -433,6 +437,7 @@ window.TrackerLensAiRuntimeStore = (() => {
     const agentId = normalizeText(record.agentId || record.agent, "shared");
     const kind = normalizeText(record.kind || record.type, "note");
     const text = normalizeText(record.text || record.content || record.value || record.summary);
+    const pinned = Boolean(record.pinned || record.status === "pinned");
     const baseId = [
       "mem",
       scope,
@@ -442,10 +447,12 @@ window.TrackerLensAiRuntimeStore = (() => {
       Date.now(),
     ].map(safeId).join("_");
     return {
-      status: normalizeText(record.status, "active"),
       createdAt: normalizeText(record.createdAt, now),
       ...record,
       id: normalizeText(record.id, baseId),
+      status: pinned ? "pinned" : normalizeText(record.status, "active"),
+      pinned,
+      pinnedAt: pinned ? normalizeText(record.pinnedAt, now) : "",
       scope,
       workspaceId,
       agentId,
@@ -488,7 +495,12 @@ window.TrackerLensAiRuntimeStore = (() => {
       .filter((item) => !agentId || item.agentId === agentId || item.agentId === "shared")
       .map((item) => ({ item, queryScore: memoryQueryScore(item, query) }))
       .filter(({ queryScore }) => !query || queryScore > 0)
-      .sort((a, b) => (b.queryScore - a.queryScore) || (b.item.weight - a.item.weight) || (new Date(b.item.updatedAt) - new Date(a.item.updatedAt)))
+      .sort((a, b) =>
+        (b.queryScore - a.queryScore)
+        || (Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)))
+        || (b.item.weight - a.item.weight)
+        || (new Date(b.item.updatedAt) - new Date(a.item.updatedAt))
+      )
       .map(({ item }) => item)
       .slice(0, limit);
   };
@@ -507,6 +519,7 @@ window.TrackerLensAiRuntimeStore = (() => {
       text: item.text || item.meta || item.name,
       summary: item.raw?.summary || item.meta || "",
       meta: item.meta || "",
+      pinned: Boolean(item.pinned),
       weight: item.weight,
       tags: item.tags,
       updatedAt: item.updatedAt,
@@ -515,9 +528,12 @@ window.TrackerLensAiRuntimeStore = (() => {
 
   const cleanupShortMemory = async ({ limit = MEMORY_LIMITS.short } = {}) => {
     const records = await listMemory({ scope: "short", limit: 10000 });
-    const stale = records.slice(limit);
+    const pinned = records.filter((item) => item.pinned);
+    const candidates = records.filter((item) => !item.pinned);
+    const candidateLimit = Math.max(0, limit - pinned.length);
+    const stale = candidates.slice(candidateLimit);
     await Promise.all(stale.map((item) => deleteRecord(STORES.memory, item.id)));
-    return { deleted: stale.length, kept: Math.min(records.length, limit) };
+    return { deleted: stale.length, kept: records.length - stale.length };
   };
 
   const remember = async (record = {}) => {
@@ -528,6 +544,19 @@ window.TrackerLensAiRuntimeStore = (() => {
   };
 
   const forgetMemory = (id) => deleteRecord(STORES.memory, id);
+
+  const pinMemory = async (id, pinned = true) => {
+    const existing = (await readMemoryRecords()).find((item) => item.id === id);
+    if (!existing) return null;
+    const { raw, ...normalized } = existing;
+    return remember({
+      ...raw,
+      ...normalized,
+      pinned: Boolean(pinned),
+      status: pinned ? "pinned" : "active",
+      pinnedAt: pinned ? new Date().toISOString() : "",
+    });
+  };
 
   const localProviderDefaults = () => LOCAL_PROVIDER_DEFS.map((provider) => ({ ...provider }));
 
@@ -620,6 +649,11 @@ window.TrackerLensAiRuntimeStore = (() => {
         ...derivedAgents(widgets, pages, connections),
       ];
       const memoryRecordsNormalized = memoryRecords.map(normalizeMemory);
+      const storedMemory = memoryRecordsNormalized
+        .sort((a, b) =>
+          (Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)))
+          || (new Date(b.updatedAt) - new Date(a.updatedAt))
+        );
 
       const normalizedProviders = providerRecords.map(normalizeProvider);
       const seededLocalProviders = localProviderDefaults()
@@ -635,7 +669,7 @@ window.TrackerLensAiRuntimeStore = (() => {
         logs: logRecords.map(normalizeLog),
         memory: [
           ...scopeSummaryMemory(memoryRecordsNormalized),
-          ...memoryRecordsNormalized.slice(0, 8),
+          ...storedMemory.slice(0, 8),
           ...derivedMemory(widgets, pages, connections),
         ],
         promptFlows: [...promptRecords, ...promptFlowRecords].map(normalizePromptFlow),
@@ -662,6 +696,7 @@ window.TrackerLensAiRuntimeStore = (() => {
     list,
     listMemory,
     localProviderDefaults,
+    pinMemory,
     probeLocalProviders,
     probeProvider,
     remember,
