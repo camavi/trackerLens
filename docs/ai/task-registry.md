@@ -120,7 +120,7 @@ Main files:
 
 ## Completed Major Runtime Tasks
 
-- Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, Shift-drag downstream node groups and Ctrl-click quick delete.
+- Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Ctrl-click quick delete.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

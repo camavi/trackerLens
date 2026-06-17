@@ -14,13 +14,41 @@
   backdrop-filter: blur(12px);
 }
 
+.tl-flow-minimap.is-collapsed {
+  width: 190px;
+  padding: 8px 10px;
+}
+
 .tl-flow-minimap-head {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 24px;
+  align-items: center;
   gap: 8px;
   margin-bottom: 8px;
   color: rgba(226, 232, 240, 0.82);
   font-size: 10px;
+}
+
+.tl-flow-minimap.is-collapsed .tl-flow-minimap-head {
+  margin-bottom: 0;
+}
+
+.tl-flow-minimap-head strong,
+.tl-flow-minimap-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-minimap-toggle.cms-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .tl-flow-minimap-canvas {
@@ -72,7 +100,12 @@
   border: 1px solid rgba(250, 204, 21, 0.76);
   border-radius: 4px;
   background: rgba(250, 204, 21, 0.08);
-  pointer-events: none;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.tl-flow-minimap-viewport:active {
+  cursor: grabbing;
 }
 
 .tl-flow-timeline {

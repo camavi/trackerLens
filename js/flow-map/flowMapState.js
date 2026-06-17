@@ -99,6 +99,7 @@ const state = {
   inspectorPanelDrag: null,
   inspectorPortDrag: null,
   debugMode: localStorage.getItem("tl_flow_debug_mode") === "true",
+  minimapCollapsed: localStorage.getItem("tl_flow_minimap_collapsed") === "true",
   lastDeletedConnection: null,
   lastDeletedNode: null,
   lastChannelAction: null,

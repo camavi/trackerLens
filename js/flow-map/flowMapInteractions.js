@@ -47,6 +47,7 @@ const updateCanvasViewportDom = () => {
   const zoomLabel = document.querySelector("[data-flow-zoom-label]");
   if (zoomLabel) zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
   renderFlowEdges();
+  if (typeof updateFlowMinimapDom === "function") updateFlowMinimapDom();
 };
 
 const zoomCanvasAtPoint = (event, deltaY = 0) => {
@@ -1017,6 +1018,26 @@ const handlePointerMove = (event) => {
     interaction.point = pointerPercent(event, interaction.canvas);
     updateLinkHoverTarget(interaction, event);
     renderFlowEdges();
+    return;
+  }
+
+  if (interaction.type === "minimap") {
+    const dx = Math.abs(event.clientX - interaction.startX);
+    const dy = Math.abs(event.clientY - interaction.startY);
+    if (!interaction.moved && dx < 2 && dy < 2) return;
+    interaction.moved = true;
+    const deltaX = ((event.clientX - interaction.startX) / Math.max(1, interaction.bounds.width)) * 100;
+    const deltaY = ((event.clientY - interaction.startY) / Math.max(1, interaction.bounds.height)) * 100;
+    const nextX = Math.max(0, Math.min(100 - interaction.viewportW, interaction.viewportX + deltaX));
+    const nextY = Math.max(0, Math.min(100 - interaction.viewportH, interaction.viewportY + deltaY));
+    const viewport = document.querySelector(".tl-flow-minimap-viewport");
+    if (viewport) {
+      viewport.style.setProperty("--x", `${nextX}%`);
+      viewport.style.setProperty("--y", `${nextY}%`);
+    }
+    if (typeof minimapCenterViewportAtPercent === "function") {
+      minimapCenterViewportAtPercent(nextX + interaction.viewportW / 2, nextY + interaction.viewportH / 2, { remount: false });
+    }
   }
 };
 
@@ -1073,6 +1094,11 @@ const endInteraction = (event) => {
       return;
     }
     completePortLinkDrag(interaction, event);
+    flushPendingRuntimeRefresh();
+    return;
+  }
+  if (interaction?.type === "minimap") {
+    saveViewport();
     flushPendingRuntimeRefresh();
     return;
   }
@@ -1198,13 +1224,15 @@ const fitVisibleGraph = () => {
   mount();
 };
 
-const centerViewportOnPercent = ({ x = 50, y = 50, zoom = state.viewport.zoom } = {}) => {
+const setViewportCenterOnPercent = ({ x = 50, y = 50, zoom = state.viewport.zoom, remount = true } = {}) => {
   const host = document.querySelector(".tl-flow-canvas");
   const rect = host?.getBoundingClientRect?.();
   if (!rect?.width || !rect?.height) return;
   const nextZoom = Math.max(0.45, Math.min(2.2, Number(zoom) || state.viewport.zoom || 1));
-  const percentX = Math.max(0, Math.min(100, Number(x) || 0));
-  const percentY = Math.max(0, Math.min(100, Number(y) || 0));
+  const rawX = Number(x);
+  const rawY = Number(y);
+  const percentX = Number.isFinite(rawX) ? rawX : 0;
+  const percentY = Number.isFinite(rawY) ? rawY : 0;
   const graphX = (percentX / 100) * rect.width;
   const graphY = (percentY / 100) * rect.height;
   state.viewport = {
@@ -1213,8 +1241,12 @@ const centerViewportOnPercent = ({ x = 50, y = 50, zoom = state.viewport.zoom } 
     panY: Math.round((rect.height / 2) - graphY * nextZoom),
   };
   saveViewport();
-  mount({ preserveScroll: true });
+  if (remount) mount({ preserveScroll: true });
+  else updateCanvasViewportDom();
 };
+
+const centerViewportOnPercent = (options = {}) =>
+  setViewportCenterOnPercent({ ...options, remount: true });
 
 const centerViewportOnNode = (node = {}, index = 0, { select = false, zoom = Math.max(0.82, state.viewport.zoom || 1) } = {}) => {
   const position = nodePosition(node, index);

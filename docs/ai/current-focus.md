@@ -26,6 +26,7 @@ Flow Map canvas interaction refinement is complete:
 - Shift-drag on a runtime node moves that node plus all downstream child nodes while preserving relative distances;
 - Ctrl-click on the node delete quick action deletes immediately without opening the confirmation dialog.
 - The Flow Map canvas now shows a red center marker at graph center and the edge canvas draw area is wider to avoid clipping long cables.
+- Runtime Minimap now fits graph bounds instead of zoom perspective, shows the visible viewport in graph coordinates, updates live during canvas pan/zoom, supports dragging the viewport box and can be minimized with persisted state.
 
 Runtime contract base is complete:
 

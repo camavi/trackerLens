@@ -1118,53 +1118,186 @@ const lazyVisibleGraph = (graph = {}, activity = {}) => {
   };
 };
 
+const minimapViewportBounds = (rect = { width: 1440, height: 900 }) => {
+  const zoom = Math.max(0.1, Number(state.viewport.zoom) || 1);
+  const width = Math.max(1, rect.width || 1440);
+  const height = Math.max(1, rect.height || 900);
+  return {
+    minX: ((-state.viewport.panX) / zoom / width) * 100,
+    minY: ((-state.viewport.panY) / zoom / height) * 100,
+    maxX: ((width - state.viewport.panX) / zoom / width) * 100,
+    maxY: ((height - state.viewport.panY) / zoom / height) * 100,
+  };
+};
+
+const minimapGraphFrame = (graph = {}, rect = { width: 1440, height: 900 }) => {
+  const viewport = minimapViewportBounds(rect);
+  const positions = (graph.nodes || []).map((node, index) => {
+    const pos = nodePosition(node, index);
+    return {
+      node,
+      index,
+      x: Number(parseFloat(pos.x)) || 0,
+      y: Number(parseFloat(pos.y)) || 0,
+    };
+  });
+  const seed = positions.length
+    ? positions.reduce((acc, item) => ({
+      minX: Math.min(acc.minX, item.x),
+      minY: Math.min(acc.minY, item.y),
+      maxX: Math.max(acc.maxX, item.x),
+      maxY: Math.max(acc.maxY, item.y),
+    }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity })
+    : { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const viewportSpanX = Math.max(1, viewport.maxX - viewport.minX);
+  const viewportSpanY = Math.max(1, viewport.maxY - viewport.minY);
+  const graphSpanX = Math.max(1, seed.maxX - seed.minX);
+  const graphSpanY = Math.max(1, seed.maxY - seed.minY);
+  const padX = Math.max(viewportSpanX / 2, Math.min(8, graphSpanX * 0.08));
+  const padY = Math.max(viewportSpanY / 2, Math.min(8, graphSpanY * 0.08));
+  const bounds = {
+    minX: seed.minX - padX,
+    minY: seed.minY - padY,
+    maxX: seed.maxX + padX,
+    maxY: seed.maxY + padY,
+  };
+  const spanX = Math.max(1, bounds.maxX - bounds.minX);
+  const spanY = Math.max(1, bounds.maxY - bounds.minY);
+  const mapX = (x) => Math.max(0, Math.min(100, ((x - bounds.minX) / spanX) * 100));
+  const mapY = (y) => Math.max(0, Math.min(100, ((y - bounds.minY) / spanY) * 100));
+  const unmapX = (x) => bounds.minX + (Math.max(0, Math.min(100, x)) / 100) * spanX;
+  const unmapY = (y) => bounds.minY + (Math.max(0, Math.min(100, y)) / 100) * spanY;
+  return { viewport, positions, mapX, mapY, unmapX, unmapY };
+};
+
+const minimapViewportStyle = (frame) => {
+  const viewportX = frame.mapX(frame.viewport.minX);
+  const viewportY = frame.mapY(frame.viewport.minY);
+  return {
+    x: viewportX,
+    y: viewportY,
+    w: Math.max(4, frame.mapX(frame.viewport.maxX) - viewportX),
+    h: Math.max(4, frame.mapY(frame.viewport.maxY) - viewportY),
+  };
+};
+
+const setMinimapViewportElementStyle = (element, viewport) => {
+  if (!element || !viewport) return;
+  element.style.setProperty("--x", `${viewport.x}%`);
+  element.style.setProperty("--y", `${viewport.y}%`);
+  element.style.setProperty("--w", `${viewport.w}%`);
+  element.style.setProperty("--h", `${viewport.h}%`);
+};
+
+const updateFlowMinimapDom = () => {
+  const minimap = document.querySelector(".tl-flow-minimap-canvas");
+  const viewportElement = document.querySelector(".tl-flow-minimap-viewport");
+  const host = document.querySelector(".tl-flow-canvas");
+  if (!minimap || !viewportElement || !host || !(state.edgeRender.graph?.nodes || []).length) return;
+  const frame = minimapGraphFrame(state.edgeRender.graph, host.getBoundingClientRect());
+  setMinimapViewportElementStyle(viewportElement, minimapViewportStyle(frame));
+};
+
+const minimapCenterViewportAtPercent = (minimapPercentX = 50, minimapPercentY = 50, options = {}) => {
+  const host = document.querySelector(".tl-flow-canvas");
+  if (!host || !(state.edgeRender.graph?.nodes || []).length) return;
+  const frame = minimapGraphFrame(state.edgeRender.graph, host.getBoundingClientRect());
+  const center = options.remount === false && typeof setViewportCenterOnPercent === "function"
+    ? setViewportCenterOnPercent
+    : centerViewportOnPercent;
+  center?.({
+    x: frame.unmapX(minimapPercentX),
+    y: frame.unmapY(minimapPercentY),
+    zoom: state.viewport.zoom,
+    remount: options.remount,
+  });
+};
+
+const beginMinimapViewportDrag = (event) => {
+  const canvas = event.currentTarget?.closest?.(".tl-flow-minimap-canvas");
+  const viewport = event.currentTarget;
+  const bounds = canvas?.getBoundingClientRect?.();
+  if (!bounds?.width || !bounds?.height) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.interaction = {
+    type: "minimap",
+    canvas,
+    bounds,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    viewportX: parseFloat(viewport.style.getPropertyValue("--x")) || 0,
+    viewportY: parseFloat(viewport.style.getPropertyValue("--y")) || 0,
+    viewportW: parseFloat(viewport.style.getPropertyValue("--w")) || 0,
+    viewportH: parseFloat(viewport.style.getPropertyValue("--h")) || 0,
+  };
+  document.addEventListener("pointermove", handlePointerMove);
+  document.addEventListener("pointerup", endInteraction, { once: true });
+  document.addEventListener("pointercancel", endInteraction, { once: true });
+};
+
+const toggleFlowMinimap = () => {
+  state.minimapCollapsed = !state.minimapCollapsed;
+  try {
+    localStorage.setItem("tl_flow_minimap_collapsed", String(state.minimapCollapsed));
+  } catch (_) {
+    // localStorage may be unavailable in restricted extension contexts.
+  }
+  mount({ preserveScroll: true });
+};
+
 const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
   if (!(graph.nodes || []).length) return null;
   const renderedIds = new Set((renderGraph.renderedNodes || []).map((node) => node.id));
   const host = document.querySelector(".tl-flow-canvas");
   const rect = host?.getBoundingClientRect?.();
-  const width = rect?.width || 1440;
-  const height = rect?.height || 900;
-  const zoom = Math.max(0.45, Number(state.viewport.zoom) || 1);
-  const viewportX = Math.max(0, Math.min(100, (-state.viewport.panX / Math.max(1, width * zoom)) * 100));
-  const viewportY = Math.max(0, Math.min(100, (-state.viewport.panY / Math.max(1, height * zoom)) * 100));
-  const viewportW = Math.max(10, Math.min(100, 100 / zoom));
-  const viewportH = Math.max(10, Math.min(100, 100 / zoom));
+  const frame = minimapGraphFrame(graph, rect || { width: 1440, height: 900 });
+  const viewport = minimapViewportStyle(frame);
   return _.div(
     {
-      class: "tl-flow-minimap",
+      class: `tl-flow-minimap${state.minimapCollapsed ? " is-collapsed" : ""}`,
       title: "Runtime Minimap: click to jump on the canvas",
       onpointerdown: (event) => event.stopPropagation(),
     },
     _.div({ class: "tl-flow-minimap-head" },
       _.strong("Runtime Minimap"),
-      _.span(`${(graph.nodes || []).length} nodes`)
+      _.span(`${(graph.nodes || []).length} nodes`),
+      btn({
+        class: "tl-flow-minimap-toggle",
+        "aria-label": state.minimapCollapsed ? "Expand minimap" : "Minimize minimap",
+        title: state.minimapCollapsed ? "Expand minimap" : "Minimize minimap",
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleFlowMinimap();
+        },
+      }, icon(state.minimapCollapsed ? "unfold_more" : "remove", "sm"))
     ),
-    _.div(
+    state.minimapCollapsed ? null : _.div(
       {
         class: "tl-flow-minimap-canvas",
         role: "button",
         tabindex: 0,
         onclick: (event) => {
           const bounds = event.currentTarget.getBoundingClientRect();
-          centerViewportOnPercent?.({
-            x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 100,
-            y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 100,
-          });
+          minimapCenterViewportAtPercent(
+            ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 100,
+            ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 100
+          );
         },
         onkeydown: (event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            centerViewportOnPercent?.({ x: 50, y: 50 });
+            centerViewportOnPercent?.({ x: frame.unmapX(50), y: frame.unmapY(50) });
           }
         },
       },
-      ...(graph.nodes || []).map((node, index) => {
-        const pos = nodePosition(node, index);
+      ...frame.positions.map(({ node, index, x, y }) => {
         return _.button({
           type: "button",
           class: `tl-flow-minimap-node is-${graphTone(node)}${renderedIds.has(node.id) ? " is-visible" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}`,
-          style: { "--x": `${pos.x}%`, "--y": `${pos.y}%` },
+          style: { "--x": `${frame.mapX(x)}%`, "--y": `${frame.mapY(y)}%` },
           title: node.label || node.id,
           "aria-label": `Center ${node.label || node.id}`,
           onclick: (event) => {
@@ -1176,11 +1309,16 @@ const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
       }),
       _.span({
         class: "tl-flow-minimap-viewport",
+        onpointerdown: beginMinimapViewportDrag,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        },
         style: {
-          "--x": `${viewportX}%`,
-          "--y": `${viewportY}%`,
-          "--w": `${viewportW}%`,
-          "--h": `${viewportH}%`,
+          "--x": `${viewport.x}%`,
+          "--y": `${viewport.y}%`,
+          "--w": `${viewport.w}%`,
+          "--h": `${viewport.h}%`,
         },
       })
     )
