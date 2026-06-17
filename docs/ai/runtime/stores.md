@@ -34,6 +34,17 @@ Last updated: 2026-06-11.
 - `tl_ai_prompts`
 - `tl_ai_metrics`
 
+## Knowledge Stores
+
+- `tl_knowledge_documents`: workspace-scoped local documents and text sources.
+- `tl_knowledge_chunks`: chunk records derived from documents.
+- `tl_knowledge_embeddings`: local embedding vectors for chunks.
+- `tl_knowledge_entities`: extracted entities with provenance.
+- `tl_knowledge_relations`: graph relations between entities.
+- `tl_knowledge_queries`: RAG/search query history and results.
+- `tl_knowledge_sources`: document source records.
+- `tl_knowledge_metrics`: Knowledge runtime metrics.
+
 ## Rule
 
 Use existing store constants in `js/TlConfig.js`.

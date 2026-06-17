@@ -4029,6 +4029,54 @@ const flowPromptNodeFromSpec = ({ spec, workspaceId, index }) => {
   };
 };
 
+const flowPromptConnectionFromDependency = ({ dependency = {}, source = {}, target = {}, workspaceId = "" } = {}) => {
+  const now = new Date().toISOString();
+  const connectionId = dependency.connectionId || `prompt_chat_${Date.now()}`;
+  const channel = dependency.channel || dependency.metadata?.sourcePort || source.outputs?.[0] || source.channels?.[0] || "runtime";
+  const mapping = {
+    sourcePort: dependency.metadata?.sourcePort || channel || "output",
+    targetPort: dependency.metadata?.targetPort || target.inputs?.[0] || "input",
+    linkType: dependency.metadata?.linkType || "data",
+    generatedBy: dependency.metadata?.generatedBy || "flow-prompt-chat",
+  };
+
+  return {
+    id: connectionId,
+    name: `${source.label || source.id} -> ${target.label || target.id}`,
+    type: `${source.type || "node"} -> ${target.type || "node"}`,
+    from: source.label || source.id,
+    fromKind: source.type || "node",
+    to: target.label || target.id,
+    targetMeta: target.sourceRef || target.assetId || target.id,
+    status: "active",
+    lastTest: "Mai",
+    result: "Creato dalla Flow Map Agent",
+    method: "EVENT",
+    frequency: channel,
+    timeout: "10 secondi",
+    retries: 0,
+    endpoint: `flowmap://${workspaceId || dependency.workspaceId || "workspace_global"}/${connectionId}`,
+    workspaceId: workspaceId || dependency.workspaceId || source.workspaceId || target.workspaceId || "workspace_global",
+    workspaceName: workspaceId || dependency.workspaceId || source.workspaceId || target.workspaceId || "workspace_global",
+    fromBoxId: source.id,
+    toBoxId: target.id,
+    sourceNodeId: source.id,
+    targetNodeId: target.id,
+    sourceName: source.label || source.id,
+    targetName: target.label || target.id,
+    channel,
+    mapping,
+    createdAt: dependency.createdAt || now,
+    updatedAt: now,
+  };
+};
+
+const flowPromptPersistConnection = async ({ dependency = {}, source = {}, target = {}, workspaceId = "" } = {}) => {
+  if (!window.TrackerLensConnectionsStore?.upsert || !source?.id || !target?.id) return null;
+  const connection = flowPromptConnectionFromDependency({ dependency, source, target, workspaceId });
+  return window.TrackerLensConnectionsStore.upsert(connection);
+};
+
 const flowPromptAnalyzePlan = (plan = {}) => {
   const nodeRefs = new Map();
   const analyzedNodes = (plan.nodes || []).map((spec, index) => {
@@ -4110,7 +4158,16 @@ const flowPromptMaterializePlan = async (analysis = {}) => {
       createdAt: new Date().toISOString(),
     };
     const saved = await window.TrackerLensRuntimeGraphStore?.upsertDependency?.({ dependency });
-    if (saved) createdEdges.push(saved);
+    if (saved) {
+      const connection = await flowPromptPersistConnection({ dependency: saved, source, target, workspaceId });
+      if (connection) {
+        state.connections = [
+          ...(state.connections || []).filter((item) => item.id !== connection.id),
+          connection,
+        ];
+      }
+      createdEdges.push(saved);
+    }
   }
 
   await loadRuntime({ force: true });
@@ -4638,6 +4695,18 @@ const openFlowPromptChatDialog = async () => {
         createdAt: new Date().toISOString(),
       };
       await window.TrackerLensRuntimeGraphStore?.upsertDependency?.({ dependency });
+      const connection = await flowPromptPersistConnection({
+        dependency,
+        source: action.source,
+        target: action.target,
+        workspaceId,
+      });
+      if (connection) {
+        state.connections = [
+          ...(state.connections || []).filter((item) => item.id !== connection.id),
+          connection,
+        ];
+      }
       return { type: "connect", label: `${action.source.label} -> ${action.target.label}`, focusNodeId: action.target.id };
     }
 

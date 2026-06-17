@@ -29,6 +29,7 @@ Last updated: 2026-06-11.
 - Runtime graph: `docs/ai/flow-map/runtime-graph.md`
 - Runtime stores/channels/dependencies: `docs/ai/runtime/`
 - Runtime contract: `docs/ai/runtime/contract.md`
+- API/backend integration: `docs/ai/api-backend.md`
 
 ## Non-Negotiable Rules
 

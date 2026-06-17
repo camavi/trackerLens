@@ -29,6 +29,7 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
+    "knowledge-runtime.js",
     "ai-agent-runtime.js",
     "orchestrator-agent-runtime.js"
   );
@@ -47,6 +48,7 @@ const startRuntimeInstances = ({ workspaceId, runtime }) => {
   self.TrackerLensProcessorRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
   self.TrackerLensActionRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
   self.TrackerLensStorageRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
+  self.TrackerLensKnowledgeRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
   self.TrackerLensAiAgentRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
   self.TrackerLensOrchestratorAgentRuntime?.get?.(workspaceId)?.start({ workspaceId, runtime });
 };
@@ -55,6 +57,7 @@ const stopRuntimeInstances = (workspaceId) => {
   self.TrackerLensProcessorRuntime?.get?.(workspaceId)?.stop?.();
   self.TrackerLensActionRuntime?.get?.(workspaceId)?.stop?.();
   self.TrackerLensStorageRuntime?.get?.(workspaceId)?.stop?.();
+  self.TrackerLensKnowledgeRuntime?.get?.(workspaceId)?.stop?.();
   self.TrackerLensAiAgentRuntime?.get?.(workspaceId)?.stop?.();
   self.TrackerLensOrchestratorAgentRuntime?.get?.(workspaceId)?.stop?.();
 };

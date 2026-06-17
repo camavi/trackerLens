@@ -1116,31 +1116,68 @@ const lazyVisibleGraph = (graph = {}, activity = {}) => {
 };
 
 const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
-  if (!isLargeGraphModel(graph)) return null;
+  if (!(graph.nodes || []).length) return null;
   const renderedIds = new Set((renderGraph.renderedNodes || []).map((node) => node.id));
+  const host = document.querySelector(".tl-flow-canvas");
+  const rect = host?.getBoundingClientRect?.();
+  const width = rect?.width || 1440;
+  const height = rect?.height || 900;
+  const zoom = Math.max(0.45, Number(state.viewport.zoom) || 1);
+  const viewportX = Math.max(0, Math.min(100, (-state.viewport.panX / Math.max(1, width * zoom)) * 100));
+  const viewportY = Math.max(0, Math.min(100, (-state.viewport.panY / Math.max(1, height * zoom)) * 100));
+  const viewportW = Math.max(10, Math.min(100, 100 / zoom));
+  const viewportH = Math.max(10, Math.min(100, 100 / zoom));
   return _.div(
-    { class: "tl-flow-minimap", title: "Large graph minimap with lazy rendered viewport" },
+    {
+      class: "tl-flow-minimap",
+      title: "Runtime Minimap: click to jump on the canvas",
+      onpointerdown: (event) => event.stopPropagation(),
+    },
     _.div({ class: "tl-flow-minimap-head" },
-      _.strong("Navigator"),
-      _.span(`${renderGraph.hiddenNodes || 0} lazy`)
+      _.strong("Runtime Minimap"),
+      _.span(`${(graph.nodes || []).length} nodes`)
     ),
     _.div(
-      { class: "tl-flow-minimap-canvas" },
+      {
+        class: "tl-flow-minimap-canvas",
+        role: "button",
+        tabindex: 0,
+        onclick: (event) => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          centerViewportOnPercent?.({
+            x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 100,
+            y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 100,
+          });
+        },
+        onkeydown: (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            centerViewportOnPercent?.({ x: 50, y: 50 });
+          }
+        },
+      },
       ...(graph.nodes || []).map((node, index) => {
         const pos = nodePosition(node, index);
-        return _.span({
+        return _.button({
+          type: "button",
           class: `tl-flow-minimap-node is-${graphTone(node)}${renderedIds.has(node.id) ? " is-visible" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}`,
           style: { "--x": `${pos.x}%`, "--y": `${pos.y}%` },
           title: node.label || node.id,
+          "aria-label": `Center ${node.label || node.id}`,
+          onclick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            centerViewportOnNode?.(node, index, { select: true });
+          },
         });
       }),
       _.span({
         class: "tl-flow-minimap-viewport",
         style: {
-          "--x": `${Math.max(0, Math.min(100, -state.viewport.panX / Math.max(1, 2600 * state.viewport.zoom) * 100))}%`,
-          "--y": `${Math.max(0, Math.min(100, -state.viewport.panY / Math.max(1, 1800 * state.viewport.zoom) * 100))}%`,
-          "--w": `${Math.max(12, Math.min(80, (window.innerWidth || 1440) / Math.max(1, 2600 * state.viewport.zoom) * 100))}%`,
-          "--h": `${Math.max(12, Math.min(80, (window.innerHeight || 900) / Math.max(1, 1800 * state.viewport.zoom) * 100))}%`,
+          "--x": `${viewportX}%`,
+          "--y": `${viewportY}%`,
+          "--w": `${viewportW}%`,
+          "--h": `${viewportH}%`,
         },
       })
     )

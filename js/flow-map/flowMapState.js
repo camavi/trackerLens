@@ -275,6 +275,19 @@ const syncStorageRuntime = (workspaceId = state.filters.workspaceId) => {
   }
 };
 
+const syncKnowledgeRuntime = (workspaceId = state.filters.workspaceId) => {
+  if (!window.TrackerLensKnowledgeRuntime?.get) return;
+  const id = workspaceId || "workspace_global";
+  try {
+    window.TrackerLensKnowledgeRuntime.get(id).start({
+      workspaceId: id,
+      runtime: state.runtime,
+    });
+  } catch (error) {
+    console.warn("Knowledge runtime non avviato", error);
+  }
+};
+
 const syncAiAgentRuntime = (workspaceId = state.filters.workspaceId) => {
   if (!window.TrackerLensAiAgentRuntime?.get) return;
   const id = workspaceId || "workspace_global";
@@ -322,6 +335,7 @@ const syncPageRuntimes = (workspaceId = state.filters.workspaceId) => {
   syncProcessorRuntime(workspaceId);
   syncActionRuntime(workspaceId);
   syncStorageRuntime(workspaceId);
+  syncKnowledgeRuntime(workspaceId);
   syncAiAgentRuntime(workspaceId);
   syncOrchestratorAgentRuntime(workspaceId);
 };
@@ -628,6 +642,69 @@ const normalizeRuntimeDependencyChannels = async (nodes = [], dependencies = [],
   return normalized;
 };
 
+const connectionFromRuntimeDependency = ({ dependency = {}, source = {}, target = {} } = {}) => {
+  const now = new Date().toISOString();
+  const workspaceId = dependency.workspaceId || source.workspaceId || target.workspaceId || "workspace_global";
+  const connectionId = dependency.connectionId || `dep_conn_${dependency.id || Date.now()}`;
+  const channel = dependency.channel || dependency.metadata?.sourcePort || nodeChannels(source)[0] || "runtime";
+
+  return {
+    id: connectionId,
+    name: `${source.label || source.id} -> ${target.label || target.id}`,
+    type: `${source.type || "node"} -> ${target.type || "node"}`,
+    from: source.label || source.id,
+    fromKind: source.type || "node",
+    to: target.label || target.id,
+    targetMeta: target.sourceRef || target.assetId || target.id,
+    status: dependency.status || "active",
+    lastTest: "Mai",
+    result: "Riparato da runtime dependency",
+    method: "EVENT",
+    frequency: channel,
+    timeout: "10 secondi",
+    retries: 0,
+    endpoint: `flowmap://${workspaceId}/${connectionId}`,
+    workspaceId,
+    workspaceName: workspaceId,
+    fromBoxId: source.id,
+    toBoxId: target.id,
+    sourceNodeId: source.id,
+    targetNodeId: target.id,
+    sourceName: source.label || source.id,
+    targetName: target.label || target.id,
+    channel,
+    mapping: {
+      ...(dependency.metadata || {}),
+      sourcePort: dependency.metadata?.sourcePort || channel || "output",
+      targetPort: dependency.metadata?.targetPort || target.inputs?.[0] || "input",
+    },
+    createdAt: dependency.createdAt || now,
+    updatedAt: now,
+  };
+};
+
+const repairMissingDependencyConnections = async (nodes = [], dependencies = [], connections = []) => {
+  if (!window.TrackerLensConnectionsStore?.upsert) return connections;
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const connectionIds = new Set((connections || []).map((connection) => connection.id).filter(Boolean));
+  const repaired = [];
+
+  for (const dependency of dependencies || []) {
+    if (!dependency.connectionId || connectionIds.has(dependency.connectionId)) continue;
+    const source = nodesById.get(dependency.sourceNodeId);
+    const target = nodesById.get(dependency.targetNodeId);
+    if (!source?.id || !target?.id) continue;
+    const connection = connectionFromRuntimeDependency({ dependency, source, target });
+    const saved = await window.TrackerLensConnectionsStore.upsert(connection).catch(() => null);
+    if (saved?.id) {
+      repaired.push(saved);
+      connectionIds.add(saved.id);
+    }
+  }
+
+  return repaired.length ? [...connections, ...repaired] : connections;
+};
+
 const normalizeLoadedNodeManifest = (node = {}) => {
   const metadata = node.metadata || {};
   const manifest = window.TrackerLensRuntimeManifest?.normalizeManifest?.({
@@ -758,6 +835,7 @@ const loadRuntime = async (options = {}) => {
       mergeOptimisticDependencies(nodes, mergeConnectionDependencies(nodes, dependencies, connections)),
       connections
     );
+    const repairedConnections = await repairMissingDependencyConnections(nodes, mergedDependencies, connections);
     setRuntimeState({ channels, flows, events, flowLogs, nodes, dependencies: mergedDependencies });
     state.previewClearedAt = loadStoredPreviewClears(workspaceId);
     rebuildPreviewPayloadsFromEvents();
@@ -766,7 +844,7 @@ const loadRuntime = async (options = {}) => {
     }
     state.graphEngine = engineResult;
     state.libraryItems = libraryItems;
-    state.connections = connections;
+    state.connections = repairedConnections;
     state.performance = performanceRecords || [];
     if (state.inspectorOpen && !state.focus.nodeId && nodes[0]?.id) {
       setFocusState({ ...state.focus, nodeId: nodes[0].id });
@@ -1163,6 +1241,7 @@ const nodeRuntimeDescription = (node = {}, live = null) => {
   if (category === "dev" || node.type === "devPreview") return "Development probe showing raw and JSON payloads passing through the graph.";
   if (category === "trackers" || node.type === "boxTracker") return "Data orchestrator emitting structured runtime channels.";
   if (category === "processors" || node.type === "processor") return "Stateless transformation node for runtime events.";
+  if (category === "knowledge" || node.type === "knowledge") return "Local Knowledge runtime node for documents, chunks, embeddings and RAG context.";
   if (node.type === "aiAgent" && nodeSubtype(node) === "orchestrator") return "Central runtime brain that decides and dispatches connected nodes.";
   if (category === "ai-agents" || node.type === "aiAgent") return "AI decision node for analysis, routing and interpretation.";
   if (category === "lens" || node.type === "boxLens" || node.type === "lens") return "Visual runtime consumer rendering live channel state.";
@@ -1227,6 +1306,7 @@ const FLOW_NODE_CATEGORY_OPTIONS = [
   { value: "sources", label: "Sources" },
   { value: "trackers", label: "Trackers" },
   { value: "processors", label: "Processors" },
+  { value: "knowledge", label: "Knowledge" },
   { value: "ai-agents", label: "AI Agents" },
   { value: "lens", label: "Lens" },
   { value: "actions", label: "Actions" },

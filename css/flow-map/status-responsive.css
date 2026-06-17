@@ -5,7 +5,7 @@
   right: 18px;
   bottom: 18px;
   z-index: 8;
-  width: 190px;
+  width: 220px;
   padding: 10px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 8px;
@@ -25,7 +25,7 @@
 
 .tl-flow-minimap-canvas {
   position: relative;
-  height: 92px;
+  height: 116px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
@@ -34,17 +34,21 @@
     linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
     rgba(15, 23, 42, 0.72);
   background-size: 18px 18px;
+  cursor: crosshair;
 }
 
 .tl-flow-minimap-node {
   position: absolute;
   left: var(--x);
   top: var(--y);
-  width: 5px;
-  height: 5px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   background: rgba(var(--node-rgb, 148, 163, 184), 0.28);
   transform: translate(-50%, -50%);
+  cursor: pointer;
 }
 
 .tl-flow-minimap-node.is-visible {
@@ -52,8 +56,8 @@
 }
 
 .tl-flow-minimap-node.is-selected {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.25);
 }
 
@@ -68,6 +72,7 @@
   border: 1px solid rgba(250, 204, 21, 0.76);
   border-radius: 4px;
   background: rgba(250, 204, 21, 0.08);
+  pointer-events: none;
 }
 
 .tl-flow-timeline {

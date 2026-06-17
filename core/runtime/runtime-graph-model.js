@@ -102,6 +102,7 @@ window.TrackerLensRuntimeGraphModel = (() => {
     if (type === "lens") return "blue";
     if (type === "aiAgent") return "violet";
     if (type === "processor") return "purple";
+    if (type === "knowledge") return "cyan";
     if (type === "action") return "orange";
     if (type === "storage") return "cyan";
     if (type === "source") return "green";
@@ -119,6 +120,7 @@ window.TrackerLensRuntimeGraphModel = (() => {
     if (type === "lens") return "dashboard";
     if (type === "aiAgent") return "psychology";
     if (type === "processor") return "tune";
+    if (type === "knowledge") return "menu_book";
     if (type === "action") return "bolt";
     if (type === "storage") return "database";
     if (type === "source") return "api";
@@ -180,7 +182,7 @@ window.TrackerLensRuntimeGraphModel = (() => {
   const nodePosition = ({ node, index = 0, overrides = {} } = {}) => {
     if (node?.id && overrides[node.id]) return overrides[node.id];
     if (node?.flowPosition?.x && node?.flowPosition?.y) return node.flowPosition;
-    const order = { source: 0, boxTracker: 1, processor: 3, aiAgent: 4, boxLens: 5, action: 6 };
+    const order = { source: 0, boxTracker: 1, processor: 2, knowledge: 3, aiAgent: 4, boxLens: 5, action: 6 };
     const column = order[node?.type] ?? 2 + (index % 3);
     const yIndex = Math.floor(index / 4) + (index % 4);
     return { x: `${6 + Math.min(6, column) * 14}%`, y: `${12 + (yIndex % 5) * 17}%` };

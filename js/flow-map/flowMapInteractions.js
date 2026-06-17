@@ -1,7 +1,7 @@
 // Flow Map pointer interactions, selection, channel tools and dependency reports.
 // Extracted from js/flowMapView.js; loaded in order by flowMap.html.
 const beginPan = (event) => {
-  if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar")) return;
+  if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap")) return;
   const edge = edgeAtPointer(event);
   if (edge) {
     event.preventDefault();
@@ -1073,6 +1073,43 @@ const fitVisibleGraph = () => {
   };
   saveViewport();
   mount();
+};
+
+const centerViewportOnPercent = ({ x = 50, y = 50, zoom = state.viewport.zoom } = {}) => {
+  const host = document.querySelector(".tl-flow-canvas");
+  const rect = host?.getBoundingClientRect?.();
+  if (!rect?.width || !rect?.height) return;
+  const nextZoom = Math.max(0.45, Math.min(2.2, Number(zoom) || state.viewport.zoom || 1));
+  const percentX = Math.max(0, Math.min(100, Number(x) || 0));
+  const percentY = Math.max(0, Math.min(100, Number(y) || 0));
+  const graphX = (percentX / 100) * rect.width;
+  const graphY = (percentY / 100) * rect.height;
+  state.viewport = {
+    zoom: Math.round(nextZoom * 100) / 100,
+    panX: Math.round((rect.width / 2) - graphX * nextZoom),
+    panY: Math.round((rect.height / 2) - graphY * nextZoom),
+  };
+  saveViewport();
+  mount({ preserveScroll: true });
+};
+
+const centerViewportOnNode = (node = {}, index = 0, { select = false, zoom = Math.max(0.82, state.viewport.zoom || 1) } = {}) => {
+  const position = nodePosition(node, index);
+  if (select && node?.id) {
+    setFocusState({
+      mode: "nodes",
+      nodeId: node.id,
+      nodeType: node.type || "",
+      channel: node.channels?.[0] || "",
+      connectionId: "",
+    });
+    bringNodeToFront(node.id);
+  }
+  centerViewportOnPercent({
+    x: parseFloat(position.x),
+    y: parseFloat(position.y),
+    zoom,
+  });
 };
 
 const selectNode = (node) => {

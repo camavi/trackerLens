@@ -124,10 +124,41 @@ const runtimeNodeConfigDefaults = (node = {}) => {
 const readConfigField = (form, name, fallback = "") =>
   form?.querySelector?.(`[name="${name}"]`)?.value?.trim?.() || fallback;
 
-const readConfigMap = (form) =>
-  Object.fromEntries(Array.from(form?.querySelectorAll?.("[data-config-key]") || [])
-    .map((field) => [field.dataset.configKey, field.type === "checkbox" ? field.checked : field.value?.trim?.() || ""])
-    .filter(([key]) => key));
+const parseConfigObject = (value = "") => {
+  const text = String(value || "").trim();
+  if (!text || !/^[{\[]/.test(text)) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const flattenRuntimeConfig = (config = {}) => {
+  const source = config && typeof config === "object" && !Array.isArray(config) ? { ...config } : {};
+  const nested = parseConfigObject(source.config);
+  if (!nested) return source;
+  delete source.config;
+  return { ...source, ...flattenRuntimeConfig(nested) };
+};
+
+const readConfigMap = (form) => {
+  const config = {};
+  Array.from(form?.querySelectorAll?.("[data-config-key]") || []).forEach((field) => {
+    const key = field.dataset.configKey;
+    if (!key) return;
+    const value = field.type === "checkbox" ? field.checked : field.value?.trim?.() || "";
+    if (key === "config") {
+      const parsed = parseConfigObject(value);
+      if (parsed) Object.assign(config, flattenRuntimeConfig(parsed));
+      else if (value) config.config = value;
+      return;
+    }
+    config[key] = value;
+  });
+  return flattenRuntimeConfig(config);
+};
 
 const runtimeContractSchemaFields = (schema = {}) =>
   window.TrackerLensRuntimeContract?.normalizeSettingsSchema
@@ -141,7 +172,7 @@ const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
   const output = values.output ?? defaults.output;
   const mode = values.mode ?? defaults.mode;
   const runtimeStatus = values.runtimeStatus ?? defaults.runtimeStatus;
-  const config = { ...defaults.configObject, ...(values.config || {}) };
+  const config = flattenRuntimeConfig({ ...defaults.configObject, ...(values.config || {}) });
   const subtype = nodeSubtype(node);
   const category = nodeCategory(node);
   const outputs = subtype === "agent-bridge"
@@ -346,6 +377,36 @@ const configFieldDefinitions = (node = {}) => {
       { key: "inputCostPer1k", label: "Input cost / 1k", placeholder: "0" },
       { key: "outputCostPer1k", label: "Output cost / 1k", placeholder: "0" },
     ]);
+  }
+  if (category === "knowledge") {
+    if (schemaFields.length) return schemaFields;
+    if (subtype === "embedding-generator" || subtype === "vector-memory") {
+      return [
+        { key: "providerProfile", label: "Provider profile", placeholder: "local-hash, local_ollama, local_lm_studio" },
+        { key: "model", label: "Model", placeholder: "tl-local-hash-v1" },
+        { key: "dimensions", label: "Dimensions", placeholder: "96" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.embedding.created" },
+      ];
+    }
+    if (subtype === "rag-search") {
+      return [
+        { key: "query", label: "Query", type: "textarea", placeholder: "How old is Adam?" },
+        { key: "topK", label: "Top K", placeholder: "4" },
+        { key: "similarityThreshold", label: "Similarity threshold", placeholder: "0.08" },
+        { key: "maxContextTokens", label: "Max context tokens", placeholder: "1200" },
+        { key: "includeMetadata", label: "Include metadata", type: "checkbox", defaultValue: true },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.rag.context" },
+      ];
+    }
+    return [
+      { key: "title", label: "Title", placeholder: "Knowledge Document" },
+      { key: "sourceType", label: "Source type", placeholder: "manual" },
+      { key: "language", label: "Language", placeholder: "en" },
+      { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+      { key: "outputChannel", label: "Output channel", placeholder: "knowledge.document.created" },
+    ];
   }
   if (category === "lens") {
     return mergeSchemaFields([
@@ -3183,6 +3244,7 @@ const inferPortType = (node = {}, side = "out", name = "") => {
   if (category === "sources") return side === "out" ? "object" : "never";
   if (category === "trackers") return "object";
   if (category === "processors") return subtype === "condition" && side === "out" ? "bool" : "object";
+  if (category === "knowledge") return "object";
   if (category === "ai-agents") return side === "out" ? "object" : "object";
   if (category === "lens") return side === "in" ? "any" : "object";
   if (category === "actions") return "object";
@@ -3330,7 +3392,7 @@ const portsAreCompatible = (sourcePort = {}, targetPort = {}, target = {}, sourc
   if (sourceType === targetType) return true;
   if (sourceType === "event" && targetType === "object") return true;
   if (sourceType === "object" && targetType === "event") return true;
-  return ["processor", "aiAgent", "action", "devPreview"].includes(target.type) && targetType !== "never" && sourceType !== "bool";
+  return ["processor", "knowledge", "aiAgent", "action", "devPreview"].includes(target.type) && targetType !== "never" && sourceType !== "bool";
 };
 
 const connectionValidation = (source, target, sourcePortName = "all", targetPortName = "all") => {

@@ -143,7 +143,10 @@ window.TrackerLensAiAgentRuntime = (() => {
   const renderPromptTemplate = (template = "", context = {}) =>
     String(template || "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token) => {
       const key = String(token || "").trim();
-      const value = context[key];
+      const value = key.split(".").reduce((current, part) => {
+        if (current === undefined || current === null) return undefined;
+        return current[part];
+      }, context);
       if (value === undefined || value === null) return "";
       return typeof value === "string" ? value : compactJson(value, 3600);
     });
@@ -232,6 +235,36 @@ window.TrackerLensAiAgentRuntime = (() => {
     };
   };
 
+  const isLocalAiEndpoint = (endpoint = "") => {
+    try {
+      const url = new URL(endpoint);
+      return ["127.0.0.1", "localhost", "::1"].includes(url.hostname) &&
+        ["1234", "11434", ""].includes(url.port) &&
+        /\/(v1\/chat\/completions|v1\/responses|api\/generate)$/.test(url.pathname);
+    } catch {
+      return false;
+    }
+  };
+
+  const postAiJson = async ({ url = "", body = {}, headers = {} } = {}) => {
+    if (isLocalAiEndpoint(url) && typeof window !== "undefined" && /^https?:/i.test(window.location?.protocol || "")) {
+      const proxyResponse = await fetch("api/ai-chat-proxy.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint: url, body }),
+      }).catch(() => null);
+      const contentType = proxyResponse?.headers?.get?.("content-type") || "";
+      if (proxyResponse && proxyResponse.status !== 404 && contentType.includes("application/json")) {
+        return proxyResponse;
+      }
+    }
+    return fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+  };
+
   const pickProvider = async (config = {}) => {
     const data = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => null);
     const providers = data?.providers || window.TrackerLensAiRuntimeStore?.localProviderDefaults?.() || [];
@@ -253,10 +286,10 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const callOllama = async ({ provider, model, prompt }) => {
     const endpoint = String(provider.endpoint || "http://127.0.0.1:11434").replace(/\/+$/g, "");
-    const response = await fetch(`${endpoint}/api/generate`, {
-      method: "POST",
+    const response = await postAiJson({
+      url: `${endpoint}/api/generate`,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt, stream: false }),
+      body: { model, prompt, stream: false },
     });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
     const data = await response.json();
@@ -300,14 +333,14 @@ window.TrackerLensAiAgentRuntime = (() => {
   const callLmStudio = async ({ provider, model, prompt }) => {
     const endpoint = withLmStudioApiBase(provider.endpoint);
     const resolvedModel = await resolveLmStudioModel({ provider, model });
-    const response = await fetch(`${endpoint}/chat/completions`, {
-      method: "POST",
+    const response = await postAiJson({
+      url: `${endpoint}/chat/completions`,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: {
         model: resolvedModel,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2,
-      }),
+      },
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
@@ -513,7 +546,8 @@ window.TrackerLensAiAgentRuntime = (() => {
       const promptConfig = inputDataContext ? { ...config, inputDataContext } : config;
       const provider = await pickProvider(config);
       const model = String(config.model || provider?.model || "local-model");
-      const memory = await window.TrackerLensAiRuntimeStore?.buildMemoryContext?.({
+      const memoryDisabled = ["off", "none", "disabled"].includes(String(config.memoryMode || "").toLowerCase());
+      const memory = memoryDisabled ? "" : await window.TrackerLensAiRuntimeStore?.buildMemoryContext?.({
         workspaceId: this.workspaceId,
         agentId: node.id,
         query: event.channel || nodeSubtype(node),

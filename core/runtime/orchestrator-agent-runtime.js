@@ -277,6 +277,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       return Boolean(config.target);
     }
     if (category === "storage") return true;
+    if (category === "knowledge" || target.type === "knowledge") return true;
     if (target.type === "aiAgent") return true;
     if (target.type === "processor" || category === "processors") return true;
     if (target.type === "devPreview" || category === "dev") return true;
@@ -284,7 +285,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     return true;
   };
 
-  const defaultAllowedCategories = ["sources", "trackers", "processors", "ai-agents", "actions", "storage", "lens", "dev"];
+  const defaultAllowedCategories = ["sources", "trackers", "processors", "knowledge", "ai-agents", "actions", "storage", "lens", "dev"];
 
   const pickProvider = async (config = {}) => {
     const data = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => null);

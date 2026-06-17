@@ -46,6 +46,8 @@ Last updated: 2026-06-11.
 ## Endpoint Research
 
 - `api/endpoint-research.php`: optional same-origin local helper.
+- `api/ai-embedding-proxy.php`: optional same-origin local helper for localhost embedding providers that do not return browser CORS headers.
+- `api/ai-chat-proxy.php`: optional same-origin local helper for localhost chat providers that do not return browser CORS headers.
 - `js/flow-map/flowMapPromptChat.js`: client integration and candidate UI.
 
 ## Shared UI / App

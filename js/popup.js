@@ -29,7 +29,15 @@ const renderHeader = () =>
       cmsButton({ class: "tl-icon-btn", "aria-label": "Ricerca", title: "Ricerca" }, icon("search")),
       cmsButton({ class: "tl-icon-btn", "aria-label": "Libreria", title: "Libreria" }, icon("menu_book")),
       cmsButton({ class: "tl-icon-btn", "aria-label": "Impostazioni", title: "Impostazioni" }, icon("settings")),
-      cmsButton({ class: "tl-user-btn", "aria-label": "Profilo utente", title: "Profilo utente" }, "CM")
+      cmsButton(
+        {
+          class: "tl-user-btn",
+          "aria-label": "Profilo utente",
+          title: "Profilo utente",
+          onclick: () => openChromePage("profile.html"),
+        },
+        "TL"
+      )
     )
   );
 

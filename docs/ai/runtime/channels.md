@@ -20,11 +20,23 @@ Producers:
 Consumers:
 
 - processors
+- knowledge runtime nodes
 - AI agents
 - lens
 - actions
 - storage
 - preview/dev nodes
+
+Knowledge channels:
+
+- `knowledge.document.created`
+- `knowledge.chunk.created`
+- `knowledge.embedding.created`
+- `knowledge.search.query`
+- `knowledge.search.results`
+- `knowledge.entity.created`
+- `knowledge.relation.created`
+- `knowledge.rag.context`
 
 ## Main Modules
 
