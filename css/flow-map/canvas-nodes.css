@@ -384,6 +384,39 @@ textarea.tl-flow-menu-input {
   z-index: 2;
 }
 
+.tl-flow-canvas-center-marker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 4;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.tl-flow-canvas-center-marker::before,
+.tl-flow-canvas-center-marker::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.52);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.32);
+  transform: translate(-50%, -50%);
+}
+
+.tl-flow-canvas-center-marker::before {
+  width: 18px;
+  height: 2px;
+}
+
+.tl-flow-canvas-center-marker::after {
+  width: 2px;
+  height: 18px;
+}
+
 .tl-flow-edge-canvas {
   position: absolute;
   inset: 0;

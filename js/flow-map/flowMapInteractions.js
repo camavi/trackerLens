@@ -23,6 +23,66 @@ const beginPan = (event) => {
   document.addEventListener("pointercancel", endInteraction, { once: true });
 };
 
+const clampFlowNumber = (value, min = -120, max = 220) =>
+  Math.max(min, Math.min(max, Number(value) || 0));
+
+const flowPositionNumber = (position = {}, axis = "x") =>
+  clampFlowNumber(parseFloat(position?.[axis]), -120, 220);
+
+const wheelPixelDelta = (event) => {
+  const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? Math.max(1, event.currentTarget?.clientHeight || window.innerHeight || 800)
+      : 1;
+  return {
+    x: event.deltaX * multiplier,
+    y: event.deltaY * multiplier,
+  };
+};
+
+const updateCanvasViewportDom = () => {
+  const layer = document.querySelector(".tl-flow-layer");
+  if (layer) layer.style.transform = `translate(${state.viewport.panX}px, ${state.viewport.panY}px) scale(${state.viewport.zoom})`;
+  const zoomLabel = document.querySelector("[data-flow-zoom-label]");
+  if (zoomLabel) zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
+  renderFlowEdges();
+};
+
+const zoomCanvasAtPoint = (event, deltaY = 0) => {
+  const canvas = event.currentTarget?.closest?.(".tl-flow-canvas") || event.currentTarget;
+  const rect = canvas?.getBoundingClientRect?.();
+  if (!rect?.width || !rect?.height) return;
+  const currentZoom = Math.max(0.45, Math.min(2.2, Number(state.viewport.zoom) || 1));
+  const zoomFactor = Math.exp(-deltaY * 0.0015);
+  const nextZoom = Math.max(0.45, Math.min(2.2, Math.round(currentZoom * zoomFactor * 100) / 100));
+  if (nextZoom === currentZoom) return;
+  const pointX = event.clientX - rect.left;
+  const pointY = event.clientY - rect.top;
+  const worldX = (pointX - state.viewport.panX) / currentZoom;
+  const worldY = (pointY - state.viewport.panY) / currentZoom;
+  state.viewport.zoom = nextZoom;
+  state.viewport.panX = Math.round(pointX - worldX * nextZoom);
+  state.viewport.panY = Math.round(pointY - worldY * nextZoom);
+};
+
+const handleCanvasWheel = (event) => {
+  if (event.target.closest?.(".tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap, input, textarea, select, [contenteditable='true']")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const delta = wheelPixelDelta(event);
+  if (event.ctrlKey) {
+    zoomCanvasAtPoint(event, delta.y || delta.x);
+  } else {
+    const horizontal = event.shiftKey && Math.abs(delta.x) < Math.abs(delta.y) ? delta.y : delta.x;
+    const vertical = event.shiftKey && Math.abs(delta.x) < Math.abs(delta.y) ? 0 : delta.y;
+    state.viewport.panX -= horizontal;
+    state.viewport.panY -= vertical;
+  }
+  saveViewport();
+  updateCanvasViewportDom();
+};
+
 const beginPaletteDrag = (event, item) => {
   state.paletteDragItem = item;
   event.dataTransfer?.setData("application/x-trackerslens-node", JSON.stringify(item));
@@ -657,6 +717,16 @@ const beginNodeDrag = (event, node, index) => {
   const canvas = event.currentTarget.closest(".tl-flow-canvas");
   const current = nodePosition(node, index);
   const pointer = pointerPercent(event, canvas);
+  const groupNodes = event.shiftKey ? descendantDragNodes(node) : [node];
+  const groupPositions = Object.fromEntries(groupNodes.map((item) => {
+    const itemIndex = state.runtime.nodes.findIndex((runtimeNode) => runtimeNode.id === item.id);
+    const position = nodePosition(item, itemIndex);
+    return [item.id, {
+      node: item,
+      x: flowPositionNumber(position, "x"),
+      y: flowPositionNumber(position, "y"),
+    }];
+  }));
   state.interaction = {
     type: "node",
     nodeId: node.id,
@@ -666,10 +736,40 @@ const beginNodeDrag = (event, node, index) => {
     startY: event.clientY,
     moved: false,
     offset: { x: pointer.x - parseFloat(current.x), y: pointer.y - parseFloat(current.y) },
+    startPosition: {
+      x: flowPositionNumber(current, "x"),
+      y: flowPositionNumber(current, "y"),
+    },
+    groupPositions,
   };
   document.addEventListener("pointermove", handlePointerMove);
   document.addEventListener("pointerup", endInteraction, { once: true });
   document.addEventListener("pointercancel", endInteraction, { once: true });
+};
+
+const descendantDragNodes = (node = {}) => {
+  if (!node?.id) return [];
+  const nodesById = new Map((state.runtime.nodes || []).map((item) => [item.id, item]));
+  const outgoingBySource = new Map();
+  (state.runtime.dependencies || []).forEach((dependency) => {
+    if (!dependency.sourceNodeId || !dependency.targetNodeId || dependency.sourceNodeId === dependency.targetNodeId) return;
+    if (!outgoingBySource.has(dependency.sourceNodeId)) outgoingBySource.set(dependency.sourceNodeId, []);
+    outgoingBySource.get(dependency.sourceNodeId).push(dependency.targetNodeId);
+  });
+  const result = [];
+  const visited = new Set();
+  const queue = [node.id];
+  while (queue.length) {
+    const nodeId = queue.shift();
+    if (!nodeId || visited.has(nodeId)) continue;
+    visited.add(nodeId);
+    const item = nodesById.get(nodeId);
+    if (item) result.push(item);
+    (outgoingBySource.get(nodeId) || []).forEach((childId) => {
+      if (!visited.has(childId)) queue.push(childId);
+    });
+  }
+  return result.length ? result : [node];
 };
 
 const beginPortLinkDrag = (event, node, index, side = "out", port = "all") => {
@@ -884,9 +984,7 @@ const handlePointerMove = (event) => {
     interaction.moved = true;
     state.viewport.panX = interaction.panX + event.clientX - interaction.startX;
     state.viewport.panY = interaction.panY + event.clientY - interaction.startY;
-    const layer = document.querySelector(".tl-flow-layer");
-    if (layer) layer.style.transform = `translate(${state.viewport.panX}px, ${state.viewport.panY}px) scale(${state.viewport.zoom})`;
-    renderFlowEdges();
+    updateCanvasViewportDom();
     return;
   }
 
@@ -896,15 +994,21 @@ const handlePointerMove = (event) => {
     if (!interaction.moved && dx < 4 && dy < 4) return;
     interaction.moved = true;
     const point = pointerPercent(event, interaction.canvas);
-    state.nodePositions[interaction.nodeId] = {
-      x: flowCoordinate(point.x - interaction.offset.x),
-      y: flowCoordinate(point.y - interaction.offset.y),
-    };
-    const node = document.querySelector(`[data-flow-node-id="${escapeSelectorValue(interaction.nodeId)}"]`);
-    if (node) {
-      node.style.setProperty("--x", state.nodePositions[interaction.nodeId].x);
-      node.style.setProperty("--y", state.nodePositions[interaction.nodeId].y);
-    }
+    const nextX = clampFlowNumber(point.x - interaction.offset.x);
+    const nextY = clampFlowNumber(point.y - interaction.offset.y);
+    const deltaX = nextX - interaction.startPosition.x;
+    const deltaY = nextY - interaction.startPosition.y;
+    Object.entries(interaction.groupPositions || {}).forEach(([nodeId, start]) => {
+      state.nodePositions[nodeId] = {
+        x: flowCoordinate(start.x + deltaX),
+        y: flowCoordinate(start.y + deltaY),
+      };
+      const node = document.querySelector(`[data-flow-node-id="${escapeSelectorValue(nodeId)}"]`);
+      if (node) {
+        node.style.setProperty("--x", state.nodePositions[nodeId].x);
+        node.style.setProperty("--y", state.nodePositions[nodeId].y);
+      }
+    });
     renderFlowEdges();
     return;
   }
@@ -924,6 +1028,25 @@ const persistNodePosition = (interaction) => {
     nodeId: interaction.nodeId,
     position,
   }).catch((error) => console.warn("Salvataggio posizione Flow Map non riuscito", error));
+};
+
+const persistNodePositions = (interaction) => {
+  const grouped = Object.entries(interaction.groupPositions || {});
+  if (grouped.length <= 1) {
+    persistNodePosition(interaction);
+    return;
+  }
+  if (!window.TrackerLensRuntimeGraphStore?.updateFlowNodePosition) return;
+  Promise.all(grouped.map(([nodeId, start]) => {
+    const position = state.nodePositions[nodeId];
+    const workspaceId = start.node?.workspaceId || interaction.workspaceId || "";
+    if (!position || !workspaceId) return null;
+    return window.TrackerLensRuntimeGraphStore.updateFlowNodePosition({
+      workspaceId,
+      nodeId,
+      position,
+    });
+  })).catch((error) => console.warn("Salvataggio posizioni Flow Map non riuscito", error));
 };
 
 const flushPendingRuntimeRefresh = () => {
@@ -960,7 +1083,7 @@ const endInteraction = (event) => {
     flushPendingRuntimeRefresh();
     return;
   }
-  if (interaction?.type === "node") persistNodePosition(interaction);
+  if (interaction?.type === "node") persistNodePositions(interaction);
   if (interaction?.type === "pan") {
     if (!interaction.moved && state.inspectorOpen) {
       closeInspector();

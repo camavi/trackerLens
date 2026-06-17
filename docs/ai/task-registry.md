@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-16.
+Last updated: 2026-06-17.
 
 ## Active
 
@@ -120,6 +120,7 @@ Main files:
 
 ## Completed Major Runtime Tasks
 
+- Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, Shift-drag downstream node groups and Ctrl-click quick delete.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

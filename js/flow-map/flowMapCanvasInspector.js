@@ -329,7 +329,7 @@ const renderControls = () =>
       },
     }, icon("bug_report", "sm")),
     btn({ "aria-label": "Zoom out", onclick: () => setZoom(-0.1) }, icon("remove", "sm")),
-    _.span(`${Math.round(state.viewport.zoom * 100)}%`),
+    _.span({ "data-flow-zoom-label": "true" }, `${Math.round(state.viewport.zoom * 100)}%`),
     btn({ "aria-label": "Zoom in", onclick: () => setZoom(0.1) }, icon("add", "sm")),
     btn({ "aria-label": "Reset view", onclick: resetViewport }, icon("grid_view", "sm"))
   );
@@ -514,11 +514,13 @@ const edgeCanvasBounds = () => {
   const host = document.querySelector(".tl-flow-canvas");
   const rect = host?.getBoundingClientRect?.();
   if (!rect) return null;
+  const paddingX = rect.width * 2.1;
+  const paddingY = rect.height * 2.1;
   return {
-    width: Math.max(1, Math.round(rect.width * 3.4)),
-    height: Math.max(1, Math.round(rect.height * 3.4)),
-    offsetX: Math.round(rect.width * 1.2),
-    offsetY: Math.round(rect.height * 1.2),
+    width: Math.max(1, Math.round(rect.width + paddingX * 2)),
+    height: Math.max(1, Math.round(rect.height + paddingY * 2)),
+    offsetX: Math.round(paddingX),
+    offsetY: Math.round(paddingY),
     rect,
   };
 };
@@ -634,7 +636,7 @@ const drawFlowEdges = () => {
   const bounds = edgeCanvasBounds();
   const rect = bounds?.rect;
   if (!bounds || !rect) return;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
   const width = bounds.width;
   const height = bounds.height;
   if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
@@ -1011,11 +1013,12 @@ const renderNodeQuickActions = (node, view) => {
     canDeleteRuntimeNode ? btn({
       class: "is-danger",
       "aria-label": "Delete node",
-      title: "Delete node",
+      title: "Delete node. Ctrl+click deletes immediately.",
       onclick: (event) => {
         event.preventDefault();
         event.stopPropagation();
-        requestDraftNodeDelete(node);
+        if (event.ctrlKey) performDraftNodeDelete(node);
+        else requestDraftNodeDelete(node);
       },
     }, icon("delete", "sm")) : null
   );
@@ -1206,13 +1209,14 @@ const renderCanvas = () => {
     ) : null,
     renderControls(),
     _.div(
-      { class: "tl-flow-canvas", onPointerDown: beginPan, onDragOver: handleCanvasDragOver, onDrop: handleCanvasDrop },
+      { class: "tl-flow-canvas", onPointerDown: beginPan, onWheel: handleCanvasWheel, onDragOver: handleCanvasDragOver, onDrop: handleCanvasDrop },
       !graph.nodes.length ? _.div({ class: "tl-flow-empty" }, "Nessun nodo corrisponde ai filtri runtime.") : null,
       _.div(
         {
           class: "tl-flow-layer",
           style: { transform: `translate(${state.viewport.panX}px, ${state.viewport.panY}px) scale(${state.viewport.zoom})` },
         },
+        _.span({ class: "tl-flow-canvas-center-marker", "aria-hidden": "true", title: "Canvas center" }),
         _.canvas({ class: "tl-flow-edge-canvas", "aria-hidden": "true" }),
         ...renderGraph.renderedDependencies.map((dependency) => {
           const fromIndex = graph.nodes.findIndex((node) => node.id === dependency.sourceNodeId);

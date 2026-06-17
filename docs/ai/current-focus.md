@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-16.
+Last updated: 2026-06-17.
 
 ## Active Area
 
@@ -17,6 +17,15 @@ Knowledge Runtime local-first baseline.
 4. Step 4: real compound commands.
 
 ## Latest Completed Work
+
+Flow Map canvas interaction refinement is complete:
+
+- canvas wheel now pans naturally vertically and horizontally, with Shift-wheel as horizontal fallback for wheel mice;
+- Ctrl-wheel zooms around the pointer and persists the viewport;
+- Ctrl-wheel updates the canvas topbar zoom percentage without waiting for a remount;
+- Shift-drag on a runtime node moves that node plus all downstream child nodes while preserving relative distances;
+- Ctrl-click on the node delete quick action deletes immediately without opening the confirmation dialog.
+- The Flow Map canvas now shows a red center marker at graph center and the edge canvas draw area is wider to avoid clipping long cables.
 
 Runtime contract base is complete:
 
