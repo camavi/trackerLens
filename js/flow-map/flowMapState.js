@@ -52,6 +52,18 @@ const saveStoredPreviewClears = (workspaceId = "", clears = {}) => {
   }
 };
 
+const markPreviewNodeClean = (node = {}, { remount = false } = {}) => {
+  if (!node?.id) return;
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  state.previewClearedAt = {
+    ...loadStoredPreviewClears(workspaceId),
+    [node.id]: new Date().toISOString(),
+  };
+  saveStoredPreviewClears(workspaceId, state.previewClearedAt);
+  delete state.previewPayloads[node.id];
+  if (remount && typeof mount === "function") mount({ preserveScroll: true });
+};
+
 const state = {
   loading: true,
   error: "",
@@ -1047,8 +1059,10 @@ const updatePreviewPayloads = (event = {}) => {
   if (!isPreviewPayloadEvent(event)) return;
   previewNodesForEvent(event).forEach((node) => {
     const clearedAt = Date.parse(state.previewClearedAt[node.id] || "");
+    const nodeCreatedAt = Date.parse(node.createdAt || "");
     const eventAt = Date.parse(event.createdAt || "");
-    if (clearedAt && eventAt && eventAt <= clearedAt) return;
+    const visibleAfter = Math.max(clearedAt || 0, nodeCreatedAt || 0);
+    if (visibleAfter && eventAt && eventAt <= visibleAfter) return;
     const mapped = previewPayloadForNodeEvent(node, event);
     state.previewPayloads[node.id] = {
       eventId: event.id,

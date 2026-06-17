@@ -121,6 +121,7 @@ Main files:
 ## Completed Major Runtime Tasks
 
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Ctrl-click quick delete.
+- Flow Map Preview polish: long payload headers preserve copy/clear actions, and newly created Preview nodes start clean instead of replaying older cached events.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

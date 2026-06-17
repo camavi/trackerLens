@@ -1671,9 +1671,9 @@ button.tl-flow-mini-chip {
 }
 
 .tl-flow-node-preview-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding: 7px 8px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
@@ -1681,11 +1681,19 @@ button.tl-flow-mini-chip {
   font-size: 10px;
 }
 
+.tl-flow-node-preview-title {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .tl-flow-node-preview-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+  justify-self: end;
 }
 
 .tl-flow-copy-btn.is-clear {

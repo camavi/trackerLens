@@ -159,6 +159,7 @@ const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
 
   state.paletteDragItem = null;
   if (node?.id) {
+    if (isPreviewNode(node)) markPreviewNodeClean(node);
     setFocusState({
       mode: "dependencies",
       nodeId: node.id,

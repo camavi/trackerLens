@@ -759,15 +759,7 @@ const previewRecordForNode = (node = {}) =>
   state.previewPayloads[node.id] || null;
 
 const clearPreviewNodePayload = (node = {}) => {
-  if (!node.id) return;
-  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
-  state.previewClearedAt = {
-    ...loadStoredPreviewClears(workspaceId),
-    [node.id]: new Date().toISOString(),
-  };
-  saveStoredPreviewClears(workspaceId, state.previewClearedAt);
-  delete state.previewPayloads[node.id];
-  mount({ preserveScroll: true });
+  markPreviewNodeClean(node, { remount: true });
 };
 
 const previewTextForRecord = (record = null, mode = "auto", maxChars = 2000) => {
@@ -806,7 +798,10 @@ const renderPreviewNodePanel = (node = {}) => {
     { class: "tl-flow-node-preview", "data-flow-preview-panel": node.id },
     _.div(
       { class: "tl-flow-node-preview-head" },
-      _.span(record ? `${record.channel} · ${record.eventType} · ${formatShortDate(record.createdAt)}` : "Waiting for data payload"),
+      _.span(
+        { class: "tl-flow-node-preview-title" },
+        record ? `${record.channel} · ${record.eventType} · ${formatShortDate(record.createdAt)}` : "Waiting for data payload"
+      ),
       _.span(
         { class: "tl-flow-node-preview-actions" },
         record ? copyRuntimeButton(record.payload, "Copy preview payload") : null,
