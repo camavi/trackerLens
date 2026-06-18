@@ -62,6 +62,11 @@ const flowColorStyle = (color = "#38bdf8") => ({
   "--tl-flowmap-rgb": hexToRgb(color),
 });
 
+const recordUiColor = (record = {}) => {
+  const ui = record.ui && typeof record.ui === "object" ? record.ui : {};
+  return validHexColor(ui.color) ? ui.color : validHexColor(record.color) ? record.color : "";
+};
+
 const openDb = () =>
   new Promise((resolve, reject) => {
     if (!window.indexedDB) {
@@ -183,7 +188,7 @@ const loadFlowMapsFromDb = async () => {
     const scopedDependencies = dependencies.filter((dependency) => dependency.workspaceId === workspaceId);
     const name = normalizeText(flow.name || page.name || page.title, workspaceId);
     const category = normalizeText(flow.category || page.category, "global");
-    const color = validHexColor(flow.color) ? flow.color : validHexColor(page.color) ? page.color : defaultFlowColor(workspaceId);
+    const color = recordUiColor(flow) || recordUiColor(page) || defaultFlowColor(workspaceId);
     const updatedAt = normalizeText(page.updatedAt || page.savedAt || flow.updatedAt || page.createdAt || flow.createdAt);
     const description = normalizeText(page.description, `${scopedNodes.length} nodi runtime · ${scopedDependencies.length} collegamenti`);
     return {
@@ -295,8 +300,11 @@ const saveFlowMapColor = async (item, color, event = null) => {
       content: {
         ...pageContent,
         id: pageContent.id || item.id,
-        color,
-        updatedAt: now,
+        ui: {
+          ...(pageContent.ui && typeof pageContent.ui === "object" ? pageContent.ui : {}),
+          color,
+          colorUpdatedAt: now,
+        },
       },
     });
 
@@ -304,12 +312,15 @@ const saveFlowMapColor = async (item, color, event = null) => {
     if (flowRecord?.id) {
       await writeRecord(FLOW_STORE, {
         ...flowRecord,
-        color,
-        updatedAt: now,
+        ui: {
+          ...(flowRecord.ui && typeof flowRecord.ui === "object" ? flowRecord.ui : {}),
+          color,
+          colorUpdatedAt: now,
+        },
       });
     }
 
-    flowLibraryState.items = flowLibraryState.items.map((flow) => flow.id === item.id ? { ...flow, color, updatedAt: now } : flow);
+    flowLibraryState.items = flowLibraryState.items.map((flow) => flow.id === item.id ? { ...flow, color } : flow);
     mountFlowLibrary();
   } catch (error) {
     flowLibraryState.error = error?.message || "Colore Flow Map non salvato.";
