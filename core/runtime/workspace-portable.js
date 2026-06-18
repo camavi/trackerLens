@@ -94,7 +94,7 @@ window.TrackerLensPortableRuntime = (() => {
     [...new Set((workspace.boxes || []).flatMap((box) => [box.assetId, box.sourceId]).filter(Boolean).map(String))];
 
   const packageMeta = (kind, name, id) => ({
-    format: kind === "workspace" ? "tlworkspace" : "tlbox",
+    format: kind === "flowmap" ? "tlflow" : kind === "workspace" ? "tlworkspace" : "tlbox",
     formatVersion: FORMAT_VERSION,
     exportedAt: now(),
     app: {
@@ -178,17 +178,28 @@ window.TrackerLensPortableRuntime = (() => {
     return bundle;
   };
 
+  const exportFlowMapFile = async (id, options = {}) => {
+    const bundle = {
+      ...await exportWorkspace(id, { includeAssets: true, includeRuntimeGraph: true, ...options }),
+      ...packageMeta("flowmap", "", id),
+    };
+    bundle.kind = "workspace";
+    bundle.name = bundle.workspace?.name || bundle.workspace?.title || id;
+    downloadJson(bundle, `${safeName(bundle.name || id)}.tlflow`);
+    return bundle;
+  };
+
   const validateBundle = (bundle = {}) => {
     const errors = [];
     const warnings = [];
     if (!bundle || typeof bundle !== "object") errors.push("Bundle non valido");
-    if (!["tlworkspace", "tlbox"].includes(bundle.format)) warnings.push("format non riconosciuto o legacy");
-    if (bundle.kind !== "workspace" && bundle.kind !== "box" && bundle.format !== "tlworkspace" && bundle.format !== "tlbox") {
+    if (!["tlworkspace", "tlflow", "tlbox"].includes(bundle.format)) warnings.push("format non riconosciuto o legacy");
+    if (bundle.kind !== "workspace" && bundle.kind !== "box" && bundle.format !== "tlworkspace" && bundle.format !== "tlflow" && bundle.format !== "tlbox") {
       errors.push("kind/formato non supportato");
     }
     if ((bundle.kind === "box" || bundle.format === "tlbox") && !bundle.box) errors.push("box mancante");
-    if ((bundle.kind === "workspace" || bundle.format === "tlworkspace") && !bundle.workspace) errors.push("workspace mancante");
-    const boxes = bundle.kind === "workspace" || bundle.format === "tlworkspace" ? bundle.assets || [] : [bundle.box].filter(Boolean);
+    if ((bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow") && !bundle.workspace) errors.push("workspace mancante");
+    const boxes = bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow" ? bundle.assets || [] : [bundle.box].filter(Boolean);
     boxes.forEach((box) => {
       const validation = window.TrackerLensBoxVersioning?.validateBox ? window.TrackerLensBoxVersioning.validateBox(box) : { ok: true, warnings: [] };
       if (!validation.ok) errors.push(...validation.errors.map((error) => `${box?.id || "box"}: ${error}`));
@@ -222,7 +233,7 @@ window.TrackerLensPortableRuntime = (() => {
       await write(WIDGET_STORE, { id, content: normalizeBox({ ...box, id, updatedAt: now() }) });
       return { kind: "box", id };
     }
-    if (bundle.kind === "workspace" || bundle.format === "tlworkspace") {
+    if (bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow") {
       const workspace = bundle.workspace || {};
       const requestedId = normalizeText(workspace.id || bundle.id, `workspace_${Date.now()}`);
       const id = await existingIdFor(PAGE_STORE, requestedId, onConflict);
@@ -268,6 +279,7 @@ window.TrackerLensPortableRuntime = (() => {
     exportBoxFile,
     exportWorkspace,
     exportWorkspaceFile,
+    exportFlowMapFile,
     importBundle,
     importFile,
     validateBundle,

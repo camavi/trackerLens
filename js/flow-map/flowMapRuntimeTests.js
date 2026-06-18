@@ -3164,9 +3164,9 @@ const cleanupWorkspaceImportTarget = async (workspaceId = "") => {
 
 const downloadCurrentWorkspace = async () => {
   try {
-    await window.TrackerLensPortableRuntime.exportWorkspaceFile(currentWorkspaceId(), { includeAssets: true, includeRuntimeGraph: true });
+    await window.TrackerLensPortableRuntime.exportFlowMapFile(currentWorkspaceId(), { includeAssets: true, includeRuntimeGraph: true });
   } catch (error) {
-    state.error = error?.message || "Download workspace non riuscito.";
+    state.error = error?.message || "Download Flow Map non riuscito.";
     setErrorSignal(state.error);
     mount({ preserveScroll: true });
   }
@@ -3175,7 +3175,7 @@ const downloadCurrentWorkspace = async () => {
 const importWorkspaceFile = () => {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = ".tlworkspace,application/json,.json";
+  input.accept = ".tlflow,.tlworkspace,application/json,.json";
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
@@ -3286,8 +3286,8 @@ const renderFileMenu = () =>
     {},
     _.div(
       { class: "tl-flow-menu-content" },
-      renderFileMenuItem({ iconName: "download", label: "Download", meta: ".tlworkspace con asset e runtime graph", onclick: downloadCurrentWorkspace }),
-      renderFileMenuItem({ iconName: "upload_file", label: "Import", meta: "Sostituisce il workspace importato", onclick: importWorkspaceFile }),
+      renderFileMenuItem({ iconName: "download", label: "Download", meta: ".tlflow con asset e runtime graph", onclick: downloadCurrentWorkspace }),
+      renderFileMenuItem({ iconName: "upload_file", label: "Import", meta: "Sostituisce il Flow Map importato", onclick: importWorkspaceFile }),
       _.span({ class: "tl-flow-menu-separator" }),
       renderFileMenuItem({ iconName: "settings", label: "Settings", meta: "Nome, titolo e stato workspace", onclick: openWorkspaceSettings })
     )

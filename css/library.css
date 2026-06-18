@@ -223,6 +223,11 @@ body {
   font-weight: 800;
 }
 
+.cms-field.tl-flow-category-search-input {
+  margin-bottom: 10px;
+}
+
+
 .tl-category-btn.cms-btn {
   width: 100%;
   height: 40px;
@@ -624,6 +629,18 @@ body {
   border-color: transparent;
   background: transparent;
   padding: 0;
+}
+
+.tl-card-more.cms-btn.is-danger {
+  color: #ff9aa8;
+  border-color: rgba(255, 100, 124, 0.18);
+  background: rgba(255, 100, 124, 0.08);
+}
+
+.tl-card-more.cms-btn.is-danger:hover {
+  color: #fff;
+  border-color: rgba(255, 100, 124, 0.42);
+  background: rgba(255, 100, 124, 0.18);
 }
 
 .tl-workspace-open.cms-btn {

@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-17.
+Last updated: 2026-06-18.
 
 ## Active Area
 
@@ -17,6 +17,15 @@ Knowledge Runtime local-first baseline.
 4. Step 4: real compound commands.
 
 ## Latest Completed Work
+
+Flow Map library separation baseline is complete:
+
+- global sidebar `Flow Map` now opens `libraryFlowmap.html` instead of a single workspace flow;
+- `libraryFlowmap.html` lists local Flow Maps/workspace runtime graphs from IndexedDB and opens `flowMap.html?workspaceId=...`;
+- Flow Map library sidebar filters by searchable categories, while sorting is in the result toolbar;
+- Flow Map library cards include a confirmed delete action for the local flow, scoped runtime graph, channels, events, logs and connections;
+- Flow Map export from `flowMap.html` now downloads `.tlflow` bundles with embedded assets and runtime graph;
+- Flow Map import accepts `.tlflow` while keeping `.tlworkspace` compatibility.
 
 Flow Map canvas interaction refinement is complete:
 
