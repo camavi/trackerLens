@@ -391,6 +391,10 @@ body {
   grid-auto-rows: 286px;
 }
 
+.tl-flow-library-root .tl-library-grid {
+  grid-auto-rows: 320px;
+}
+
 .tl-library-toolbar {
   margin-bottom: 26px;
 }
@@ -463,7 +467,117 @@ body {
   gap: 10px;
 }
 
+.tl-flow-map-card.cms-card {
+  position: relative;
+  border-color: rgba(var(--tl-flowmap-rgb), 0.28);
+  background:
+    linear-gradient(135deg, rgba(var(--tl-flowmap-rgb), 0.18), transparent 34%),
+    radial-gradient(circle at 86% 14%, rgba(var(--tl-flowmap-rgb), 0.2), transparent 30%),
+    linear-gradient(180deg, rgba(13, 24, 32, 0.94), rgba(5, 12, 18, 0.9));
+  box-shadow:
+    0 28px 74px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.tl-flow-map-card.cms-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(var(--tl-flowmap-rgb), 0.84), rgba(255, 255, 255, 0.08), rgba(var(--tl-flowmap-rgb), 0.12));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.tl-flow-map-card.cms-card:hover {
+  border-color: rgba(var(--tl-flowmap-rgb), 0.5);
+  box-shadow:
+    0 32px 88px rgba(0, 0, 0, 0.42),
+    0 0 34px rgba(var(--tl-flowmap-rgb), 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.tl-flow-map-card>.cms-card-body {
+  position: relative;
+  z-index: 1;
+  grid-template-rows: auto minmax(36px, 1fr) auto auto;
+  gap: 12px;
+}
+
+.tl-flow-card-graph {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.58;
+}
+
+.tl-flow-card-graph .is-node,
+.tl-flow-card-graph .is-edge {
+  position: absolute;
+  display: block;
+}
+
+.tl-flow-card-graph .is-node {
+  width: 9px;
+  height: 9px;
+  border: 1px solid rgba(var(--tl-flowmap-rgb), 0.72);
+  border-radius: 3px;
+  background: rgba(5, 12, 18, 0.92);
+  box-shadow: 0 0 18px rgba(var(--tl-flowmap-rgb), 0.2);
+}
+
+.tl-flow-card-graph .is-a {
+  top: 32px;
+  right: 62px;
+}
+
+.tl-flow-card-graph .is-b {
+  top: 72px;
+  right: 24px;
+}
+
+.tl-flow-card-graph .is-c {
+  bottom: 84px;
+  right: 72px;
+}
+
+.tl-flow-card-graph .is-edge {
+  height: 1px;
+  width: 54px;
+  background: linear-gradient(90deg, rgba(var(--tl-flowmap-rgb), 0.64), transparent);
+  transform-origin: left center;
+}
+
+.tl-flow-card-graph .is-ab {
+  top: 47px;
+  right: 26px;
+  transform: rotate(43deg);
+}
+
+.tl-flow-card-graph .is-bc {
+  top: 102px;
+  right: 31px;
+  transform: rotate(128deg);
+}
+
 .tl-card-head {}
+
+.tl-flow-map-card .tl-card-head {
+  position: relative;
+  z-index: 2;
+}
+
+.tl-flow-card-head {
+  display: grid;
+  gap: 6px;
+}
+
+.tl-flow-card-meta-row {
+  min-width: 0;
+}
 
 .tl-card-favorite.cms-btn {
   width: 32px;
@@ -503,6 +617,16 @@ body {
   background: linear-gradient(180deg, rgba(86, 191, 245, 0.72), rgba(52, 88, 171, 0.78));
 }
 
+.tl-flow-card-icon.tl-card-icon.is-workspace {
+  color: #021018;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, rgba(var(--tl-flowmap-rgb), 0.98), rgba(var(--tl-flowmap-rgb), 0.52));
+  box-shadow:
+    0 16px 32px rgba(var(--tl-flowmap-rgb), 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
 .tl-card-icon img {
   width: 100%;
   height: 100%;
@@ -511,6 +635,26 @@ body {
 
 .tl-card-title {
   min-width: 0;
+}
+
+.tl-flow-card-title-row {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.tl-flow-card-title-row h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+}
+
+.tl-flow-map-card .tl-card-title h3 {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .tl-card-title h3 {
@@ -528,6 +672,61 @@ body {
   margin-top: 4px;
   color: var(--tl-text-soft);
   font-size: 14px;
+}
+
+.tl-flow-card-badges {
+  margin-top: 2px;
+  height: 50px;
+  display: grid;
+}
+
+.tl-flow-category-badge {
+  width: fit-content;
+  max-width: 110px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid rgba(var(--tl-flowmap-rgb), 0.34);
+  border-radius: 999px;
+  color: #e8f7ff;
+  background: rgba(var(--tl-flowmap-rgb), 0.12);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-color-picker {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(var(--tl-flowmap-rgb), 0.34);
+  border-radius: 8px;
+  background: rgba(var(--tl-flowmap-rgb), 0.1);
+  cursor: pointer;
+}
+
+.tl-flow-color-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 4px;
+  background: var(--tl-flowmap-color);
+  box-shadow: 0 0 18px rgba(var(--tl-flowmap-rgb), 0.35);
+}
+
+.tl-flow-color-picker input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .tl-trust-badge {
@@ -580,10 +779,67 @@ body {
   overflow: hidden;
 }
 
+.tl-flow-map-card .tl-card-description {
+  position: relative;
+  z-index: 1;
+  min-height: 42px;
+  color: rgba(222, 232, 241, 0.82);
+}
+
+.tl-flow-metrics {
+  position: relative;
+  z-index: 1;
+  flex-wrap: wrap;
+}
+
+.tl-flow-metric-pill {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px 0 7px;
+  border: 1px solid rgba(var(--tl-flowmap-rgb), 0.24);
+  border-radius: 999px;
+  color: rgba(232, 247, 255, 0.92);
+  background: rgba(var(--tl-flowmap-rgb), 0.09);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.tl-flow-metric-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(var(--tl-flowmap-rgb), 0.2);
+  border-radius: 999px;
+  color: var(--tl-flowmap-color);
+  background: rgba(3, 9, 14, 0.46);
+}
+
+.tl-flow-metric-icon .cms-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.tl-flow-metrics strong {
+  color: var(--tl-flowmap-color);
+}
+
 .tl-card-foot {
   min-width: 0;
   align-self: end;
   flex-wrap: wrap;
+}
+
+.tl-flow-map-card .tl-card-foot {
+  position: relative;
+  z-index: 2;
+  margin: 0 -4px -4px;
+  padding: 10px 4px 0;
+  border-top: 1px solid rgba(var(--tl-flowmap-rgb), 0.16);
 }
 
 .tl-card-category {
@@ -643,6 +899,44 @@ body {
   background: rgba(255, 100, 124, 0.18);
 }
 
+.tl-flow-map-card .tl-card-more.cms-btn {
+  border-color: rgba(var(--tl-flowmap-rgb), 0.16);
+  border-radius: 8px;
+  background: rgba(var(--tl-flowmap-rgb), 0.06);
+}
+
+.tl-flow-map-card .tl-card-more.cms-btn:hover {
+  color: #e8f7ff;
+  border-color: rgba(var(--tl-flowmap-rgb), 0.38);
+  background: rgba(var(--tl-flowmap-rgb), 0.13);
+}
+
+.tl-flow-map-card .tl-flow-download.cms-btn {
+  color: var(--tl-flowmap-color);
+  border-color: rgba(var(--tl-flowmap-rgb), 0.26);
+  background:
+    linear-gradient(180deg, rgba(var(--tl-flowmap-rgb), 0.14), rgba(var(--tl-flowmap-rgb), 0.05));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.tl-flow-map-card .tl-flow-download.cms-btn:hover {
+  color: #021018;
+  border-color: rgba(var(--tl-flowmap-rgb), 0.58);
+  background: linear-gradient(180deg, rgba(var(--tl-flowmap-rgb), 0.9), rgba(var(--tl-flowmap-rgb), 0.58));
+}
+
+.tl-flow-map-card .tl-card-more.cms-btn.is-danger {
+  color: #ff9aa8;
+  border-color: rgba(255, 100, 124, 0.24);
+  background: rgba(255, 100, 124, 0.1);
+}
+
+.tl-flow-map-card .tl-card-more.cms-btn.is-danger:hover {
+  color: #fff;
+  border-color: rgba(255, 100, 124, 0.48);
+  background: rgba(255, 100, 124, 0.2);
+}
+
 .tl-workspace-open.cms-btn {
   min-width: 68px;
   color: #dff6ff;
@@ -665,6 +959,19 @@ body {
   color: #161000;
   border-color: rgba(255, 199, 44, 0.52);
   background: linear-gradient(180deg, #ffd84f, #d99a00);
+}
+
+.tl-flow-map-card .tl-workspace-flow.cms-btn {
+  color: #021018;
+  border-color: rgba(var(--tl-flowmap-rgb), 0.42);
+  background: linear-gradient(180deg, rgba(var(--tl-flowmap-rgb), 0.96), rgba(var(--tl-flowmap-rgb), 0.66));
+  box-shadow: 0 10px 22px rgba(var(--tl-flowmap-rgb), 0.14);
+}
+
+.tl-flow-map-card .tl-workspace-flow.cms-btn:hover {
+  color: #021018;
+  border-color: rgba(var(--tl-flowmap-rgb), 0.7);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(var(--tl-flowmap-rgb), 0.8));
 }
 
 .tl-library-list .tl-box-card.cms-card,

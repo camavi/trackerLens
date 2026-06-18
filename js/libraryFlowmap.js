@@ -38,6 +38,29 @@ const CONNECTION_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_
 const normalizeText = (value, fallback = "") => value === null || value === undefined ? fallback : String(value).trim() || fallback;
 const openChromePage = (url) => window.location.assign(url);
 const openFlowMap = (workspaceId) => openChromePage(`flowMap.html?workspaceId=${encodeURIComponent(workspaceId)}`);
+const flowColorPalette = ["#38bdf8", "#35c979", "#ffc72c", "#f472b6", "#a78bfa", "#2dd4bf", "#fb7185", "#60a5fa"];
+
+const validHexColor = (value = "") => /^#[0-9a-f]{6}$/i.test(String(value || "").trim());
+
+const defaultFlowColor = (workspaceId = "") => {
+  const key = String(workspaceId || "global");
+  const hash = key.split("").reduce((total, char) => total + char.charCodeAt(0), 0);
+  return flowColorPalette[hash % flowColorPalette.length];
+};
+
+const hexToRgb = (hex = "#38bdf8") => {
+  const value = validHexColor(hex) ? hex.slice(1) : "38bdf8";
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ].join(", ");
+};
+
+const flowColorStyle = (color = "#38bdf8") => ({
+  "--tl-flowmap-color": color,
+  "--tl-flowmap-rgb": hexToRgb(color),
+});
 
 const openDb = () =>
   new Promise((resolve, reject) => {
@@ -58,6 +81,36 @@ const readAll = async (storeName) => {
       const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
       request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
       request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const readRecord = async (storeName, id) => {
+  if (!storeName || !id) return null;
+  const db = await openDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
+      request.onsuccess = (event) => resolve(event.target.result || null);
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const writeRecord = async (storeName, record) => {
+  if (!storeName || !record?.id) return null;
+  const db = await openDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
+      request.onsuccess = () => resolve(record);
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
     });
   } finally {
     db.close();
@@ -130,12 +183,14 @@ const loadFlowMapsFromDb = async () => {
     const scopedDependencies = dependencies.filter((dependency) => dependency.workspaceId === workspaceId);
     const name = normalizeText(flow.name || page.name || page.title, workspaceId);
     const category = normalizeText(flow.category || page.category, "global");
+    const color = validHexColor(flow.color) ? flow.color : validHexColor(page.color) ? page.color : defaultFlowColor(workspaceId);
     const updatedAt = normalizeText(page.updatedAt || page.savedAt || flow.updatedAt || page.createdAt || flow.createdAt);
     const description = normalizeText(page.description, `${scopedNodes.length} nodi runtime · ${scopedDependencies.length} collegamenti`);
     return {
       id: workspaceId,
       name,
       category,
+      color,
       description,
       nodes: scopedNodes.length,
       dependencies: scopedDependencies.length,
@@ -223,6 +278,41 @@ const deleteFlowMap = async (item, event = null) => {
     await loadFlowLibrary();
   } catch (error) {
     flowLibraryState.error = error?.message || "Eliminazione Flow Map non riuscita.";
+    mountFlowLibrary();
+  }
+};
+
+const saveFlowMapColor = async (item, color, event = null) => {
+  event?.stopPropagation?.();
+  if (!validHexColor(color)) return;
+  try {
+    const now = new Date().toISOString();
+    const pageRecord = await readRecord(PAGE_STORE, item.id);
+    const pageContent = contentOf(pageRecord) || {};
+    await writeRecord(PAGE_STORE, {
+      ...(pageRecord || {}),
+      id: item.id,
+      content: {
+        ...pageContent,
+        id: pageContent.id || item.id,
+        color,
+        updatedAt: now,
+      },
+    });
+
+    const flowRecord = (await readAll(FLOW_STORE)).find((flow) => flow.workspaceId === item.id || flow.id === item.id);
+    if (flowRecord?.id) {
+      await writeRecord(FLOW_STORE, {
+        ...flowRecord,
+        color,
+        updatedAt: now,
+      });
+    }
+
+    flowLibraryState.items = flowLibraryState.items.map((flow) => flow.id === item.id ? { ...flow, color, updatedAt: now } : flow);
+    mountFlowLibrary();
+  } catch (error) {
+    flowLibraryState.error = error?.message || "Colore Flow Map non salvato.";
     mountFlowLibrary();
   }
 };
@@ -320,29 +410,58 @@ const renderToolbar = (items) =>
 const renderFlowCard = (item) =>
   _.Card(
     {
-      class: "tl-box-card",
+      class: "tl-box-card tl-flow-map-card",
+      style: flowColorStyle(item.color),
     },
-    _.Grid(
-      { class: "tl-card-head", cols: "52px minmax(0, 1fr)", gap: 14, align: "center" },
-      _.span({ class: "tl-card-icon is-workspace" }, icon("account_tree", "md")),
-      _.div(
-        { class: "tl-card-title" },
+    _.div(
+      { class: "tl-flow-card-graph", "aria-hidden": "true" },
+      _.span({ class: "is-node is-a" }),
+      _.span({ class: "is-node is-b" }),
+      _.span({ class: "is-node is-c" }),
+      _.span({ class: "is-edge is-ab" }),
+      _.span({ class: "is-edge is-bc" })
+    ),
+    _.div(
+      { class: "tl-card-head tl-flow-card-head" },
+      _.Row(
+        { class: "tl-flow-card-title-row", align: "start", justify: "space-between", gap: 10 },
         _.h3(item.name),
-        _.div({ class: "tl-card-type" }, item.category || "global"),
-        _.span({ class: "tl-trust-badge is-verified" }, icon("hub", "xs"), item.status)
+        _.label(
+          { class: "tl-flow-color-picker", title: "Colore Flow Map", "aria-label": `Colore ${item.name}` },
+          _.span({ class: "tl-flow-color-swatch", "aria-hidden": "true" }),
+          _.input({
+            type: "color",
+            value: item.color,
+            "aria-label": `Scegli colore ${item.name}`,
+            onchange: (event) => saveFlowMapColor(item, event.target.value, event),
+          })
+        )
+      ),
+      _.Grid(
+        { class: "tl-flow-card-meta-row", cols: "52px minmax(0, 1fr)", gap: 14, align: "center" },
+        _.span({ class: "tl-card-icon is-workspace tl-flow-card-icon" }, icon("account_tree", "md")),
+        _.Row(
+          { class: "tl-flow-card-badges", align: "center", gap: 8 },
+          _.span({ class: "tl-flow-category-badge" }, item.category || "global"),
+          _.span({ class: "tl-trust-badge is-verified" }, icon("hub", "xs"), item.status)
+        )
       )
     ),
     _.p({ class: "tl-card-description" }, item.description),
     _.Row(
+      { class: "tl-flow-metrics", align: "center", gap: 8 },
+      _.span({ class: "tl-flow-metric-pill" }, _.span({ class: "tl-flow-metric-icon" }, icon("account_tree", "sm")), _.strong(String(item.nodes)), " nodi"),
+      _.span({ class: "tl-flow-metric-pill" }, _.span({ class: "tl-flow-metric-icon" }, icon("link", "sm")), _.strong(String(item.dependencies)), " link")
+    ),
+    _.Row(
       { class: "tl-card-foot", align: "center", justify: "space-between", gap: 12 },
       _.div(
-        _.div({ class: "tl-card-category is-workspace" }, `${item.nodes} nodi · ${item.dependencies} link`),
         _.div({ class: "tl-card-meta" }, item.updatedAt ? `Aggiornato ${new Date(item.updatedAt).toLocaleString()}` : "Nessuna data salvata")
       ),
       _.Row(
         { class: "tl-card-actions", align: "center", justify: "end", gap: 30 },
         btn({ class: "tl-workspace-flow", onclick: () => openFlowMap(item.id) }, icon("open_in_new", "sm"), "Apri"),
-        btn({ class: "tl-card-more", "aria-label": `Export ${item.name}`, title: "Export", onclick: (event) => exportFlowMap(item, event) }, icon("download", "sm")),
+        btn({ class: "tl-card-more tl-flow-download", "aria-label": `Export ${item.name}`, title: "Export", onclick: (event) => exportFlowMap(item, event) }, icon("download", "sm")),
         btn({ class: "tl-card-more is-danger", "aria-label": `Elimina ${item.name}`, title: "Elimina", onclick: (event) => deleteFlowMap(item, event) }, icon("delete", "sm"))
       )
     )

@@ -24,6 +24,7 @@ Flow Map library separation baseline is complete:
 - `libraryFlowmap.html` lists local Flow Maps/workspace runtime graphs from IndexedDB and opens `flowMap.html?workspaceId=...`;
 - Flow Map library sidebar filters by searchable categories, while sorting is in the result toolbar;
 - Flow Map library cards include a confirmed delete action for the local flow, scoped runtime graph, channels, events, logs and connections;
+- Flow Map library cards now use per-flow accent colors, a mini graph visual layer, metric pills and a card color picker persisted to local Flow Map records;
 - Flow Map export from `flowMap.html` now downloads `.tlflow` bundles with embedded assets and runtime graph;
 - Flow Map import accepts `.tlflow` while keeping `.tlworkspace` compatibility.
 
