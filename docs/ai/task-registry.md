@@ -121,6 +121,7 @@ Main files:
 ## Completed Major Runtime Tasks
 
 - Flow Map library split baseline: sidebar Flow Map route opens `libraryFlowmap.html`; local Flow Maps can be listed/opened/imported/exported/deleted after confirmation; sidebar categories are searchable and sorting lives in the result toolbar; cards have per-flow configurable UI accent colors and a richer runtime-graph visual treatment; Flow Map download format is `.tlflow` with `.tlworkspace` import compatibility preserved.
+- Asset library card polish: `library.html` cards use modern gradient/accent styling, single-line titles, UI-only color metadata, no workspace Flow action and confirmed local delete.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
 - Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
 - Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.

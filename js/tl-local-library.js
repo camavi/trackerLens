@@ -13,6 +13,12 @@ window.TrackerLensLocalLibrary = (() => {
     return raw === "boxTracker" ? "boxTracker" : "boxLens";
   };
 
+  const normalizeColor = (content = {}, fallback = "#9b5cf5") => {
+    const ui = content.ui && typeof content.ui === "object" ? content.ui : {};
+    const value = normalizeText(ui.color || content.color, fallback);
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  };
+
   const normalizeVersionedContent = (content) =>
     window.TrackerLensBoxVersioning?.normalizeBox ? window.TrackerLensBoxVersioning.normalizeBox(content) : content;
 
@@ -68,7 +74,7 @@ window.TrackerLensLocalLibrary = (() => {
       description: normalizeText(content.description, "Nessuna descrizione disponibile."),
       author: normalizeText(content.author, "Locale"),
       icon: normalizeText(content.icon, type === "boxTracker" ? "cloud_queue" : "dashboard"),
-      color: normalizeText(content.color, type === "boxTracker" ? "#35c979" : "#9b5cf5"),
+      color: normalizeColor(content, type === "boxTracker" ? "#35c979" : "#9b5cf5"),
       version: normalizeText(content.version, "0.1.0"),
       runtimeVersion: normalizeText(content.runtimeVersion || content.versioning?.runtimeVersion, ">=0.1.0"),
       versioning: content.versioning && typeof content.versioning === "object" ? { ...content.versioning } : null,
@@ -133,6 +139,7 @@ window.TrackerLensLocalLibrary = (() => {
       description,
       author: normalizeText(content.author, "Locale"),
       icon: "dashboard_customize",
+      color: normalizeColor(content, "#38bdf8"),
       version: normalizeText(content.version, "0.1.0"),
       creator: content.creator && typeof content.creator === "object" ? { ...content.creator } : null,
       marketplace: content.marketplace && typeof content.marketplace === "object" ? { ...content.marketplace } : null,

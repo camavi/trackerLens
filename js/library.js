@@ -30,6 +30,18 @@ const selectArrowSlot = {
 
 const DB_NAME = (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
 const SETTINGS_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_SETTINGS : null) || "tl_settings";
+const WIDGET_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_WIDGETS : null) || "tl_widgets";
+const PAGE_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_PAGES : null) || "tl_pages";
+const CONNECTION_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CONNECTIONS : null) || "tl_connections";
+const WORKSPACE_SCOPED_STORES = [
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CHANNELS : null) || "tl_channels",
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FLOWS : null) || "tl_flows",
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_EVENTS : null) || "tl_events",
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FLOW_LOGS : null) || "tl_flow_logs",
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_RUNTIME_NODES : null) || "tl_runtime_nodes",
+  (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_RUNTIME_DEPENDENCIES : null) || "tl_runtime_dependencies",
+  CONNECTION_STORE,
+];
 const FAVORITES_RECORD_ID = "library_favorites";
 
 const openChromePage = (url) => {
@@ -56,8 +68,105 @@ const openWorkspaceView = (workspaceId) => {
   openChromePage(`workspace.html?workspaceId=${encodeURIComponent(workspaceId)}`);
 };
 
-const openWorkspaceFlowMap = (workspaceId) => {
-  openChromePage(`flowMap.html?workspaceId=${encodeURIComponent(workspaceId)}`);
+const validHexColor = (value = "") => /^#[0-9a-f]{6}$/i.test(String(value || "").trim());
+const normalizeColor = (value = "", fallback = "#38bdf8") => validHexColor(value) ? String(value).trim() : fallback;
+const hexToRgb = (hex = "#38bdf8") => {
+  const value = normalizeColor(hex).slice(1);
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ].join(", ");
+};
+const assetColorStyle = (color = "#38bdf8") => ({
+  "--tl-asset-color": normalizeColor(color),
+  "--tl-asset-rgb": hexToRgb(color),
+});
+
+const contentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};
+
+const openLibraryDb = () =>
+  new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("IndexedDB non disponibile"));
+      return;
+    }
+    const request = indexedDB.open(DB_NAME);
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB libreria"));
+  });
+
+const readLibraryRecord = async (storeName, id) => {
+  if (!storeName || !id) return null;
+  const db = await openLibraryDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
+      request.onsuccess = (event) => resolve(event.target.result || null);
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const writeLibraryRecord = async (storeName, record) => {
+  if (!storeName || !record?.id) return null;
+  const db = await openLibraryDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
+      request.onsuccess = () => resolve(record);
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const deleteLibraryRecord = async (storeName, id) => {
+  if (!storeName || !id) return null;
+  const db = await openLibraryDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readwrite").objectStore(storeName).delete(id);
+      request.onsuccess = () => resolve(id);
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const deleteScopedLibraryRecords = async (storeName, workspaceId = "") => {
+  if (!storeName || !workspaceId) return [];
+  const db = await openLibraryDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return [];
+    const records = await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
+    });
+    const ids = records
+      .filter((record) => record?.workspaceId === workspaceId || record?.id === workspaceId)
+      .map((record) => record.id)
+      .filter(Boolean);
+    if (!ids.length) return [];
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(storeName, "readwrite");
+      const store = transaction.objectStore(storeName);
+      ids.forEach((id) => store.delete(id));
+      transaction.oncomplete = () => resolve(ids);
+      transaction.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
+    });
+    return ids;
+  } finally {
+    db.close();
+  }
 };
 
 const exportLibraryItem = async (item, event = null) => {
@@ -70,6 +179,60 @@ const exportLibraryItem = async (item, event = null) => {
     }
   } catch (error) {
     libraryState.error = error?.message || "Export non riuscito.";
+    mountLibrary();
+  }
+};
+
+const saveLibraryItemColor = async (item, color, event = null) => {
+  event?.stopPropagation?.();
+  if (!validHexColor(color)) return;
+  try {
+    const storeName = item.type === "workspace" ? PAGE_STORE : WIDGET_STORE;
+    const record = await readLibraryRecord(storeName, item.id);
+    const content = contentOf(record);
+    const nextContent = {
+      ...content,
+      id: content.id || item.id,
+      ui: {
+        ...(content.ui && typeof content.ui === "object" ? content.ui : {}),
+        color,
+        colorUpdatedAt: new Date().toISOString(),
+      },
+    };
+    await writeLibraryRecord(storeName, { ...(record || {}), id: item.id, content: nextContent });
+    libraryState.widgets = libraryState.widgets.map((asset) => asset.id === item.id ? { ...asset, color } : asset);
+    mountLibrary();
+  } catch (error) {
+    libraryState.error = error?.message || "Colore non salvato.";
+    mountLibrary();
+  }
+};
+
+const deleteLibraryItem = async (item, event = null) => {
+  event?.stopPropagation?.();
+  const confirmed = window.confirm(`Eliminare "${item.name}" dalla libreria locale?\n\nQuesta azione non puo essere annullata.`);
+  if (!confirmed) return;
+
+  try {
+    if (item.type === "workspace") {
+      await Promise.all([
+        deleteLibraryRecord(PAGE_STORE, item.id),
+        ...WORKSPACE_SCOPED_STORES.map((storeName) => deleteScopedLibraryRecords(storeName, item.id)),
+      ]);
+    } else {
+      await deleteLibraryRecord(WIDGET_STORE, item.id);
+    }
+
+    if (libraryState.favoriteIds.has(String(item.id))) {
+      const nextIds = new Set(libraryState.favoriteIds);
+      nextIds.delete(String(item.id));
+      libraryState.favoriteIds = nextIds;
+      await saveFavoriteIds().catch((error) => console.warn("[TrackerLens Library Favorites]", error));
+    }
+
+    await loadLibrary();
+  } catch (error) {
+    libraryState.error = error?.message || "Eliminazione non riuscita.";
     mountLibrary();
   }
 };
@@ -233,6 +396,7 @@ const normalizeWidget = (record, index) => {
     description: normalizeText(content.description, "Nessuna descrizione disponibile."),
     author: normalizeText(content.author, "Locale"),
     icon: normalizeText(content.icon),
+    color: normalizeColor(content.ui?.color || content.color, type === "boxTracker" ? "#35c979" : "#9b5cf5"),
     version: normalizeText(content.version, "0.1.0"),
     updatedAt,
     searchText: [
@@ -265,6 +429,7 @@ const normalizeWorkspace = (record, index) => {
     description,
     author: normalizeText(content.author, "Locale"),
     icon: "dashboard_customize",
+    color: normalizeColor(content.ui?.color || content.color, "#38bdf8"),
     version: normalizeText(content.version, "0.1.0"),
     updatedAt,
     searchText: [
@@ -477,7 +642,7 @@ const setView = (view) => {
 const looksLikeImage = (value) => /^(https?:|data:image|\.{0,2}\/|icons\/|cmswift-fe\/)/i.test(value);
 
 const renderBoxIcon = (box) => {
-  const className = `tl-card-icon${box.type === "boxTracker" ? " is-tracker" : ""}${box.type === "workspace" ? " is-workspace" : ""}`;
+  const className = `tl-card-icon tl-asset-card-icon${box.type === "boxTracker" ? " is-tracker" : ""}${box.type === "workspace" ? " is-workspace" : ""}`;
   if (box.icon && looksLikeImage(box.icon)) {
     return _.span({ class: className }, _.img({ src: box.icon, alt: "" }));
   }
@@ -508,29 +673,49 @@ const renderTrustBadge = (box) => {
 const renderBoxCard = (box) =>
   _.Card(
     {
-      class: "tl-box-card",
+      class: `tl-box-card tl-asset-card is-${box.type}`,
+      style: assetColorStyle(box.color),
       tabindex: "0",
       onclick: () => openBoxEditor(box),
       onkeydown: (event) => {
         if (event.key === "Enter") openBoxEditor(box);
       },
     },
-    _.Grid(
-      { class: "tl-card-head", cols: "52px minmax(0, 1fr) 32px", gap: 14, align: "center" },
-      renderBoxIcon(box),
-      _.div(
-        { class: "tl-card-title" },
+    _.div(
+      { class: "tl-card-head tl-asset-card-head" },
+      _.Row(
+        { class: "tl-asset-title-row", align: "start", justify: "space-between", gap: 10 },
         _.h3(box.name),
-        _.div({ class: "tl-card-type" }, box.type),
-        renderTrustBadge(box)
+        _.Row(
+          { class: "tl-asset-title-actions", align: "center", gap: 6 },
+          _.label(
+            { class: "tl-asset-color-picker", title: "Colore card", "aria-label": `Colore ${box.name}`, onclick: (event) => event.stopPropagation() },
+            _.span({ class: "tl-asset-color-swatch", "aria-hidden": "true" }),
+            _.input({
+              type: "color",
+              value: box.color,
+              "aria-label": `Scegli colore ${box.name}`,
+              onchange: (event) => saveLibraryItemColor(box, event.target.value, event),
+            })
+          ),
+          btn(
+            {
+              class: `tl-card-favorite${isFavorite(box) ? " is-active" : ""}`,
+              "aria-label": isFavorite(box) ? `Rimuovi ${box.name} dai preferiti` : `Aggiungi ${box.name} ai preferiti`,
+              onclick: (event) => toggleFavorite(box, event),
+            },
+            icon(isFavorite(box) ? "star" : "star_outline", "sm")
+          )
+        )
       ),
-      btn(
-        {
-          class: `tl-card-favorite${isFavorite(box) ? " is-active" : ""}`,
-          "aria-label": isFavorite(box) ? `Rimuovi ${box.name} dai preferiti` : `Aggiungi ${box.name} ai preferiti`,
-          onclick: (event) => toggleFavorite(box, event),
-        },
-        icon(isFavorite(box) ? "star" : "star_outline", "sm")
+      _.Grid(
+        { class: "tl-asset-card-meta-row", cols: "52px minmax(0, 1fr)", gap: 14, align: "center" },
+        renderBoxIcon(box),
+        _.div(
+          { class: "tl-asset-card-badges" },
+          _.span({ class: `tl-asset-type-badge is-${box.type}` }, box.type),
+          renderTrustBadge(box)
+        )
       )
     ),
     _.p({ class: "tl-card-description" }, box.description),
@@ -546,32 +731,20 @@ const renderBoxCard = (box) =>
       _.Row(
         { class: "tl-card-actions", align: "center", gap: 8 },
         box.type === "workspace"
-          ? [
-            btn(
-              {
-                class: "tl-workspace-open",
-                onclick: (event) => {
-                  event.stopPropagation();
-                  openWorkspaceView(box.id);
-                },
+          ? btn(
+            {
+              class: "tl-workspace-open",
+              onclick: (event) => {
+                event.stopPropagation();
+                openWorkspaceView(box.id);
               },
-              icon("open_in_new", "sm"),
-              "Apri"
-            ),
-            btn(
-              {
-                class: "tl-workspace-flow",
-                onclick: (event) => {
-                  event.stopPropagation();
-                  openWorkspaceFlowMap(box.id);
-                },
-              },
-              icon("account_tree", "sm"),
-              "Flow"
-            ),
-          ]
+            },
+            icon("open_in_new", "sm"),
+            "Apri"
+          )
           : btn({ class: "tl-card-more", "aria-label": `Azioni ${box.name}`, onclick: (event) => event.stopPropagation() }, icon("more_horiz", "sm")),
-        btn({ class: "tl-card-more", "aria-label": `Export ${box.name}`, onclick: (event) => exportLibraryItem(box, event) }, icon("download", "sm"))
+        btn({ class: "tl-card-more tl-asset-download", "aria-label": `Export ${box.name}`, onclick: (event) => exportLibraryItem(box, event) }, icon("download", "sm")),
+        btn({ class: "tl-card-more is-danger", "aria-label": `Elimina ${box.name}`, onclick: (event) => deleteLibraryItem(box, event) }, icon("delete", "sm"))
       )
     )
   );

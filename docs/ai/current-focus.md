@@ -27,6 +27,7 @@ Flow Map library separation baseline is complete:
 - Flow Map library cards now use per-flow accent colors, a mini graph visual layer, metric pills and a card color picker persisted as UI metadata without changing flow `updatedAt`;
 - Flow Map export from `flowMap.html` now downloads `.tlflow` bundles with embedded assets and runtime graph;
 - Flow Map import accepts `.tlflow` while keeping `.tlworkspace` compatibility.
+- Asset library cards now have a modern gradient/accent treatment, single-line left-aligned titles, UI-only color picker, no workspace Flow button and confirmed delete actions.
 
 Flow Map canvas interaction refinement is complete:
 
