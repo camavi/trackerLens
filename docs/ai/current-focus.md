@@ -28,6 +28,8 @@ Flow Map canvas interaction refinement is complete:
 - The node delete dialog includes `Force Delete All Children` when downstream nodes exist, deleting the node plus every recursive child node.
 - The Flow Map canvas now shows a red center marker at graph center and the edge canvas draw area is wider to avoid clipping long cables.
 - Runtime Minimap now fits graph bounds instead of zoom perspective, shows the visible viewport in graph coordinates, updates live during canvas pan/zoom, supports dragging the viewport box and can be minimized with persisted state.
+- Runtime Minimap node markers now inherit each node tone color for clearer graph orientation.
+- Runtime Minimap node markers now use rectangular 2px-radius shapes sized from each node's rendered height after first paint, including collapsed nodes.
 - Preview node payload header now keeps action buttons visible with long channel names, and newly created Preview nodes ignore cached events older than their creation/clear timestamp.
 - Sample Test nodes now normalize numeric flow positions into CSS percent values before rendering, preventing stacked nodes until the first drag repaint.
 - Knowledge Sample Test now uses a wider margin-aware layout with larger row spacing so generated nodes do not overlap the rows below.

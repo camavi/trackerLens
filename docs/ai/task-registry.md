@@ -121,6 +121,8 @@ Main files:
 ## Completed Major Runtime Tasks
 
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
+- Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
+- Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.
 - Flow Map recursive delete action: node delete dialog can force-delete the selected node plus every downstream child node.
 - Flow Map Preview polish: long payload headers preserve copy/clear actions, and newly created Preview nodes start clean instead of replaying older cached events.
 - Flow Map Sample Test render fix: numeric flow positions normalize to CSS percent coordinates so generated nodes render in place immediately.

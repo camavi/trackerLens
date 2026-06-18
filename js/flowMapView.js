@@ -23,7 +23,11 @@ const refreshPortUiDom = () => {
   restorePanelScroll(scrollPositions);
   requestAnimationFrame(() => {
     renderFlowEdges();
-    requestAnimationFrame(renderFlowEdges);
+    updateFlowMinimapDom?.();
+    requestAnimationFrame(() => {
+      renderFlowEdges();
+      updateFlowMinimapDom?.();
+    });
   });
 };
 
@@ -37,7 +41,11 @@ const mount = (options = {}) => {
   if (scrollPositions) restorePanelScroll(scrollPositions);
   requestAnimationFrame(() => {
     renderFlowEdges();
-    requestAnimationFrame(renderFlowEdges);
+    updateFlowMinimapDom?.();
+    requestAnimationFrame(() => {
+      renderFlowEdges();
+      updateFlowMinimapDom?.();
+    });
   });
 };
 

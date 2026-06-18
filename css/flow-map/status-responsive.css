@@ -69,13 +69,14 @@
   position: absolute;
   left: var(--x);
   top: var(--y);
-  width: 9px;
-  height: 9px;
+  width: var(--w, 9px);
+  height: var(--h, 9px);
+  min-width: 5px;
+  min-height: 5px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: 2px;
   background: rgba(var(--node-rgb, 148, 163, 184), 0.28);
-  transform: translate(-50%, -50%);
   cursor: pointer;
 }
 
@@ -84,8 +85,6 @@
 }
 
 .tl-flow-minimap-node.is-selected {
-  width: 12px;
-  height: 12px;
   box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.25);
 }
 

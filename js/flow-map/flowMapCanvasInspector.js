@@ -955,6 +955,7 @@ const refreshRuntimeDom = ({ preserveScroll = false } = {}) => {
   requestAnimationFrame(() => {
     refreshLiveBusDom();
     renderFlowEdges();
+    updateFlowMinimapDom();
   });
 };
 
@@ -1130,23 +1131,48 @@ const minimapViewportBounds = (rect = { width: 1440, height: 900 }) => {
   };
 };
 
+const minimapNodeSizePercent = (node = {}, rect = { width: 1440, height: 900 }) => {
+  const host = document.querySelector(".tl-flow-canvas");
+  const element = node?.id
+    ? document.querySelector(`[data-flow-node-id="${escapeSelectorValue(node.id)}"]`)
+    : null;
+  const zoom = Math.max(0.1, Number(state.viewport.zoom) || 1);
+  const hostRect = host?.getBoundingClientRect?.();
+  const nodeRect = element?.getBoundingClientRect?.();
+  if (!node.metadata?.collapsed && hostRect?.width && hostRect?.height && nodeRect?.width && nodeRect?.height) {
+    return {
+      width: (nodeRect.width / zoom / hostRect.width) * 100,
+      height: (nodeRect.height / zoom / hostRect.height) * 100,
+    };
+  }
+
+  const portCount = Math.max(nodePorts(node, "in").length, nodePorts(node, "out").length, 1);
+  return {
+    width: (210 / Math.max(1, rect.width || 1440)) * 100,
+    height: ((node.metadata?.collapsed ? 92 : nodeMinHeight(portCount)) / Math.max(1, rect.height || 900)) * 100,
+  };
+};
+
 const minimapGraphFrame = (graph = {}, rect = { width: 1440, height: 900 }) => {
   const viewport = minimapViewportBounds(rect);
   const positions = (graph.nodes || []).map((node, index) => {
     const pos = nodePosition(node, index);
+    const size = minimapNodeSizePercent(node, rect);
     return {
       node,
       index,
       x: Number(parseFloat(pos.x)) || 0,
       y: Number(parseFloat(pos.y)) || 0,
+      width: size.width,
+      height: size.height,
     };
   });
   const seed = positions.length
     ? positions.reduce((acc, item) => ({
       minX: Math.min(acc.minX, item.x),
       minY: Math.min(acc.minY, item.y),
-      maxX: Math.max(acc.maxX, item.x),
-      maxY: Math.max(acc.maxY, item.y),
+      maxX: Math.max(acc.maxX, item.x + item.width),
+      maxY: Math.max(acc.maxY, item.y + item.height),
     }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity })
     : { minX: 0, minY: 0, maxX: 100, maxY: 100 };
   const viewportSpanX = Math.max(1, viewport.maxX - viewport.minX);
@@ -1181,6 +1207,14 @@ const minimapViewportStyle = (frame) => {
   };
 };
 
+const minimapNodeStyle = ({ node = {}, frame = {}, x = 0, y = 0 } = {}) => ({
+  "--x": `${frame.mapX(x)}%`,
+  "--y": `${frame.mapY(y)}%`,
+  "--w": `${Math.max(1.4, frame.mapX(x + (node.__minimapWidth || 0)) - frame.mapX(x))}%`,
+  "--h": `${Math.max(2.4, frame.mapY(y + (node.__minimapHeight || 0)) - frame.mapY(y))}%`,
+  "--node-rgb": toneRgb(graphTone(node)).join(", "),
+});
+
 const setMinimapViewportElementStyle = (element, viewport) => {
   if (!element || !viewport) return;
   element.style.setProperty("--x", `${viewport.x}%`);
@@ -1195,6 +1229,17 @@ const updateFlowMinimapDom = () => {
   const host = document.querySelector(".tl-flow-canvas");
   if (!minimap || !viewportElement || !host || !(state.edgeRender.graph?.nodes || []).length) return;
   const frame = minimapGraphFrame(state.edgeRender.graph, host.getBoundingClientRect());
+  frame.positions.forEach(({ node, x, y, width, height }) => {
+    const element = minimap.querySelector(`[data-flow-minimap-node-id="${escapeSelectorValue(node.id)}"]`);
+    if (!element) return;
+    const style = minimapNodeStyle({
+      node: { ...node, __minimapWidth: width, __minimapHeight: height },
+      frame,
+      x,
+      y,
+    });
+    Object.entries(style).forEach(([key, value]) => element.style.setProperty(key, value));
+  });
   setMinimapViewportElementStyle(viewportElement, minimapViewportStyle(frame));
 };
 
@@ -1293,11 +1338,13 @@ const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
           }
         },
       },
-      ...frame.positions.map(({ node, index, x, y }) => {
+      ...frame.positions.map(({ node, index, x, y, width, height }) => {
+        const minimapNode = { ...node, __minimapWidth: width, __minimapHeight: height };
         return _.button({
           type: "button",
           class: `tl-flow-minimap-node is-${graphTone(node)}${renderedIds.has(node.id) ? " is-visible" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}`,
-          style: { "--x": `${frame.mapX(x)}%`, "--y": `${frame.mapY(y)}%` },
+          style: minimapNodeStyle({ node: minimapNode, frame, x, y }),
+          "data-flow-minimap-node-id": node.id,
           title: node.label || node.id,
           "aria-label": `Center ${node.label || node.id}`,
           onclick: (event) => {
