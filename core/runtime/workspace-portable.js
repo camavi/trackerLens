@@ -183,8 +183,15 @@ window.TrackerLensPortableRuntime = (() => {
       ...await exportWorkspace(id, { includeAssets: true, includeRuntimeGraph: true, ...options }),
       ...packageMeta("flowmap", "", id),
     };
-    bundle.kind = "workspace";
+    bundle.kind = "flowmap";
     bundle.name = bundle.workspace?.name || bundle.workspace?.title || id;
+    bundle.workspace = {
+      ...(bundle.workspace || {}),
+      type: "flowmap",
+      kind: "flowmap",
+      format: "tlflow",
+      libraryKind: "flowmap",
+    };
     downloadJson(bundle, `${safeName(bundle.name || id)}.tlflow`);
     return bundle;
   };
@@ -194,12 +201,12 @@ window.TrackerLensPortableRuntime = (() => {
     const warnings = [];
     if (!bundle || typeof bundle !== "object") errors.push("Bundle non valido");
     if (!["tlworkspace", "tlflow", "tlbox"].includes(bundle.format)) warnings.push("format non riconosciuto o legacy");
-    if (bundle.kind !== "workspace" && bundle.kind !== "box" && bundle.format !== "tlworkspace" && bundle.format !== "tlflow" && bundle.format !== "tlbox") {
+    if (bundle.kind !== "workspace" && bundle.kind !== "flowmap" && bundle.kind !== "box" && bundle.format !== "tlworkspace" && bundle.format !== "tlflow" && bundle.format !== "tlbox") {
       errors.push("kind/formato non supportato");
     }
     if ((bundle.kind === "box" || bundle.format === "tlbox") && !bundle.box) errors.push("box mancante");
-    if ((bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow") && !bundle.workspace) errors.push("workspace mancante");
-    const boxes = bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow" ? bundle.assets || [] : [bundle.box].filter(Boolean);
+    if ((bundle.kind === "workspace" || bundle.kind === "flowmap" || bundle.format === "tlworkspace" || bundle.format === "tlflow") && !bundle.workspace) errors.push("workspace mancante");
+    const boxes = bundle.kind === "workspace" || bundle.kind === "flowmap" || bundle.format === "tlworkspace" || bundle.format === "tlflow" ? bundle.assets || [] : [bundle.box].filter(Boolean);
     boxes.forEach((box) => {
       const validation = window.TrackerLensBoxVersioning?.validateBox ? window.TrackerLensBoxVersioning.validateBox(box) : { ok: true, warnings: [] };
       if (!validation.ok) errors.push(...validation.errors.map((error) => `${box?.id || "box"}: ${error}`));
@@ -221,7 +228,7 @@ window.TrackerLensPortableRuntime = (() => {
     return existing ? `${id}_import_${Date.now()}` : id;
   };
 
-  const importBundle = async (bundle = {}, { onConflict = "overwrite", includeRuntimeGraph = true } = {}) => {
+  const importBundle = async (bundle = {}, { onConflict = "overwrite", includeRuntimeGraph = true, forceKind = "" } = {}) => {
     const validation = validateBundle(bundle);
     if (!validation.ok) throw new Error(validation.errors.join(", "));
     if (!bundle || typeof bundle !== "object") throw new Error("Bundle portable non valido");
@@ -233,26 +240,49 @@ window.TrackerLensPortableRuntime = (() => {
       await write(WIDGET_STORE, { id, content: normalizeBox({ ...box, id, updatedAt: now() }) });
       return { kind: "box", id };
     }
-    if (bundle.kind === "workspace" || bundle.format === "tlworkspace" || bundle.format === "tlflow") {
+    if (bundle.kind === "workspace" || bundle.kind === "flowmap" || bundle.format === "tlworkspace" || bundle.format === "tlflow") {
       const workspace = bundle.workspace || {};
-      const requestedId = normalizeText(workspace.id || bundle.id, `workspace_${Date.now()}`);
+      const isFlowMap = forceKind === "flowmap" || bundle.kind === "flowmap" || bundle.format === "tlflow";
+      const requestedId = normalizeText(workspace.id || bundle.id, `${isFlowMap ? "flowmap" : "workspace"}_${Date.now()}`);
       const id = await existingIdFor(PAGE_STORE, requestedId, onConflict);
-      if (onConflict === "skip" && await read(PAGE_STORE, requestedId)) return { kind: "workspace", id: requestedId, skipped: true };
+      if (onConflict === "skip" && await read(PAGE_STORE, requestedId)) return { kind: isFlowMap ? "flowmap" : "workspace", id: requestedId, skipped: true };
+      const workspaceRest = { ...workspace };
+      const workspaceType = workspaceRest.type;
+      delete workspaceRest.type;
+      delete workspaceRest.kind;
+      delete workspaceRest.format;
+      delete workspaceRest.libraryKind;
       await Promise.all((bundle.assets || []).map((asset) => {
         const assetId = normalizeText(asset.id, "");
         return assetId ? write(WIDGET_STORE, { id: assetId, content: normalizeBox({ ...asset, updatedAt: now() }) }) : null;
       }).filter(Boolean));
-      await write(PAGE_STORE, { id, content: { ...workspace, id, updatedAt: now() } });
+      await write(PAGE_STORE, {
+        id,
+        content: {
+          ...workspaceRest,
+          id,
+          ...(isFlowMap
+            ? { type: "flowmap", kind: "flowmap", format: "tlflow", libraryKind: "flowmap" }
+            : { type: workspaceType === "flowmap" ? "workspace" : workspaceType }),
+          updatedAt: now(),
+        },
+      });
       const graph = bundle.runtime?.graph;
       if (includeRuntimeGraph && graph) {
         await Promise.all([
           writeMany(RUNTIME_STORES.channels, graph.channels || []),
           writeMany(RUNTIME_STORES.nodes, graph.nodes || []),
           writeMany(RUNTIME_STORES.dependencies, graph.dependencies || []),
-          writeMany(RUNTIME_STORES.flows, graph.flows || []),
+          writeMany(RUNTIME_STORES.flows, (graph.flows || []).map((flow) => isFlowMap ? {
+            ...flow,
+            type: "flowmap",
+            kind: "flowmap",
+            format: "tlflow",
+            libraryKind: "flowmap",
+          } : flow)),
         ]);
       }
-      return { kind: "workspace", id };
+      return { kind: isFlowMap ? "flowmap" : "workspace", id };
     }
     throw new Error(`Formato portable non supportato: ${bundle.format || bundle.kind || "unknown"}`);
   };

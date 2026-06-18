@@ -21,12 +21,14 @@ Knowledge Runtime local-first baseline.
 Flow Map library separation baseline is complete:
 
 - global sidebar `Flow Map` now opens `libraryFlowmap.html` instead of a single workspace flow;
-- `libraryFlowmap.html` lists local Flow Maps/workspace runtime graphs from IndexedDB and opens `flowMap.html?workspaceId=...`;
+- `libraryFlowmap.html` lists local `.tlflow` Flow Maps from IndexedDB and opens `flowMap.html?workspaceId=...`;
 - Flow Map library sidebar filters by searchable categories, while sorting is in the result toolbar;
+- Flow Map library `Nuovo Flow Map` opens a CMSwift creation dialog for title, description, category, color and version, then creates dedicated `tl_pages` and `tl_flows` records;
 - Flow Map library cards include a confirmed delete action for the local flow, scoped runtime graph, channels, events, logs and connections;
 - Flow Map library cards now use per-flow accent colors, a mini graph visual layer, metric pills and a card color picker persisted as UI metadata without changing flow `updatedAt`;
 - Flow Map export from `flowMap.html` now downloads `.tlflow` bundles with embedded assets and runtime graph;
 - Flow Map import accepts `.tlflow` while keeping `.tlworkspace` compatibility.
+- Flow Map and asset library environments are separated: `library.html` filters out Flow Map page records, while `libraryFlowmap.html` lists only `.tlflow`/flowmap-marked records and imports legacy bundles as Flow Map when invoked there.
 - Asset library cards now have a modern gradient/accent treatment, single-line left-aligned titles, UI-only color picker, no workspace Flow button and confirmed delete actions.
 
 Flow Map canvas interaction refinement is complete:

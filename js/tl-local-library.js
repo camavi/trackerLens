@@ -22,6 +22,11 @@ window.TrackerLensLocalLibrary = (() => {
   const normalizeVersionedContent = (content) =>
     window.TrackerLensBoxVersioning?.normalizeBox ? window.TrackerLensBoxVersioning.normalizeBox(content) : content;
 
+  const isFlowMapContent = (record = {}) => {
+    const content = record?.content && typeof record.content === "object" ? record.content : record || {};
+    return content.type === "flowmap" || content.kind === "flowmap" || content.format === "tlflow" || record?.format === "tlflow";
+  };
+
   const openDb = () =>
     new Promise((resolve, reject) => {
       if (!window.indexedDB) {
@@ -164,7 +169,7 @@ window.TrackerLensLocalLibrary = (() => {
     ]);
 
     return [
-      ...pageRecords.map(normalizeWorkspace),
+      ...pageRecords.filter((record) => !isFlowMapContent(record)).map(normalizeWorkspace),
       ...widgetRecords.map(normalizeWidgetAsset),
     ];
   };
@@ -211,5 +216,6 @@ window.TrackerLensLocalLibrary = (() => {
     listWidgetAssets,
     normalizeWidgetAsset,
     normalizeWorkspace,
+    isFlowMapContent,
   };
 })();

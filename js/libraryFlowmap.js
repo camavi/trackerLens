@@ -34,11 +34,23 @@ const CHANNEL_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CHA
 const EVENT_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_EVENTS : null) || "tl_events";
 const FLOW_LOG_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FLOW_LOGS : null) || "tl_flow_logs";
 const CONNECTION_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CONNECTIONS : null) || "tl_connections";
+const FLOW_LIBRARY_STORE_DEFINITIONS = [
+  { name: PAGE_STORE },
+  { name: FLOW_STORE, indexes: ["workspaceId", "status", "updatedAt"] },
+  { name: NODE_STORE, indexes: ["workspaceId", "type", "updatedAt"] },
+  { name: DEPENDENCY_STORE, indexes: ["workspaceId", "sourceNodeId", "targetNodeId", "updatedAt"] },
+  { name: CHANNEL_STORE, indexes: ["workspaceId"] },
+  { name: EVENT_STORE, indexes: ["workspaceId"] },
+  { name: FLOW_LOG_STORE, indexes: ["workspaceId"] },
+  { name: CONNECTION_STORE, indexes: ["workspaceId"] },
+];
 
 const normalizeText = (value, fallback = "") => value === null || value === undefined ? fallback : String(value).trim() || fallback;
 const openChromePage = (url) => window.location.assign(url);
 const openFlowMap = (workspaceId) => openChromePage(`flowMap.html?workspaceId=${encodeURIComponent(workspaceId)}`);
 const flowColorPalette = ["#38bdf8", "#35c979", "#ffc72c", "#f472b6", "#a78bfa", "#2dd4bf", "#fb7185", "#60a5fa"];
+const safeFlowId = (value = "") =>
+  normalizeText(value, "flowmap").toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "flowmap";
 
 const validHexColor = (value = "") => /^#[0-9a-f]{6}$/i.test(String(value || "").trim());
 
@@ -74,9 +86,33 @@ const openDb = () =>
       return;
     }
     const request = indexedDB.open(DB_NAME);
+    request.onupgradeneeded = (event) => createMissingFlowLibraryStores(event.target.result);
     request.onsuccess = (event) => resolve(event.target.result);
     request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
   });
+
+const createMissingFlowLibraryStores = (db) => {
+  FLOW_LIBRARY_STORE_DEFINITIONS.forEach((definition) => {
+    if (db.objectStoreNames.contains(definition.name)) return;
+    const store = db.createObjectStore(definition.name, { keyPath: "id" });
+    (definition.indexes || []).forEach((index) => store.createIndex(index, index, { unique: false }));
+  });
+};
+
+const ensureFlowLibraryStores = async (storeNames = []) => {
+  const db = await openDb();
+  const required = storeNames.length ? storeNames : FLOW_LIBRARY_STORE_DEFINITIONS.map((definition) => definition.name);
+  if (required.every((storeName) => db.objectStoreNames.contains(storeName))) return db;
+  const nextVersion = db.version + 1;
+  db.close();
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, nextVersion);
+    request.onupgradeneeded = (event) => createMissingFlowLibraryStores(event.target.result);
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onerror = (event) => reject(event.target.error || new Error("Errore aggiornamento IndexedDB Flow Map"));
+    request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
+  });
+};
 
 const readAll = async (storeName) => {
   const db = await openDb();
@@ -109,7 +145,7 @@ const readRecord = async (storeName, id) => {
 
 const writeRecord = async (storeName, record) => {
   if (!storeName || !record?.id) return null;
-  const db = await openDb();
+  const db = await ensureFlowLibraryStores([storeName]);
   try {
     if (!db.objectStoreNames.contains(storeName)) return null;
     return await new Promise((resolve, reject) => {
@@ -167,6 +203,14 @@ const deleteScopedRecords = async (storeName, workspaceId = "") => {
 
 const contentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};
 
+const isFlowMapRecord = (record = {}) => {
+  const content = contentOf(record);
+  return content.type === "flowmap" || content.kind === "flowmap" || content.format === "tlflow" || record?.format === "tlflow";
+};
+
+const isFlowMapFlow = (flow = {}) =>
+  flow?.type === "flowmap" || flow?.kind === "flowmap" || flow?.format === "tlflow" || flow?.libraryKind === "flowmap";
+
 const loadFlowMapsFromDb = async () => {
   const [pages, flows, nodes, dependencies] = await Promise.all([
     readAll(PAGE_STORE),
@@ -174,16 +218,17 @@ const loadFlowMapsFromDb = async () => {
     readAll(NODE_STORE),
     readAll(DEPENDENCY_STORE),
   ]);
-  const pageById = new Map(pages.map((record) => [normalizeText(record.id || contentOf(record).id), contentOf(record)]));
+  const flowMapPages = pages.filter(isFlowMapRecord);
+  const flowMapFlows = flows.filter(isFlowMapFlow);
+  const pageById = new Map(flowMapPages.map((record) => [normalizeText(record.id || contentOf(record).id), contentOf(record)]));
   const workspaceIds = new Set([
-    ...pages.map((record) => normalizeText(record.id || contentOf(record).id)).filter(Boolean),
-    ...flows.map((flow) => normalizeText(flow.workspaceId || flow.id)).filter(Boolean),
-    ...nodes.map((node) => normalizeText(node.workspaceId)).filter(Boolean),
+    ...flowMapPages.map((record) => normalizeText(record.id || contentOf(record).id)).filter(Boolean),
+    ...flowMapFlows.map((flow) => normalizeText(flow.workspaceId || flow.id)).filter(Boolean),
   ]);
 
   return Array.from(workspaceIds).map((workspaceId) => {
     const page = pageById.get(workspaceId) || {};
-    const flow = flows.find((item) => item.workspaceId === workspaceId || item.id === workspaceId) || {};
+    const flow = flowMapFlows.find((item) => item.workspaceId === workspaceId || item.id === workspaceId) || {};
     const scopedNodes = nodes.filter((node) => node.workspaceId === workspaceId);
     const scopedDependencies = dependencies.filter((dependency) => dependency.workspaceId === workspaceId);
     const name = normalizeText(flow.name || page.name || page.title, workspaceId);
@@ -243,7 +288,7 @@ const importFlowMapFile = () => {
     const file = input.files?.[0];
     if (!file) return;
     try {
-      const result = await window.TrackerLensPortableRuntime.importFile(file, { onConflict: "overwrite", includeRuntimeGraph: true });
+      const result = await window.TrackerLensPortableRuntime.importFile(file, { onConflict: "overwrite", includeRuntimeGraph: true, forceKind: "flowmap" });
       await loadFlowLibrary();
       if (result?.id) openFlowMap(result.id);
     } catch (error) {
@@ -300,6 +345,10 @@ const saveFlowMapColor = async (item, color, event = null) => {
       content: {
         ...pageContent,
         id: pageContent.id || item.id,
+        type: "flowmap",
+        kind: "flowmap",
+        format: "tlflow",
+        libraryKind: "flowmap",
         ui: {
           ...(pageContent.ui && typeof pageContent.ui === "object" ? pageContent.ui : {}),
           color,
@@ -312,6 +361,10 @@ const saveFlowMapColor = async (item, color, event = null) => {
     if (flowRecord?.id) {
       await writeRecord(FLOW_STORE, {
         ...flowRecord,
+        type: "flowmap",
+        kind: "flowmap",
+        format: "tlflow",
+        libraryKind: "flowmap",
         ui: {
           ...(flowRecord.ui && typeof flowRecord.ui === "object" ? flowRecord.ui : {}),
           color,
@@ -328,6 +381,111 @@ const saveFlowMapColor = async (item, color, event = null) => {
   }
 };
 
+const createFlowMapFromDialog = async ({ close, titleInput, descriptionInput, categoryInput, colorInput, versionInput }) => {
+  const title = normalizeText(titleInput.value, "Nuovo Flow Map");
+  const category = normalizeText(categoryInput.value, "global");
+  const version = normalizeText(versionInput.value, "0.1.0");
+  const color = validHexColor(colorInput.value) ? colorInput.value : defaultFlowColor(title);
+  const description = normalizeText(descriptionInput.value);
+  const now = new Date().toISOString();
+  const baseId = `flowmap_${safeFlowId(title)}`;
+  let workspaceId = baseId;
+  let suffix = 1;
+
+  while (await readRecord(PAGE_STORE, workspaceId)) {
+    suffix += 1;
+    workspaceId = `${baseId}_${suffix}`;
+  }
+
+  const pageContent = {
+    id: workspaceId,
+    name: title,
+    title,
+    description,
+    category,
+    version,
+    type: "flowmap",
+    kind: "flowmap",
+    format: "tlflow",
+    libraryKind: "flowmap",
+    status: "active",
+    boxes: [],
+    connections: [],
+    columns: 48,
+    ui: {
+      color,
+      colorUpdatedAt: now,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  const flow = {
+    id: `flow_${safeFlowId(workspaceId)}`,
+    workspaceId,
+    name: title,
+    category,
+    version,
+    status: "active",
+    type: "flowmap",
+    kind: "flowmap",
+    format: "tlflow",
+    libraryKind: "flowmap",
+    nodes: [],
+    connections: [],
+    ui: {
+      color,
+      colorUpdatedAt: now,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  try {
+    await Promise.all([
+      writeRecord(PAGE_STORE, { id: workspaceId, content: pageContent }),
+      writeRecord(FLOW_STORE, flow),
+    ]);
+    close?.();
+    await loadFlowLibrary();
+    openFlowMap(workspaceId);
+  } catch (error) {
+    flowLibraryState.error = error?.message || "Creazione Flow Map non riuscita.";
+    mountFlowLibrary();
+  }
+};
+
+const openCreateFlowMapDialog = () => {
+  const titleInput = _.input({ class: "tl-flow-library-dialog-input", value: "", placeholder: "Titolo Flow Map" });
+  const descriptionInput = _.textarea({ class: "tl-flow-library-dialog-input", rows: 3, placeholder: "Descrizione" });
+  const categoryInput = _.input({ class: "tl-flow-library-dialog-input", value: "global", placeholder: "Categoria" });
+  const colorInput = _.input({ class: "tl-flow-library-color-input", type: "color", value: defaultFlowColor(`flowmap_${Date.now()}`), "aria-label": "Colore Flow Map" });
+  const versionInput = _.input({ class: "tl-flow-library-dialog-input", value: "0.1.0", placeholder: "Versione" });
+  const dialog = _.Dialog({
+    class: "tl-flow-library-dialog",
+    panelClass: "tl-flow-library-dialog-panel",
+    size: "md",
+    title: "Nuovo Flow Map",
+    subtitle: "Crea un Flow Map locale dedicato",
+    icon: "account_tree",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-library-dialog-form" },
+      _.label(_.span("Titolo"), titleInput),
+      _.label(_.span("Description"), descriptionInput),
+      _.label(_.span("Categoria"), categoryInput),
+      _.label({ class: "tl-flow-library-color-field" }, _.span("Colore"), colorInput),
+      _.label(_.span("Versione"), versionInput)
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Annulla"),
+      btn({ class: "is-primary", onclick: () => createFlowMapFromDialog({ close, titleInput, descriptionInput, categoryInput, colorInput, versionInput }) }, icon("add", "sm"), "Crea")
+    ),
+  });
+  dialog.open();
+  requestAnimationFrame(() => titleInput.focus?.());
+};
+
 const renderTopbar = () =>
   _.header(
     { class: "tl-library-topbar" },
@@ -341,7 +499,7 @@ const renderTopbar = () =>
     _.Toolbar(
       { class: "tl-library-actions", align: "center", gap: 16 },
       btn({ class: "tl-library-menu", onclick: importFlowMapFile }, icon("upload_file", "sm"), "Import"),
-      btn({ class: "tl-library-create", onclick: () => openFlowMap("workspace_global") }, icon("add", "sm"), "Nuovo Flow Map")
+      btn({ class: "tl-library-create", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map")
     )
   );
 
@@ -503,7 +661,7 @@ const renderMain = () => {
           ? renderStateCard({ iconName: "warning", title: "Libreria Flow Map non disponibile", text: flowLibraryState.error, action: btn({ class: "tl-empty-action", onclick: loadFlowLibrary }, icon("refresh", "sm"), "Riprova") })
           : items.length
             ? _.Grid({ class: "tl-library-grid", cols: "repeat(auto-fill, minmax(240px, 1fr))", gap: "28px 18px" }, ...items.map(renderFlowCard))
-            : renderStateCard({ iconName: "account_tree", title: "Nessun Flow Map salvato", text: "Crea o importa un Flow Map per iniziare a separarlo dal workspace.", action: btn({ class: "tl-empty-action", onclick: () => openFlowMap("workspace_global") }, icon("add", "sm"), "Nuovo Flow Map") })
+            : renderStateCard({ iconName: "account_tree", title: "Nessun Flow Map salvato", text: "Crea o importa un Flow Map per iniziare a separarlo dal workspace.", action: btn({ class: "tl-empty-action", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map") })
     )
   );
 };

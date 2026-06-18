@@ -1286,3 +1286,93 @@ body {
   background: linear-gradient(180deg, #ffd84f, #d99a00);
   font-weight: 800;
 }
+
+.tl-flow-library-dialog-panel {
+  border: 1px solid rgba(86, 191, 245, 0.22);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(86, 191, 245, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(13, 24, 32, 0.98), rgba(5, 12, 18, 0.98));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
+}
+
+.tl-flow-library-dialog-form {
+  display: grid;
+  gap: 14px;
+}
+
+.tl-flow-library-dialog-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--tl-text-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tl-flow-library-dialog-input,
+.tl-flow-library-color-input {
+  width: 100%;
+  min-height: 42px;
+  color: var(--tl-text);
+  border: 1px solid rgba(214, 226, 235, 0.14);
+  border-radius: 8px;
+  background: rgba(3, 9, 14, 0.68);
+  padding: 0 12px;
+  outline: none;
+}
+
+textarea.tl-flow-library-dialog-input {
+  min-height: 92px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.tl-flow-library-dialog-input:focus,
+.tl-flow-library-color-input:focus {
+  border-color: rgba(86, 191, 245, 0.42);
+  box-shadow: 0 0 0 3px rgba(86, 191, 245, 0.12);
+}
+
+.tl-flow-library-color-input {
+  max-width: 88px;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.tl-flow-library-dialog .cms-dialog-actions .cms-btn,
+.tl-flow-library-dialog-panel .cms-dialog-actions .cms-btn,
+.tl-flow-library-dialog .cms-toolbar .cms-btn,
+.tl-flow-library-dialog-panel .cms-toolbar .cms-btn {
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-weight: 800;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.tl-flow-library-dialog .cms-dialog-actions .cms-btn:not(.is-primary),
+.tl-flow-library-dialog-panel .cms-dialog-actions .cms-btn:not(.is-primary),
+.tl-flow-library-dialog .cms-toolbar .cms-btn:not(.is-primary),
+.tl-flow-library-dialog-panel .cms-toolbar .cms-btn:not(.is-primary) {
+  color: #d8ecf8;
+  border-color: rgba(86, 191, 245, 0.24);
+  background: linear-gradient(180deg, rgba(19, 38, 50, 0.86), rgba(8, 18, 25, 0.92));
+}
+
+.tl-flow-library-dialog .cms-dialog-actions .cms-btn.is-primary,
+.tl-flow-library-dialog-panel .cms-dialog-actions .cms-btn.is-primary,
+.tl-flow-library-dialog .cms-toolbar .cms-btn.is-primary,
+.tl-flow-library-dialog-panel .cms-toolbar .cms-btn.is-primary {
+  color: #071116;
+  border-color: rgba(255, 199, 44, 0.58);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffd84f, #d99a00);
+  box-shadow: 0 14px 28px rgba(7, 184, 199, 0.2);
+}
+
+.tl-flow-library-dialog .cms-dialog-actions .cms-btn:hover,
+.tl-flow-library-dialog-panel .cms-dialog-actions .cms-btn:hover,
+.tl-flow-library-dialog .cms-toolbar .cms-btn:hover,
+.tl-flow-library-dialog-panel .cms-toolbar .cms-btn:hover {
+  transform: translateY(-1px);
+}
