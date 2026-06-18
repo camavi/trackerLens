@@ -1449,8 +1449,20 @@ const performanceLabel = (perf = {}) => {
 
 const graphModel = () => graphModelApi().build({ runtime: state.runtime, filters: state.filters });
 
+const cssFlowCoordinate = (value, fallback = "0%") => {
+  if (typeof value === "number" && Number.isFinite(value)) return `${value}%`;
+  const text = String(value ?? "").trim();
+  if (!text) return fallback;
+  return /%$/.test(text) ? text : `${Number.isFinite(Number(text)) ? Number(text) : parseFloat(text) || 0}%`;
+};
+
+const normalizeFlowPosition = (position = {}) => ({
+  x: cssFlowCoordinate(position.x),
+  y: cssFlowCoordinate(position.y),
+});
+
 const nodePosition = (node, index) => {
-  return graphModelApi().nodePosition({ node, index, overrides: state.nodePositions });
+  return normalizeFlowPosition(graphModelApi().nodePosition({ node, index, overrides: state.nodePositions }));
 };
 
 const recentActivity = (graph) => graphModelApi().recentActivity({

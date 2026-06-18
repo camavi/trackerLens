@@ -2771,39 +2771,80 @@ const requestRuntimeNodeConfig = (node) => {
   formRef = document.getElementById(formId);
 };
 
-const deletedNodeSnapshot = (node) => {
+const downstreamNodeTree = (rootNode = {}) => {
+  if (!rootNode?.id) return { ids: new Set(), nodes: [], dependencies: [] };
+  const bySource = new Map();
+  (state.runtime.dependencies || []).forEach((dependency) => {
+    if (!dependency.sourceNodeId || !dependency.targetNodeId) return;
+    if (!bySource.has(dependency.sourceNodeId)) bySource.set(dependency.sourceNodeId, []);
+    bySource.get(dependency.sourceNodeId).push(dependency);
+  });
+
+  const ids = new Set([rootNode.id]);
+  const queue = [rootNode.id];
+  const dependencies = [];
+  while (queue.length) {
+    const currentId = queue.shift();
+    (bySource.get(currentId) || []).forEach((dependency) => {
+      dependencies.push(dependency);
+      if (!ids.has(dependency.targetNodeId)) {
+        ids.add(dependency.targetNodeId);
+        queue.push(dependency.targetNodeId);
+      }
+    });
+  }
+
+  return {
+    ids,
+    nodes: [...ids].map((id) => nodeById(id)).filter(Boolean),
+    dependencies,
+  };
+};
+
+const deletedNodeTreeSnapshot = (nodes = [], rootNode = nodes[0]) => {
+  const nodeIds = new Set(nodes.map((node) => node?.id).filter(Boolean));
   const dependencyIds = new Set();
-  const dependencies = state.runtime.dependencies.filter((dependency) => {
-    const related = dependency.sourceNodeId === node.id || dependency.targetNodeId === node.id;
+  const dependencies = (state.runtime.dependencies || []).filter((dependency) => {
+    const related = nodeIds.has(dependency.sourceNodeId) || nodeIds.has(dependency.targetNodeId);
     if (related) dependencyIds.add(dependency.id);
     return related && !dependency.metadata?.virtual;
   });
-  const channels = state.runtime.channels.filter((channel) =>
-    channel.producerNodeId === node.id ||
-    channel.producerBoxId === node.id ||
-    (Array.isArray(channel.subscribers) && channel.subscribers.includes(node.id)));
+  const channels = (state.runtime.channels || []).filter((channel) =>
+    nodeIds.has(channel.producerNodeId) ||
+    nodeIds.has(channel.producerBoxId) ||
+    (Array.isArray(channel.subscribers) && channel.subscribers.some((nodeId) => nodeIds.has(nodeId))));
   return {
-    node: JSON.parse(JSON.stringify(node)),
+    node: rootNode ? JSON.parse(JSON.stringify(rootNode)) : null,
+    nodes: JSON.parse(JSON.stringify(nodes)),
     dependencies: JSON.parse(JSON.stringify(dependencies)),
     channels: JSON.parse(JSON.stringify(channels)),
     dependencyIds: [...dependencyIds],
+    rootNodeId: rootNode?.id || "",
     deletedAt: new Date().toISOString(),
   };
 };
 
-const nodeConnectionIds = async (node = {}) => {
-  if (!node?.id || !window.TrackerLensConnectionsStore?.list) return [];
+const deletedNodeSnapshot = (node) => deletedNodeTreeSnapshot([node], node);
+
+const nodeConnectionIdsForNodeIds = async (nodeIds = []) => {
+  const ids = new Set(nodeIds.filter(Boolean));
+  if (!ids.size || !window.TrackerLensConnectionsStore?.list) return [];
   const connections = await window.TrackerLensConnectionsStore.list().catch(() => []);
   return [...new Set((connections || [])
     .filter((connection) =>
-      connection.sourceNodeId === node.id ||
-      connection.targetNodeId === node.id ||
-      connection.fromBoxId === node.id ||
-      connection.toBoxId === node.id ||
-      connection.fromNodeId === node.id ||
-      connection.toNodeId === node.id)
+      ids.has(connection.sourceNodeId) ||
+      ids.has(connection.targetNodeId) ||
+      ids.has(connection.fromBoxId) ||
+      ids.has(connection.toBoxId) ||
+      ids.has(connection.fromNodeId) ||
+      ids.has(connection.toNodeId))
     .map((connection) => connection.id)
     .filter(Boolean))];
+};
+
+const nodeConnectionIds = async (node = {}) => {
+  if (!node?.id) return [];
+  return nodeConnectionIdsForNodeIds([node.id]);
 };
 
 const cleanupNodeConnections = async (node = {}) => {
@@ -2815,6 +2856,20 @@ const cleanupNodeConnections = async (node = {}) => {
       window.TrackerLensRuntimeGraphStore?.cleanupConnectionReferences?.({ connectionId }),
       window.TrackerLensEventLogStore?.cleanupConnectionReferences?.({ connectionId, workspaceId: node.workspaceId || "" }),
       window.TrackerLensConnectionsStore?.removeWorkspaceContentConnection?.(connectionId, { workspaceId: node.workspaceId || "" }),
+    ])
+  ));
+  return connectionIds;
+};
+
+const cleanupNodeTreeConnections = async (nodes = []) => {
+  const connectionIds = await nodeConnectionIdsForNodeIds(nodes.map((node) => node.id));
+  if (!connectionIds.length) return [];
+  await window.TrackerLensConnectionsStore?.removeMany?.(connectionIds);
+  await Promise.all(connectionIds.map((connectionId) =>
+    Promise.all([
+      window.TrackerLensRuntimeGraphStore?.cleanupConnectionReferences?.({ connectionId }),
+      window.TrackerLensEventLogStore?.cleanupConnectionReferences?.({ connectionId }),
+      window.TrackerLensConnectionsStore?.removeWorkspaceContentConnection?.(connectionId),
     ])
   ));
   return connectionIds;
@@ -2854,11 +2909,50 @@ const performDraftNodeDelete = async (node, closeDialog = null) => {
   await loadRuntime();
 };
 
+const performDraftNodeTreeDelete = async (node, closeDialog = null) => {
+  if (!node?.id) return;
+  const tree = downstreamNodeTree(node);
+  const nodes = tree.nodes.length ? tree.nodes : [node];
+  const nodeIds = nodes.map((item) => item.id);
+  state.lastDeletedNode = deletedNodeTreeSnapshot(nodes, node);
+  const deletedConnectionIds = await cleanupNodeTreeConnections(nodes);
+  await Promise.all(nodes.map((item) => window.TrackerLensRuntimeGraphStore?.deleteRuntimeNodeReferences?.({
+    nodeId: item.id,
+    workspaceId: item.workspaceId || node.workspaceId || "",
+  })));
+  await window.TrackerLensEventLogStore?.cleanupNodeReferences?.({
+    nodeIds,
+    workspaceId: node.workspaceId || "",
+  });
+  await Promise.all(nodes.map((item) => window.TrackerLensChannelRegistry?.cleanupNodeReferences?.({
+    nodeId: item.id,
+    workspaceId: item.workspaceId || node.workspaceId || "",
+  })));
+  await recordFlowAction({
+    workspaceId: node.workspaceId || "global",
+    nodeId: node.id,
+    level: "warning",
+    message: `Runtime node tree deleted: ${node.label || node.id}`,
+    context: {
+      action: "runtime-node-tree-deleted",
+      nodeType: node.type || "",
+      nodes: nodeIds.length,
+      dependencies: state.lastDeletedNode?.dependencies?.length || 0,
+      connections: deletedConnectionIds.length,
+    },
+  });
+
+  setFocusState({ mode: "", nodeId: "", edgeId: "", nodeType: "", channel: "", connectionId: "" });
+  closeDialog?.();
+  await loadRuntime();
+};
+
 const restoreLastDeletedNode = async () => {
   const snapshot = state.lastDeletedNode;
   if (!snapshot?.node) return;
   try {
-    await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: snapshot.node });
+    const nodes = snapshot.nodes?.length ? snapshot.nodes : [snapshot.node];
+    await Promise.all(nodes.map((node) => window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node })));
     if (window.TrackerLensRuntimeGraphStore?.upsertDependency) {
       await Promise.all((snapshot.dependencies || []).map((dependency) =>
         window.TrackerLensRuntimeGraphStore.upsertDependency({ dependency })));
@@ -2885,6 +2979,12 @@ const requestDraftNodeDelete = (node) => {
   if (!node?.id) return;
   const dependencies = selectedDependencies(node);
   const summary = dependencySummary(node, dependencies);
+  const tree = downstreamNodeTree(node);
+  const childCount = Math.max(0, tree.nodes.length - 1);
+  const treeDependencyIds = new Set();
+  (state.runtime.dependencies || []).forEach((dependency) => {
+    if (tree.ids.has(dependency.sourceNodeId) || tree.ids.has(dependency.targetNodeId)) treeDependencyIds.add(dependency.id);
+  });
   const draft = isDraftNode(node);
   const dialog = _.Dialog({
     class: "tl-flow-edge-delete-dialog",
@@ -2905,6 +3005,7 @@ const requestDraftNodeDelete = (node) => {
       _.div(_.span("Type"), _.strong(node.type || "runtime")),
       _.div(_.span("Workspace"), _.strong(node.workspaceId || "global")),
       _.div(_.span("Dependencies"), _.strong(`${dependencies.length} total · ${summary.incoming} in · ${summary.outgoing} out`)),
+      childCount ? _.div(_.span("Children tree"), _.strong(`${childCount} children · ${treeDependencyIds.size} linked dependencies`)) : null,
       dependencies.length ? _.section(
         { class: "tl-flow-delete-dependencies" },
         _.h3("Impacted Links"),
@@ -2920,6 +3021,7 @@ const requestDraftNodeDelete = (node) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
+      childCount ? btn({ class: "is-danger", onclick: () => performDraftNodeTreeDelete(node, close) }, icon("delete_sweep", "sm"), "Force Delete All Children") : null,
       btn({ class: "is-danger", onclick: () => performDraftNodeDelete(node, close) }, icon("delete", "sm"), dependencies.length ? "Force Delete" : draft ? "Delete Draft" : "Delete Node")
     ),
   });

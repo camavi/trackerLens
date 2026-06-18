@@ -1013,11 +1013,11 @@ const renderNodeQuickActions = (node, view) => {
     canDeleteRuntimeNode ? btn({
       class: "is-danger",
       "aria-label": "Delete node",
-      title: "Delete node. Ctrl+click deletes immediately.",
+      title: "Delete node. Alt/Option+click deletes immediately.",
       onclick: (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (event.ctrlKey) performDraftNodeDelete(node);
+        if (event.altKey) performDraftNodeDelete(node);
         else requestDraftNodeDelete(node);
       },
     }, icon("delete", "sm")) : null

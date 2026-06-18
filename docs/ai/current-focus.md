@@ -24,10 +24,13 @@ Flow Map canvas interaction refinement is complete:
 - Ctrl-wheel zooms around the pointer and persists the viewport;
 - Ctrl-wheel updates the canvas topbar zoom percentage without waiting for a remount;
 - Shift-drag on a runtime node moves that node plus all downstream child nodes while preserving relative distances;
-- Ctrl-click on the node delete quick action deletes immediately without opening the confirmation dialog.
+- Alt/Option-click on the node delete quick action deletes immediately without opening the confirmation dialog.
+- The node delete dialog includes `Force Delete All Children` when downstream nodes exist, deleting the node plus every recursive child node.
 - The Flow Map canvas now shows a red center marker at graph center and the edge canvas draw area is wider to avoid clipping long cables.
 - Runtime Minimap now fits graph bounds instead of zoom perspective, shows the visible viewport in graph coordinates, updates live during canvas pan/zoom, supports dragging the viewport box and can be minimized with persisted state.
 - Preview node payload header now keeps action buttons visible with long channel names, and newly created Preview nodes ignore cached events older than their creation/clear timestamp.
+- Sample Test nodes now normalize numeric flow positions into CSS percent values before rendering, preventing stacked nodes until the first drag repaint.
+- Knowledge Sample Test now uses a wider margin-aware layout with larger row spacing so generated nodes do not overlap the rows below.
 
 Runtime contract base is complete:
 

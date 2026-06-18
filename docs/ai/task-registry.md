@@ -120,8 +120,11 @@ Main files:
 
 ## Completed Major Runtime Tasks
 
-- Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Ctrl-click quick delete.
+- Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
+- Flow Map recursive delete action: node delete dialog can force-delete the selected node plus every downstream child node.
 - Flow Map Preview polish: long payload headers preserve copy/clear actions, and newly created Preview nodes start clean instead of replaying older cached events.
+- Flow Map Sample Test render fix: numeric flow positions normalize to CSS percent coordinates so generated nodes render in place immediately.
+- Flow Map Knowledge Sample layout spacing: generated sample nodes use margin-aware columns and taller rows to avoid overlap.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.
