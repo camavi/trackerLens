@@ -1323,7 +1323,6 @@ const FLOW_NODE_CATEGORY_OPTIONS = [
   { value: "processors", label: "Processors" },
   { value: "knowledge", label: "Knowledge" },
   { value: "ai-agents", label: "AI Agents" },
-  { value: "lens", label: "Lens" },
   { value: "actions", label: "Actions" },
   { value: "storage", label: "Storage" },
   { value: "dev", label: "Dev" },

@@ -219,18 +219,6 @@ const nodePalette = [
     paletteNode({ label: "AI Debugger", icon: "bug_report", tone: "violet", nodeType: "aiAgent", subtype: "debugger", category: "ai-agents", inputs: ["task"], outputs: ["diagnostic"], permissions: ["ai.invoke"], url: "ai.html" }),
     paletteNode({ label: "AI Decision", icon: "rule", tone: "pink", nodeType: "aiAgent", subtype: "decision", category: "ai-agents", inputs: ["task"], outputs: ["decision"], permissions: ["ai.invoke"], url: "ai.html" }),
   ]],
-  ["Lens", [
-    paletteNode({ label: "Box Lens", icon: "dashboard", tone: "blue", nodeType: "boxLens", subtype: "box", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Existing Lens", icon: "inventory_2", tone: "cyan", nodeType: "boxLens", subtype: "existing", category: "lens", inputs: ["input"], render: {} }),
-    paletteNode({ label: "Chart Lens", icon: "insert_chart", tone: "cyan", nodeType: "lens", subtype: "chart", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Stats Lens", icon: "monitoring", tone: "blue", nodeType: "lens", subtype: "stats", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Feed Lens", icon: "dynamic_feed", tone: "cyan", nodeType: "lens", subtype: "feed", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Table Lens", icon: "table_chart", tone: "blue", nodeType: "lens", subtype: "table", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Video Lens", icon: "smart_display", tone: "cyan", nodeType: "lens", subtype: "video", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Terminal Lens", icon: "terminal", tone: "blue", nodeType: "lens", subtype: "terminal", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "AI Insight Lens", icon: "insights", tone: "cyan", nodeType: "lens", subtype: "ai-insight", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-    paletteNode({ label: "Notification Lens", icon: "notifications_active", tone: "blue", nodeType: "lens", subtype: "notification", category: "lens", inputs: ["input"], render: {}, url: "editorBoxLens.html" }),
-  ]],
   ["Actions", [
     paletteNode({ label: "Telegram Message", icon: "send", tone: "orange", nodeType: "action", subtype: "telegram", category: "actions", inputs: ["event"], permissions: ["network.fetch"], execute: {}, connectionType: "Telegram Message" }),
     paletteNode({ label: "WhatsApp Message", icon: "chat", tone: "green", nodeType: "action", subtype: "whatsapp", category: "actions", inputs: ["event"], permissions: ["network.fetch"], execute: {}, connectionType: "WhatsApp Message" }),

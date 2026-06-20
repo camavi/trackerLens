@@ -13,7 +13,13 @@ const workspaceState = {
   selectedBoxId: null,
   selectedBoxIds: [],
   actionMenuOpen: false,
+  propertiesOpen: false,
+  navigatorCollapsed: localStorage.getItem("tl_workspace_navigator_collapsed") === "true",
   toolMenu: null,
+  collapsedAssetSections: {
+    templates: false,
+    saved: false,
+  },
   pendingConfirm: null,
   previewMode: false,
   notice: "",
@@ -51,6 +57,23 @@ const openChromePage = (url) => {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const WORKSPACE_ASSET_MIME = "application/x-trackerlens-workspace-asset";
+
+const lensTemplateAssets = [
+  { id: "lens-template-chart", name: "Chart Lens", boxType: "chart", category: "Lens Template", description: "Grafico e serie dati per il workspace.", icon: "insert_chart", color: "#38bdf8", width: 12, height: 8 },
+  { id: "lens-template-stats", name: "Stats Lens", boxType: "card", category: "Lens Template", description: "KPI, contatori e statistiche compatte.", icon: "monitoring", color: "#60a5fa", width: 10, height: 6 },
+  { id: "lens-template-feed", name: "Feed Lens", boxType: "card", category: "Lens Template", description: "Lista eventi, news o aggiornamenti live.", icon: "dynamic_feed", color: "#2dd4bf", width: 10, height: 8 },
+  { id: "lens-template-table", name: "Table Lens", boxType: "table", category: "Lens Template", description: "Tabella dati ordinata per righe e colonne.", icon: "table_chart", color: "#38bdf8", width: 12, height: 8 },
+  { id: "lens-template-video", name: "Video Lens", boxType: "media", category: "Lens Template", description: "Media, iframe o player video nel workspace.", icon: "smart_display", color: "#60a5fa", width: 12, height: 8 },
+  { id: "lens-template-terminal", name: "Terminal Lens", boxType: "custom", category: "Lens Template", description: "Output tecnico, log e testo monospace.", icon: "terminal", color: "#38bdf8", width: 12, height: 7 },
+  { id: "lens-template-ai-insight", name: "AI Insight Lens", boxType: "custom", category: "Lens Template", description: "Risultati AI, insight e spiegazioni.", icon: "insights", color: "#2dd4bf", width: 12, height: 7 },
+  { id: "lens-template-notification", name: "Notification Lens", boxType: "card", category: "Lens Template", description: "Alert, stato e notifiche operative.", icon: "notifications_active", color: "#60a5fa", width: 10, height: 6 },
+].map((asset) => ({
+  ...asset,
+  sourceId: asset.id,
+  type: "boxLens",
+  isTemplate: true,
+  searchText: [asset.name, asset.category, asset.description, asset.boxType, "boxLens"].join(" ").toLowerCase(),
+}));
 
 const db = new DatabaseIndexedDB({
   dbName: tlConfig.DB_NAME,
@@ -121,7 +144,7 @@ const boxById = (boxId) => workspaceState.boxes.find((box) => box.id === boxId) 
 const visibleWorkspaceBoxes = () => workspaceState.boxes.filter((box) => !box.hidden);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const nextZIndex = () => Math.max(1, ...workspaceState.boxes.map((box) => box.zIndex || 1)) + 1;
-const assetById = (id) => id ? workspaceState.localAssets.find((asset) => asset.id === id || asset.sourceId === id) || null : null;
+const assetById = (id) => id ? [...lensTemplateAssets, ...workspaceState.localAssets].find((asset) => asset.id === id || asset.sourceId === id) || null : null;
 
 const displayBoxFromAsset = (asset, box = {}) => {
   const boxFields = { ...box };
@@ -138,6 +161,7 @@ const displayBoxFromAsset = (asset, box = {}) => {
     description: asset.description || box.description || "",
     icon: asset.icon || box.icon || (asset.type === "boxTracker" ? "cloud_queue" : "dashboard"),
     color: asset.color || box.color || (asset.type === "boxTracker" ? "#35c979" : "#9b5cf5"),
+    boxType: box.boxType || asset.boxType || "",
   };
 };
 
@@ -155,6 +179,12 @@ const serializeWorkspaceBox = (box) => ({
   assetId: box.assetId || box.sourceId,
   sourceId: box.sourceId || box.assetId,
   type: box.type || "boxLens",
+  name: box.name || "Box",
+  category: box.category || "",
+  description: box.description || "",
+  icon: box.icon || (box.type === "boxTracker" ? "cloud_queue" : "dashboard"),
+  color: box.color || (box.type === "boxTracker" ? "#35c979" : "#9b5cf5"),
+  boxType: box.boxType || "",
   x: box.x || 1,
   y: box.y || 1,
   width: box.width || 6,
@@ -343,7 +373,7 @@ const renderHeader = () =>
     window.TrackerLensSidebar.renderBrand({ className: "tl-app-brand" }),
     _.div(
       { class: "tl-workspace-title" },
-      _.h1(workspaceState.workspace.name, btn({ class: "tl-title-edit", "aria-label": "Modifica nome workspace", onclick: focusWorkspaceName }, icon("edit", "sm"))),
+      _.h1(workspaceState.workspace.name, btn({ class: "tl-title-edit", "aria-label": "Modifica workspace", onclick: openWorkspaceProperties }, icon("edit", "sm"))),
       _.div({ id: "tl-save-state", class: "tl-save-state" }, workspaceState.savedLabel)
     ),
     _.Toolbar(
@@ -375,6 +405,25 @@ const setAssetType = (type) => {
   mountWorkspace();
 };
 
+const openAssetEditor = (event, asset) => {
+  event?.stopPropagation?.();
+  event?.preventDefault?.();
+  if (asset.type === "boxTracker") {
+    const trackerId = asset.isTemplate ? "" : asset.sourceId || asset.id;
+    openChromePage(`editorBoxTracker.html${trackerId ? `?trackerId=${encodeURIComponent(trackerId)}` : ""}`);
+    return;
+  }
+
+  const params = new URLSearchParams();
+  if (asset.isTemplate) {
+    params.set("boxType", asset.boxType || "empty");
+    params.set("runtimeLabel", asset.name || "Box Lens");
+  } else {
+    params.set("lensId", asset.sourceId || asset.id);
+  }
+  openChromePage(`editorBoxLens.html${params.toString() ? `?${params.toString()}` : ""}`);
+};
+
 const setDevice = (device) => {
   workspaceState.device = device;
   setNotice(`Anteprima ${device} attiva`);
@@ -399,7 +448,31 @@ const togglePreview = () => {
 
 const toggleActionMenu = () => {
   workspaceState.actionMenuOpen = !workspaceState.actionMenuOpen;
+  if (workspaceState.actionMenuOpen) workspaceState.propertiesOpen = true;
   workspaceState.toolMenu = null;
+  mountWorkspace();
+};
+
+const openWorkspaceProperties = () => {
+  workspaceState.propertiesOpen = true;
+  workspaceState.actionMenuOpen = false;
+  mountWorkspace();
+  requestAnimationFrame(() => {
+    const target = document.getElementById("tl-workspace-name");
+    (target?.matches?.("input") ? target : target?.querySelector?.("input"))?.focus();
+  });
+};
+
+const closeWorkspaceProperties = () => {
+  workspaceState.propertiesOpen = false;
+  workspaceState.actionMenuOpen = false;
+  workspaceState.pendingConfirm = null;
+  mountWorkspace();
+};
+
+const toggleWorkspaceNavigator = () => {
+  workspaceState.navigatorCollapsed = !workspaceState.navigatorCollapsed;
+  localStorage.setItem("tl_workspace_navigator_collapsed", String(workspaceState.navigatorCollapsed));
   mountWorkspace();
 };
 
@@ -444,18 +517,46 @@ const renderAssetCard = (asset) =>
     _.div(
       { class: "cms-card-body" },
       _.span({ class: "tl-asset-icon", style: { "--asset-color": asset.color } }, icon(asset.icon, "sm")),
-      _.div(_.div({ class: "tl-asset-name" }, asset.name), _.div({ class: "tl-asset-type" }, asset.category || asset.note || asset.type))
+      _.div(_.div({ class: "tl-asset-name" }, asset.name), _.div({ class: "tl-asset-type" }, asset.category || asset.note || asset.type)),
+      asset.isTemplate
+        ? _.span({ class: "tl-asset-template-lock", title: "Template" }, icon("add_box", "xs"))
+        : btn({
+          class: "tl-asset-edit",
+          title: "Modifica box",
+          "aria-label": `Modifica ${asset.name}`,
+          onmousedown: (event) => event.stopPropagation(),
+          onclick: (event) => openAssetEditor(event, asset),
+        }, icon("edit", "xs"))
     )
   );
 
-const workspaceAssets = () => workspaceState.localAssets;
+const workspaceAssets = () => [
+  ...lensTemplateAssets,
+  ...workspaceState.localAssets,
+];
+
+const assetMatchesCurrentFilters = (asset) => {
+  const matchesType = asset.type === workspaceState.type || asset.type === "asset";
+  const query = workspaceState.search.trim().toLowerCase();
+  return matchesType && (!query || asset.searchText?.includes(query) || asset.name.toLowerCase().includes(query));
+};
 
 const visibleAssets = () =>
-  workspaceAssets().filter((asset) => {
-    const matchesType = asset.type === workspaceState.type || asset.type === "asset";
-    const query = workspaceState.search.trim().toLowerCase();
-    return matchesType && (!query || asset.searchText?.includes(query) || asset.name.toLowerCase().includes(query));
-  });
+  workspaceAssets().filter(assetMatchesCurrentFilters);
+
+const visibleTemplateAssets = () =>
+  lensTemplateAssets.filter(assetMatchesCurrentFilters);
+
+const visibleSavedAssets = () =>
+  workspaceState.localAssets.filter(assetMatchesCurrentFilters);
+
+const toggleAssetSection = (section) => {
+  workspaceState.collapsedAssetSections = {
+    ...workspaceState.collapsedAssetSections,
+    [section]: !workspaceState.collapsedAssetSections[section],
+  };
+  mountWorkspace();
+};
 
 const trackerAssets = () => workspaceState.localAssets.filter((asset) => asset.type === "boxTracker");
 
@@ -657,12 +758,52 @@ const renderAssetList = () => {
     return _.div({ class: "tl-box-list-state is-error" }, workspaceState.assetsError);
   }
 
-  const assets = visibleAssets();
-  if (!assets.length) {
+  const templates = visibleTemplateAssets();
+  const saved = visibleSavedAssets();
+  if (!templates.length && !saved.length) {
     return _.div({ class: "tl-box-list-state" }, workspaceState.search ? "Nessun box locale trovato." : "Nessun box salvato in libreria.");
   }
 
-  return _.Grid({ class: "tl-box-list", cols: 1, gap: 8 }, ...assets.map(renderAssetCard));
+  return _.div(
+    { class: "tl-box-sections" },
+    renderAssetSection({
+      id: "saved",
+      title: "I miei box",
+      count: saved.length,
+      assets: saved,
+      empty: workspaceState.search ? "Nessun box salvato trovato." : "Nessun box salvato in libreria.",
+    }),
+    renderAssetSection({
+      id: "templates",
+      title: "Templates",
+      count: templates.length,
+      assets: templates,
+      empty: workspaceState.type === "boxLens" ? "Nessun template trovato." : "I template sono disponibili per i boxLens.",
+    })
+  );
+};
+
+const renderAssetSection = ({ id, title, count, assets, empty }) => {
+  const collapsed = Boolean(workspaceState.collapsedAssetSections[id]);
+  return _.section(
+    { class: `tl-box-section${collapsed ? " is-collapsed" : ""}` },
+    btn(
+      {
+        class: "tl-box-section-toggle",
+        "aria-expanded": String(!collapsed),
+        onclick: () => toggleAssetSection(id),
+      },
+      _.span({ class: "tl-box-section-dot" }),
+      _.span({ class: "tl-box-section-title" }, title),
+      _.span({ class: "tl-box-section-count" }, String(count)),
+      icon(collapsed ? "keyboard_arrow_right" : "keyboard_arrow_down", "sm")
+    ),
+    collapsed
+      ? null
+      : assets.length
+        ? _.Grid({ class: "tl-box-list", cols: 1, gap: 8 }, ...assets.map(renderAssetCard))
+        : _.div({ class: "tl-box-list-state" }, empty)
+  );
 };
 
 const renderAddPanel = () =>
@@ -692,7 +833,6 @@ const renderAddPanel = () =>
         },
       })
     ),
-    _.p({ class: "tl-box-list-title" }, "I miei box"),
     renderAssetList()
   );
 
@@ -896,16 +1036,21 @@ const renderNavigator = () => {
 };
 
 const renderProperties = () => {
+  if (!workspaceState.propertiesOpen && !workspaceState.actionMenuOpen && !workspaceState.pendingConfirm) return null;
   const workspace = workspaceState.workspace;
   const box = selectedBox();
   return _.aside(
-    { class: "tl-properties" },
+    { class: "tl-properties", "aria-label": "Proprieta workspace" },
     workspaceState.actionMenuOpen ? renderActionMenu() : null,
     workspaceState.pendingConfirm ? renderConfirmPanel() : null,
     workspaceState.notice ? _.div({ class: "tl-notice" }, workspaceState.notice) : null,
     _.Card(
       { class: "tl-property-card" },
-      _.Row({ class: "tl-card-head", justify: "space-between" }, _.span("Proprieta Workspace"), icon("chevron_right", "sm")),
+      _.Row(
+        { class: "tl-card-head", justify: "space-between", align: "center" },
+        _.span("Proprieta Workspace"),
+        btn({ class: "tl-property-close", "aria-label": "Chiudi proprieta", onclick: closeWorkspaceProperties }, icon("close", "sm"))
+      ),
       _.label({ class: "tl-field" }, _.span("Nome"), _.Input({ id: "tl-workspace-name", class: "tl-property-input", value: workspace.name, onInput: (event) => updateWorkspaceDraft("name", event.target.value) })),
       _.label({ class: "tl-field" }, _.span("Descrizione"), _.textarea({ class: "tl-property-textarea", placeholder: "Descrizione (opzionale)", oninput: (event) => updateWorkspaceDraft("description", event.target.value) }, workspace.description)),
       _.label({ class: "tl-field" }, _.span("Sfondo"), btn({ class: "tl-color-row", onclick: cycleBackground }, _.span({ class: "tl-color-swatch", style: { background: workspace.background } }), _.span(workspace.background), icon("check_box_outline_blank", "sm"))),
@@ -916,10 +1061,25 @@ const renderProperties = () => {
       renderToggle("Mostra griglia", workspace.showGrid, () => updateWorkspaceConfig("showGrid", !workspace.showGrid, "Vista griglia aggiornata")),
       renderToggle("Aggancia alla griglia", workspace.snapToGrid, () => updateWorkspaceConfig("snapToGrid", !workspace.snapToGrid, "Aggancio alla griglia aggiornato"))
     ),
-    box ? renderSelectedBoxProperties(box) : null,
-    _.Card({ class: "tl-property-card" }, _.Row({ class: "tl-card-head", justify: "space-between" }, _.span("Navigator")), renderNavigator())
+    box ? renderSelectedBoxProperties(box) : null
   );
 };
+
+const renderFixedNavigator = () =>
+  _.aside(
+    { class: `tl-fixed-navigator${workspaceState.navigatorCollapsed ? " is-collapsed" : ""}`, "aria-label": "Navigator workspace" },
+    _.Row(
+      { class: "tl-card-head", justify: "space-between", align: "center" },
+      _.span("Navigator"),
+      btn({
+        class: "tl-navigator-toggle",
+        "aria-label": workspaceState.navigatorCollapsed ? "Espandi navigator" : "Minimizza navigator",
+        title: workspaceState.navigatorCollapsed ? "Espandi navigator" : "Minimizza navigator",
+        onclick: toggleWorkspaceNavigator,
+      }, icon(workspaceState.navigatorCollapsed ? "unfold_more" : "remove", "sm"))
+    ),
+    workspaceState.navigatorCollapsed ? null : renderNavigator()
+  );
 
 const renderSetting = (label, value) =>
   _.Row({ class: "tl-setting-row", align: "center", justify: "space-between", gap: 12 }, _.span(label), btn({ class: "tl-setting-btn", onclick: () => cycleSettingByLabel(label) }, String(value), icon("keyboard_arrow_down", "sm")));
@@ -1110,10 +1270,7 @@ const cycleBackground = () => {
 };
 
 const focusWorkspaceName = () => {
-  setNotice("Campo nome workspace selezionato");
-  mountWorkspace();
-  const target = document.getElementById("tl-workspace-name");
-  (target?.matches?.("input") ? target : target?.querySelector?.("input"))?.focus();
+  openWorkspaceProperties();
 };
 
 const assetBoxSize = (asset = {}) => ({
@@ -1823,7 +1980,9 @@ const mountWorkspace = () => {
     _.div(
       { class: "tl-workspace-shell" },
       renderHeader(),
-      _.div({ class: "tl-workspace-body" }, renderRail(), renderAddPanel(), renderCanvas(), renderProperties()),
+      _.div({ class: "tl-workspace-body" }, renderRail(), renderAddPanel(), renderCanvas()),
+      renderProperties(),
+      renderFixedNavigator(),
       renderBottom()
     )
   );

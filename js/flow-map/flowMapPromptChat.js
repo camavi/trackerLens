@@ -3934,10 +3934,7 @@ const flowPromptBuildPlan = (prompt = "") => {
   else if (flowPromptHasAny(lower, ["email", "mail"])) add("Email");
   else if (flowPromptHasAny(lower, ["notifica", "notification", "alert"])) add("Browser Notification");
 
-  if (flowPromptHasAny(lower, ["chart", "grafico"])) add("Chart Lens");
-  else if (flowPromptHasAny(lower, ["table", "tabella"])) add("Table Lens");
-  else if (flowPromptHasAny(lower, ["feed", "notizie"])) add("Feed Lens");
-  else add("Preview");
+  add("Preview");
 
   const edges = specs.slice(0, -1).map((source, index) => ({
     sourceKey: source.label,

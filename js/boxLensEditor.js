@@ -18,6 +18,7 @@ const requestedWorkspaceId = params.get("workspaceId") || "";
 const requestedChannel = params.get("channel") || "";
 const requestedDraftNodeId = params.get("draftNodeId") || "";
 const requestedRuntimeLabel = params.get("runtimeLabel") || "";
+const requestedBoxType = params.get("boxType") || "";
 const BOX_LENS_STORES = [
   { name: tlConfig.TABLES.TL_WIDGETS, columns: [{ name: "content" }] },
   { name: tlConfig.TABLES.TL_PAGES, columns: [{ name: "content" }] },
@@ -70,7 +71,7 @@ const defaultBox = {
   runtimeVersion: boxLensData.box.runtimeVersion || ">=0.1.0",
   status: boxLensData.box.status !== false,
   visibility: boxLensData.box.visibility || "private",
-  boxType: "empty",
+  boxType: requestedBoxType || "empty",
   channels: defaultChannels,
 };
 

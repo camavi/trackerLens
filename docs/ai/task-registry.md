@@ -122,6 +122,8 @@ Main files:
 
 - Flow Map library split baseline: sidebar Flow Map route opens `libraryFlowmap.html`; local Flow Maps can be created from a CMSwift metadata dialog, listed/opened/imported/exported/deleted after confirmation; sidebar categories are searchable and sorting lives in the result toolbar; cards have per-flow configurable UI accent colors and a richer runtime-graph visual treatment; Flow Map download format is `.tlflow`, Flow Map page records are filtered out of `library.html`, and legacy imports from `libraryFlowmap.html` are marked as Flow Map.
 - Asset library card polish: `library.html` cards use modern gradient/accent styling, single-line titles, UI-only color metadata, no workspace Flow action and confirmed local delete.
+- Workspace Lens ownership pass: Lens templates and saved boxLens insertion now live in separate collapsible sections in `editorWorkspace.html`; Flow Map palette and local planner no longer create Lens nodes.
+- Workspace editor space pass: right properties column is now a fixed drawer opened from workspace edit, and the mini navigator is a right-side fixed canvas overlay with persisted minimize/expand state.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
 - Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
 - Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.
