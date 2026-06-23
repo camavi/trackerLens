@@ -118,6 +118,17 @@ const handleCanvasDrop = async (event) => {
 };
 
 const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
+  if (isExistingFlowMapPaletteItem(item)) {
+    const point = pointerPercent(event, canvas);
+    openExistingFlowMapDialog({
+      flowPosition: {
+        x: flowCoordinate(point.x),
+        y: flowCoordinate(point.y),
+      },
+    });
+    state.paletteDragItem = null;
+    return;
+  }
   if (isExistingLibraryPaletteItem(item) && !item.url) {
     const point = pointerPercent(event, canvas);
     openExistingLibraryDialog(item, {
@@ -177,6 +188,9 @@ const isExistingLibraryPaletteItem = (item = {}) =>
 const isExistingAiAgentPaletteItem = (item = {}) =>
   item.subtype === "existing" && item.nodeType === "aiAgent";
 
+const isExistingFlowMapPaletteItem = (item = {}) =>
+  item.subtype === "existing" && item.nodeType === "flowMap";
+
 const libraryAssetKindForPalette = (item = {}) =>
   item.nodeType === "boxLens" ? "boxLens" : "boxTracker";
 
@@ -212,6 +226,335 @@ const listExistingAiAgents = async () => {
     console.warn("Errore lettura AI Agents per Flow Map", error);
   }
   return [];
+};
+
+const flowMapDbName = () => (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
+const flowMapStoreName = (key, fallback) => (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.[key] : null) || fallback;
+
+const openFlowMapLocalDb = () =>
+  new Promise((resolve, reject) => {
+    const request = indexedDB.open(flowMapDbName());
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB Flow Map"));
+  });
+
+const readFlowMapLocalStore = async (storeName) => {
+  const db = await openFlowMapLocalDb();
+  try {
+    if (!db.objectStoreNames.contains(storeName)) return [];
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
+      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+const flowMapContentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};
+const isFlowMapPageRecord = (record = {}) => {
+  const content = flowMapContentOf(record);
+  return content.type === "flowmap" || content.kind === "flowmap" || content.format === "tlflow" || record?.format === "tlflow";
+};
+
+const isFlowPortNode = (node = {}, subtype = "") => {
+  const value = String(node.metadata?.subtype || node.subtype || "").toLowerCase();
+  const label = String(node.metadata?.paletteLabel || node.label || "").toLowerCase();
+  return value === subtype || label === (subtype === "flow-in" ? "flow in" : "flow out");
+};
+
+const normalizeComposableFlowPort = (port = {}, fallbackName = "flow.port") => {
+  if (typeof port === "string") return { name: port || fallbackName, type: "object" };
+  return {
+    name: String(port.name || port.key || port.channel || port.id || fallbackName),
+    type: String(port.type || port.valueType || "object"),
+    schema: port.schema || port.payloadSchema || null,
+    required: Boolean(port.required),
+  };
+};
+
+const composableFlowPortsForNode = (node = {}, subtype = "") => {
+  const direction = subtype === "flow-out" ? "inputs" : "outputs";
+  const fallback = subtype === "flow-out" ? "flow.out" : "flow.in";
+  const stored = Array.isArray(node.metadata?.flowPorts) ? node.metadata.flowPorts : [];
+  const source = stored.length ? stored : Array.isArray(node[direction]) ? node[direction] : [];
+  const ports = source
+    .map((port) => normalizeComposableFlowPort(port, fallback))
+    .filter((port) => port.name && port.name !== "all" && port.name !== "agent_control");
+  return ports.length ? ports : [{ name: fallback, type: "object" }];
+};
+
+const uniqueComposableFlowPorts = (nodes = [], subtype = "") => {
+  const unique = new Map();
+  nodes
+    .filter((node) => isFlowPortNode(node, subtype))
+    .flatMap((node) => composableFlowPortsForNode(node, subtype))
+    .forEach((port) => {
+      if (!unique.has(port.name)) unique.set(port.name, port);
+    });
+  return [...unique.values()];
+};
+
+const listAvailableFlowMaps = async () => {
+  const pageStore = flowMapStoreName("TL_PAGES", "tl_pages");
+  const nodeStore = flowMapStoreName("TL_RUNTIME_NODES", "tl_runtime_nodes");
+  const [pages, nodes] = await Promise.all([
+    readFlowMapLocalStore(pageStore),
+    readFlowMapLocalStore(nodeStore),
+  ]);
+  const currentWorkspaceId = state.filters.workspaceId || "";
+  return pages
+    .filter(isFlowMapPageRecord)
+    .map((record) => {
+      const content = flowMapContentOf(record);
+      const id = String(content.id || record.id || "").trim();
+      const scopedNodes = nodes.filter((node) => node.workspaceId === id);
+      const inputPorts = uniqueComposableFlowPorts(scopedNodes, "flow-in");
+      const outputPorts = uniqueComposableFlowPorts(scopedNodes, "flow-out");
+      const hasInput = inputPorts.length > 0;
+      const hasOutput = outputPorts.length > 0;
+      return {
+        id,
+        name: content.name || content.title || id,
+        category: content.category || "global",
+        description: content.description || `${scopedNodes.length} nodi runtime`,
+        version: content.version || "0.1.0",
+        hasInput,
+        hasOutput,
+        inputPorts,
+        outputPorts,
+        portCount: inputPorts.length + outputPorts.length,
+      };
+    })
+    .filter((item) => item.id && item.id !== currentWorkspaceId);
+};
+
+const refreshAvailableFlowMap = async (flowMapId = "") => {
+  const flowMaps = await listAvailableFlowMaps();
+  return flowMaps.find((flowMap) => flowMap.id === flowMapId) || null;
+};
+
+const embeddedFlowMapAliasSignature = (node = {}) => JSON.stringify({
+  label: node.label || "",
+  inputs: node.inputs || [],
+  outputs: node.outputs || [],
+  channels: node.channels || [],
+  version: node.metadata?.version || "",
+  hasInput: Boolean(node.metadata?.hasInput),
+  hasOutput: Boolean(node.metadata?.hasOutput),
+});
+
+const syncEmbeddedFlowMapAliases = async (nodes = []) => {
+  const aliases = nodes.filter(isEmbeddedFlowMapNode);
+  if (!aliases.length) return nodes;
+  const availableFlowMaps = await listAvailableFlowMaps().catch((error) => {
+    console.warn("Errore sincronizzazione alias Flow Map", error);
+    return [];
+  });
+  const flowMapsById = new Map(availableFlowMaps.map((flowMap) => [flowMap.id, flowMap]));
+  const updates = [];
+  const nextNodes = nodes.map((node) => {
+    if (!isEmbeddedFlowMapNode(node)) return node;
+    const flowMapId = node.metadata?.flowMapId || node.sourceRef || node.assetId || "";
+    const flowMap = flowMapsById.get(flowMapId);
+    if (!flowMap) return node;
+    const inputs = flowMap.hasInput ? flowMap.inputPorts || [] : [];
+    const outputs = flowMap.hasOutput ? flowMap.outputPorts || [] : [];
+    const inputNames = inputs.map((port) => port.name || port).filter(Boolean);
+    const outputNames = outputs.map((port) => port.name || port).filter(Boolean);
+    const nextNode = {
+      ...node,
+      label: flowMap.name || node.label,
+      inputs,
+      outputs,
+      channels: [...new Set([...inputNames, ...outputNames])],
+      metadata: {
+        ...(node.metadata || {}),
+        flowMapId,
+        flowMapName: flowMap.name || "",
+        version: flowMap.version || "0.1.0",
+        hasInput: Boolean(flowMap.hasInput),
+        hasOutput: Boolean(flowMap.hasOutput),
+        inputPorts: inputs,
+        outputPorts: outputs,
+        manifest: {
+          ...(node.metadata?.manifest || {}),
+          inputs,
+          outputs,
+        },
+      },
+    };
+    if (embeddedFlowMapAliasSignature(nextNode) !== embeddedFlowMapAliasSignature(node)) updates.push(nextNode);
+    return nextNode;
+  });
+  if (updates.length) {
+    await Promise.all(updates.map(async (node) => {
+      await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node });
+      await window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode?.({ node });
+    }));
+  }
+  return nextNodes;
+};
+
+const flowMapPreviewToneRgb = (tone = "") => ({
+  green: "34, 197, 94",
+  cyan: "34, 211, 238",
+  blue: "56, 189, 248",
+  gold: "250, 204, 21",
+  orange: "251, 146, 60",
+  purple: "168, 85, 247",
+  violet: "139, 92, 246",
+  pink: "236, 72, 153",
+  red: "248, 113, 113",
+  teal: "45, 212, 191",
+}[String(tone || "").toLowerCase()] || "56, 189, 248");
+
+const flowMapPreviewNodeType = (node = {}) => {
+  const subtype = String(node.metadata?.subtype || node.subtype || "").trim();
+  return [node.type || "node", subtype && subtype !== node.type ? subtype : ""].filter(Boolean).join(" · ");
+};
+
+const loadEmbeddedFlowMapPreview = async (flowMapId = "") => {
+  const nodeStore = flowMapStoreName("TL_RUNTIME_NODES", "tl_runtime_nodes");
+  const dependencyStore = flowMapStoreName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies");
+  const [flowMap, allNodes, allDependencies] = await Promise.all([
+    refreshAvailableFlowMap(flowMapId),
+    readFlowMapLocalStore(nodeStore),
+    readFlowMapLocalStore(dependencyStore),
+  ]);
+  if (!flowMap) return null;
+  const nodes = allNodes.filter((node) => node.workspaceId === flowMapId);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const dependencies = allDependencies.filter((dependency) =>
+    (dependency.workspaceId === flowMapId || (nodeIds.has(dependency.sourceNodeId) && nodeIds.has(dependency.targetNodeId))) &&
+    nodeIds.has(dependency.sourceNodeId) &&
+    nodeIds.has(dependency.targetNodeId));
+  return { flowMap, nodes, dependencies };
+};
+
+const layoutEmbeddedFlowMapPreview = (nodes = []) => {
+  const width = 1000;
+  const height = 560;
+  const nodeWidth = 168;
+  const nodeHeight = 58;
+  const paddingX = 52;
+  const paddingY = 46;
+  const raw = nodes.map((node, index) => {
+    const rawX = Number.parseFloat(node.flowPosition?.x);
+    const rawY = Number.parseFloat(node.flowPosition?.y);
+    return {
+      node,
+      rawX: Number.isFinite(rawX) ? rawX : (index % 5) * 22,
+      rawY: Number.isFinite(rawY) ? rawY : Math.floor(index / 5) * 24,
+    };
+  });
+  const xValues = raw.map((item) => item.rawX);
+  const yValues = raw.map((item) => item.rawY);
+  const minX = Math.min(...xValues, 0);
+  const maxX = Math.max(...xValues, 0);
+  const minY = Math.min(...yValues, 0);
+  const maxY = Math.max(...yValues, 0);
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+  return {
+    width,
+    height,
+    nodeWidth,
+    nodeHeight,
+    nodes: raw.map((item, index) => ({
+      ...item,
+      x: spanX > 0
+        ? paddingX + ((item.rawX - minX) / spanX) * (width - paddingX * 2 - nodeWidth)
+        : (width - nodeWidth) / 2,
+      y: spanY > 0
+        ? paddingY + ((item.rawY - minY) / spanY) * (height - paddingY * 2 - nodeHeight)
+        : (height - nodeHeight) / 2,
+    })),
+  };
+};
+
+const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) => {
+  if (!nodes.length) {
+    return _.div(
+      { class: "tl-flow-map-preview-empty" },
+      icon("account_tree", "lg"),
+      _.strong("Flow Map vuoto"),
+      _.span("Non ci sono nodi da visualizzare.")
+    );
+  }
+  const layout = layoutEmbeddedFlowMapPreview(nodes);
+  const byId = new Map(layout.nodes.map((item) => [item.node.id, item]));
+  const edges = dependencies.map((dependency) => {
+    const source = byId.get(dependency.sourceNodeId);
+    const target = byId.get(dependency.targetNodeId);
+    if (!source || !target) return null;
+    const x1 = source.x + layout.nodeWidth;
+    const y1 = source.y + layout.nodeHeight / 2;
+    const x2 = target.x;
+    const y2 = target.y + layout.nodeHeight / 2;
+    const bend = Math.max(44, Math.abs(x2 - x1) * 0.46);
+    return { dependency, source, x1, y1, x2, y2, path: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}` };
+  }).filter(Boolean);
+  return _.div(
+    { class: "tl-flow-map-preview-canvas" },
+    _.svg(
+      { class: "tl-flow-map-preview-edges", viewBox: `0 0 ${layout.width} ${layout.height}`, preserveAspectRatio: "xMidYMid meet", "aria-hidden": "true" },
+      ...edges.flatMap((edge) => [
+        _.path({ d: edge.path, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
+        _.circle({ cx: edge.x2, cy: edge.y2, r: 3.5, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
+      ])
+    ),
+    _.div(
+      { class: "tl-flow-map-preview-nodes" },
+      ...layout.nodes.map(({ node, x, y }) => _.div(
+        {
+          class: "tl-flow-map-preview-node",
+          title: `${node.label || node.id} · ${flowMapPreviewNodeType(node)}`,
+          style: {
+            left: `${(x / layout.width) * 100}%`,
+            top: `${(y / layout.height) * 100}%`,
+            width: `${(layout.nodeWidth / layout.width) * 100}%`,
+            height: `${(layout.nodeHeight / layout.height) * 100}%`,
+            "--preview-rgb": flowMapPreviewToneRgb(node.metadata?.tone),
+          },
+        },
+        _.span({ class: "tl-flow-map-preview-node-icon" }, icon(node.metadata?.icon || "extension", "sm")),
+        _.span(
+          { class: "tl-flow-map-preview-node-copy" },
+          _.strong(node.label || node.id),
+          _.em(flowMapPreviewNodeType(node))
+        )
+      ))
+    )
+  );
+};
+
+const openEmbeddedFlowMapPreviewDialog = async (aliasNode = {}) => {
+  const flowMapId = aliasNode.metadata?.flowMapId || aliasNode.sourceRef || aliasNode.assetId || "";
+  const graph = await loadEmbeddedFlowMapPreview(flowMapId).catch((error) => {
+    console.warn("Errore preview Flow Map", error);
+    return null;
+  });
+  if (!graph) {
+    window.alert("Il Flow Map collegato non è più disponibile.");
+    return;
+  }
+  const dialog = _.Dialog({
+    class: "tl-flow-map-preview-dialog",
+    panelClass: "tl-flow-map-preview-panel",
+    size: "xl",
+    title: graph.flowMap.name || aliasNode.label || "Flow Map",
+    subtitle: `${graph.nodes.length} nodi · ${graph.dependencies.length} collegamenti · sola lettura`,
+    icon: "account_tree",
+    closeButton: true,
+    content: () => renderEmbeddedFlowMapPreview(graph),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ class: "is-primary", onclick: close }, "Chiudi")
+    ),
+  });
+  dialog.open();
 };
 
 const resolveAiAgentAliasNodes = async (nodes = []) => {
@@ -378,6 +721,104 @@ const materializeLibraryAssetNode = async ({ asset, kind = "boxTracker", flowPos
     connectionId: "",
   });
   await loadRuntime({ force: true });
+};
+
+const materializeFlowMapNode = async ({ flowMap, flowPosition = null, close = null } = {}) => {
+  if (!flowMap?.id) return false;
+  const currentFlowMap = await refreshAvailableFlowMap(flowMap.id).catch((error) => {
+    console.warn("Errore verifica Flow Map selezionato", error);
+    return null;
+  });
+  if (!currentFlowMap) {
+    window.alert("Il Flow Map selezionato non è più disponibile.");
+    return false;
+  }
+  if (!currentFlowMap.hasInput && !currentFlowMap.hasOutput) {
+    window.alert("Non è possibile inserire un Flow Map che non contiene almeno un nodo Flow In o Flow Out.");
+    return false;
+  }
+  flowMap = currentFlowMap;
+  const workspaceId = await ensureRuntimeWorkspaceScope();
+  const now = new Date().toISOString();
+  const inputs = flowMap.hasInput ? (flowMap.inputPorts?.length ? flowMap.inputPorts : [{ name: "flow.in", type: "object" }]) : [];
+  const outputs = flowMap.hasOutput ? (flowMap.outputPorts?.length ? flowMap.outputPorts : [{ name: "flow.out", type: "object" }]) : [];
+  const inputNames = inputs.map((port) => port.name || port).filter(Boolean);
+  const outputNames = outputs.map((port) => port.name || port).filter(Boolean);
+  const node = {
+    id: `flowmap_${safeRuntimeId(flowMap.id)}_${Date.now()}`,
+    workspaceId,
+    type: "flowMap",
+    label: flowMap.name || "Flow Map",
+    sourceRef: flowMap.id,
+    assetId: flowMap.id,
+    inputs,
+    outputs,
+    channels: [...new Set([...inputNames, ...outputNames])],
+    status: "active",
+    position: { x: 1, y: 1 },
+    flowPosition: flowPosition || defaultAssetFlowPosition(),
+    metadata: {
+      configured: true,
+      draft: false,
+      embeddedFlowMap: true,
+      paletteLabel: "Flow Map",
+      tone: "blue",
+      icon: "account_tree",
+      runtimeType: "flowMap",
+      subtype: "existing",
+      category: "flow-maps",
+      flowMapId: flowMap.id,
+      flowMapName: flowMap.name || "",
+      version: flowMap.version || "0.1.0",
+      hasInput: Boolean(flowMap.hasInput),
+      hasOutput: Boolean(flowMap.hasOutput),
+      inputPorts: inputs,
+      outputPorts: outputs,
+      config: {
+        flowMapId: flowMap.id,
+        inputPort: inputNames[0] || "",
+        outputPort: outputNames[0] || "",
+      },
+      manifest: {
+        type: "flowMap",
+        subtype: "existing",
+        category: "flow-maps",
+        inputs,
+        outputs,
+        permissions: ["flow.invoke"],
+      },
+      permissions: ["flow.invoke"],
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node });
+  if (window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode) {
+    await window.TrackerLensChannelRegistry.upsertChannelsForRuntimeNode({ node });
+  }
+  await recordFlowAction({
+    workspaceId,
+    nodeId: node.id,
+    message: `Embedded Flow Map inserted: ${node.label}`,
+    context: {
+      action: "flowmap-inserted",
+      flowMapId: flowMap.id,
+      hasInput: flowMap.hasInput,
+      hasOutput: flowMap.hasOutput,
+    },
+  });
+  close?.();
+  setFocusState({
+    mode: "dependencies",
+    nodeId: node.id,
+    edgeId: "",
+    nodeType: node.type,
+    channel: inputs[0] || outputs[0] || "",
+    connectionId: "",
+  });
+  await loadRuntime({ force: true });
+  return true;
 };
 
 const normalizeAiAgentPermissionFlags = (permissions = {}) => Array.isArray(permissions)
@@ -591,6 +1032,97 @@ const openExistingAiAgentsDialog = async (options = {}) => {
   dialog.open();
 };
 
+const openExistingFlowMapDialog = async (options = {}) => {
+  const flowMaps = await listAvailableFlowMaps().catch((error) => {
+    console.warn("Errore lettura Flow Map disponibili", error);
+    return [];
+  });
+  let selectedFlowMapId = "";
+  let isInserting = false;
+  let dialog = null;
+  dialog = _.Dialog({
+    class: "tl-flow-library-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "lg",
+    title: "Flow Map",
+    subtitle: "Seleziona un Flow Map, poi conferma con Inserisci.",
+    icon: "account_tree",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-library-picker" },
+      flowMaps.length
+        ? _.div(
+          { class: "tl-flow-library-list" },
+          ...flowMaps.map((flowMap) => _.button(
+            {
+              type: "button",
+              class: `tl-flow-library-asset tl-flow-map-choice${flowMap.hasInput || flowMap.hasOutput ? "" : " is-incompatible"}`,
+              "aria-pressed": "false",
+              onclick: (event) => {
+                selectedFlowMapId = flowMap.id;
+                const choice = event.currentTarget;
+                choice.closest(".tl-flow-library-list")?.querySelectorAll(".tl-flow-map-choice").forEach((item) => {
+                  const selected = item === choice;
+                  item.classList.toggle("is-selected", selected);
+                  item.setAttribute("aria-pressed", String(selected));
+                });
+              },
+            },
+            _.span({ class: "tl-flow-library-asset-icon" }, icon("account_tree", "sm")),
+            _.span(
+              { class: "tl-flow-library-asset-main" },
+              _.strong(flowMap.name || flowMap.id),
+              _.em(`${flowMap.category || "global"} · ${flowMap.hasInput || flowMap.hasOutput ? `${flowMap.hasInput ? "IN" : ""}${flowMap.hasInput && flowMap.hasOutput ? " / " : ""}${flowMap.hasOutput ? "OUT" : ""}` : "Nessun IN / OUT"} · v${flowMap.version || "0.1.0"}`),
+              _.small(flowMap.description || "Flow Map locale componibile.")
+            ),
+            _.span(
+              { class: "tl-flow-library-asset-action" },
+              icon(flowMap.hasInput || flowMap.hasOutput ? "check_circle" : "warning", "sm"),
+              flowMap.hasInput || flowMap.hasOutput ? "Seleziona" : "Non compatibile"
+            )
+          ))
+        )
+        : _.div(
+          { class: "tl-flow-library-empty" },
+          icon("account_tree", "md"),
+          _.strong("Nessun Flow Map disponibile."),
+          _.span("Crea un Flow Map nella Library Flow Map, poi torna qui.")
+        )
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Chiudi"),
+      btn({ onclick: () => window.location.assign("libraryFlowmap.html") }, icon("account_tree", "sm"), "Library Flow Map"),
+      btn({
+        class: "is-primary",
+        onclick: async () => {
+          if (isInserting) return;
+          if (!selectedFlowMapId) {
+            window.alert("Seleziona prima un Flow Map da inserire.");
+            return;
+          }
+          const selectedFlowMap = flowMaps.find((flowMap) => flowMap.id === selectedFlowMapId);
+          if (!selectedFlowMap) {
+            window.alert("Il Flow Map selezionato non è più disponibile.");
+            return;
+          }
+          isInserting = true;
+          try {
+            await materializeFlowMapNode({
+              flowMap: selectedFlowMap,
+              flowPosition: options.flowPosition || defaultAssetFlowPosition(),
+              close: () => dialog?.close?.(),
+            });
+          } finally {
+            isInserting = false;
+          }
+        },
+      }, icon("add_circle", "sm"), "Inserisci")
+    ),
+  });
+  dialog.open();
+};
+
 const openExistingLibraryDialog = async (item, options = {}) => {
   if (isExistingAiAgentPaletteItem(item)) {
     openExistingAiAgentsDialog(options);
@@ -652,7 +1184,20 @@ const openExistingLibraryDialog = async (item, options = {}) => {
       btn({ onclick: close }, "Close"),
       btn({
         class: "is-primary",
-        onclick: () => window.location.assign(kind === "boxTracker" ? "editorBoxTracker.html" : "editorBoxLens.html"),
+        onclick: () => {
+          if (window.TrackerLensBoxEditorDialog?.open) {
+            window.TrackerLensBoxEditorDialog.open({
+              type: kind === "boxTracker" ? "boxTracker" : "boxLens",
+              workspaceId: state.filters.workspaceId || "workspace_global",
+              channel: state.filters.channel !== "all" ? state.filters.channel : state.focus.channel || "",
+              onSave: async () => {
+                await loadRuntime({ force: true, silent: true });
+              },
+            });
+            return;
+          }
+          window.location.assign(kind === "boxTracker" ? "editorBoxTracker.html" : "editorBoxLens.html");
+        },
       }, icon("add", "sm"), kind === "boxTracker" ? "New Tracker" : "New Lens")
     ),
   });

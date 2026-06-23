@@ -568,6 +568,19 @@ body.is-dragging-workspace-asset .tl-canvas {
   min-width: min(620px, 78vw);
 }
 
+.tl-tracker-link-group {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.tl-tracker-link-group h3 {
+  margin: 0;
+  color: var(--tl-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .cms-field.tl-tracker-link-search {
   margin-bottom: 16px;
 }

@@ -319,9 +319,21 @@ const setSelectedRecord = (id) => {
 const openEditor = () => {
   const record = selectedRecord();
   if (!record) return;
-  if (record.type === "boxTracker") window.location.assign(`editorBoxTracker.html?trackerId=${encodeURIComponent(record.id)}`);
-  else if (record.type === "workspace") window.location.assign(`editorWorkspace.html?workspaceId=${encodeURIComponent(record.id)}`);
-  else window.location.assign(`editorBoxLens.html?lensId=${encodeURIComponent(record.id)}`);
+  if (record.type === "boxTracker") {
+    if (window.TrackerLensBoxEditorDialog?.open) {
+      window.TrackerLensBoxEditorDialog.open({ type: "boxTracker", id: record.id, workspaceId: "database" });
+      return;
+    }
+    window.location.assign(`editorBoxTracker.html?trackerId=${encodeURIComponent(record.id)}`);
+  } else if (record.type === "workspace") {
+    window.location.assign(`editorWorkspace.html?workspaceId=${encodeURIComponent(record.id)}`);
+  } else {
+    if (window.TrackerLensBoxEditorDialog?.open) {
+      window.TrackerLensBoxEditorDialog.open({ type: "boxLens", id: record.id, workspaceId: "database" });
+      return;
+    }
+    window.location.assign(`editorBoxLens.html?lensId=${encodeURIComponent(record.id)}`);
+  }
 };
 
 const copySelectedJson = async () => {

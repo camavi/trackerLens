@@ -963,7 +963,7 @@ const renderNodeQuickActions = (node, view) => {
   if (!node?.id || node.metadata?.library) return null;
   const paused = view.runtime.status === "paused";
   const disabled = view.runtime.status === "disabled";
-  const canDeleteRuntimeNode = isDraftNode(node) || isInlineConfigNode(node);
+  const canDeleteRuntimeNode = isDraftNode(node) || isInlineConfigNode(node) || isEmbeddedFlowMapNode(node);
   return _.span(
     { class: "tl-flow-node-quick-actions", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
     btn({
@@ -1025,6 +1025,105 @@ const renderNodeQuickActions = (node, view) => {
   );
 };
 
+const renderFlowPortNodeBody = (node, view) => {
+  const direction = flowPortDirection(node);
+  const isInputGateway = direction === "out";
+  const ports = flowPortDefinitions(node);
+  const sideLabel = isInputGateway ? "porte a destra" : "porte a sinistra";
+  const title = isInputGateway ? "Flow Input Gateway" : "Flow Output Gateway";
+  return _.div(
+    { class: `tl-flow-port-node-body ${isInputGateway ? "is-flow-in" : "is-flow-out"}` },
+    _.div(
+      { class: "tl-flow-port-node-head" },
+      _.span(
+        { class: "tl-flow-port-node-kicker" },
+        icon(isInputGateway ? "login" : "logout", "sm"),
+        _.strong(isInputGateway ? "IN" : "OUT")
+      ),
+      btn({
+        type: "button",
+        class: "tl-flow-port-add-btn",
+        title: "Add port",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestFlowPortDialog(node);
+        },
+      }, icon("add", "sm"), "Add port")
+    ),
+    _.p(`${title} · ${sideLabel}`),
+    _.div(
+      { class: "tl-flow-port-node-list" },
+      ...ports.map((port) => _.button(
+        {
+          type: "button",
+          class: `tl-flow-port-node-row is-${port.type}`,
+          title: `Modifica ${port.name}`,
+          onPointerDown: stopNodeControlEvent,
+          onclick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            requestFlowPortDialog(node, port.name);
+          },
+        },
+        _.span({ class: "tl-flow-port-node-name" }, port.name),
+        _.em(flowPortTypeLabel(port.type)),
+        icon("edit", "sm")
+      ))
+    ),
+    _.span(
+      { class: "tl-flow-node-metrics" },
+      _.em(`${ports.length} porte`),
+      _.em(view.runtime.status),
+      _.em(isInputGateway ? "entry" : "exit")
+    )
+  );
+};
+
+const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
+  if (isAgentBridgeNode(node)) {
+    return [_.div(
+      { class: "tl-flow-agent-bridge-core" },
+      icon("network_node", "lg")
+    )];
+  }
+  if (isFlowBoundaryNode(node)) return [renderFlowPortNodeBody(node, view)];
+  if (isEmbeddedFlowMapNode(node)) {
+    const inputPorts = nodePorts(node, "in");
+    const outputPorts = nodePorts(node, "out");
+    return [
+      _.div(
+        { class: "tl-flow-embedded-map-interface" },
+        _.span(icon("login", "sm"), _.strong("Flow In"), _.em(String(inputPorts.length))),
+        _.span(icon("logout", "sm"), _.strong("Flow Out"), _.em(String(outputPorts.length)))
+      ),
+      btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "View Flow Map",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openEmbeddedFlowMapPreviewDialog(node);
+        },
+      }, icon("visibility", "sm"), "View Flow Map"),
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · v${node.metadata?.version || node.metadata?.config?.version || "0.1.0"}`),
+    ];
+  }
+  return [
+    _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+    _.p(view.description),
+    renderInlineNodeSettings(node),
+    _.span(
+      { class: "tl-flow-node-metrics" },
+      _.em(`${view.runtime.eventsPerMin}/min`),
+      _.em(`${view.runtime.latency || 0}ms`),
+      _.em(`${view.metrics.listeners || 0} listeners`)
+    ),
+  ];
+};
+
 const renderNodeContextMenu = () => {
   const menu = state.contextMenu;
   if (!menu || menu.type !== "node") return null;
@@ -1033,7 +1132,7 @@ const renderNodeContextMenu = () => {
   const view = runtimeNodeBase(node, recentActivity(graphModel()).nodeActivity?.get(node.id), nodePerformance(node));
   const disabled = view.runtime.status === "disabled";
   const paused = view.runtime.status === "paused";
-  const canDelete = isDraftNode(node) || (isInlineConfigNode(node) && !node.metadata?.library);
+  const canDelete = isDraftNode(node) || ((isInlineConfigNode(node) || isEmbeddedFlowMapNode(node)) && !node.metadata?.library);
   const item = (action, iconName, label, options = {}) => _.button(
     {
       type: "button",
@@ -1496,7 +1595,7 @@ const renderCanvas = () => {
             {
               role: "button",
               tabindex: 0,
-              class: `tl-flow-node is-${graphTone(node)} is-runtime-${view.runtime.status}${isAgentBridge ? " is-agent-bridge" : ""}${node.metadata?.collapsed ? " is-collapsed" : ""}${state.frontNodeId === node.id ? " is-front" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}${impactClassForNode(node, impact)}${live || processingNode ? " is-live is-event-active" : ""}${processingNode ? " is-ai-processing" : ""}${live?.status === "orchestrating" ? " is-orchestrating" : ""}${live?.status === "complete" ? " is-task-complete" : ""}${live?.status === "error" ? " is-error" : ""}${isLinkSource ? " is-link-source" : ""}${isLinkTarget ? " is-link-target" : ""}${isLinkHover ? " is-link-hover" : ""}${isInTestRun ? " is-test-path" : ""}`,
+              class: `tl-flow-node is-${graphTone(node)} is-runtime-${view.runtime.status}${isAgentBridge ? " is-agent-bridge" : ""}${isEmbeddedFlowMapNode(node) ? " is-embedded-flow-map" : ""}${isFlowBoundaryNode(node) ? ` is-flow-port-node is-${flowPortSubtype(node) || "flow-port"}` : ""}${node.metadata?.collapsed ? " is-collapsed" : ""}${state.frontNodeId === node.id ? " is-front" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}${impactClassForNode(node, impact)}${live || processingNode ? " is-live is-event-active" : ""}${processingNode ? " is-ai-processing" : ""}${live?.status === "orchestrating" ? " is-orchestrating" : ""}${live?.status === "complete" ? " is-task-complete" : ""}${live?.status === "error" ? " is-error" : ""}${isLinkSource ? " is-link-source" : ""}${isLinkTarget ? " is-link-target" : ""}${isLinkHover ? " is-link-hover" : ""}${isInTestRun ? " is-test-path" : ""}`,
               style: { "--x": pos.x, "--y": pos.y, "--port-count": portCount, minHeight: isAgentBridge ? "58px" : `${nodeMinHeight(portCount)}px` },
               "data-flow-node-id": node.id,
               "data-input-port-count": fullInputPorts.length,
@@ -1574,22 +1673,7 @@ const renderCanvas = () => {
             isAgentBridge ? null : renderNodeQuickActions(node, view),
             node.metadata?.collapsed ? null : _.div(
               { class: "tl-flow-node-body" },
-              ...(isAgentBridge
-                ? [_.div(
-                  { class: "tl-flow-agent-bridge-core" },
-                  icon("network_node", "lg")
-                )]
-                : [
-                  _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
-                  _.p(view.description),
-                  renderInlineNodeSettings(node),
-                  _.span(
-                    { class: "tl-flow-node-metrics" },
-                    _.em(`${view.runtime.eventsPerMin}/min`),
-                    _.em(`${view.runtime.latency || 0}ms`),
-                    _.em(`${view.metrics.listeners || 0} listeners`)
-                  ),
-                ])
+              ...renderRuntimeNodeBody(node, view, channelName, fieldCount)
             ),
             _.span(
               { class: "tl-flow-node-footer", "data-flow-node-footer": node.id },
@@ -2733,7 +2817,7 @@ const renderInspector = () => {
   const channels = node ? nodeChannels(node) : [];
   const channelRecords = selectedChannelRecords(node);
   const draft = isDraftNode(node || {});
-  const canDeleteRuntimeNode = draft || (node && isInlineConfigNode(node) && !node.metadata?.library);
+  const canDeleteRuntimeNode = draft || (node && (isInlineConfigNode(node) || isEmbeddedFlowMapNode(node)) && !node.metadata?.library);
   const linkingSource = nodeById(state.linkingSourceId);
   const isLinkTarget = Boolean(node && linkingSource && linkingSource.id !== node.id);
   const view = node ? runtimeNodeBase(node, recentActivity(graphModel()).nodeActivity?.get(node.id), nodePerformance(node)) : null;
@@ -2784,7 +2868,7 @@ const renderInspector = () => {
           ? inspectorActionButton({ label: "Link Here", iconName: "add_link", onclick: () => createLinkToNode(node) })
           : inspectorActionButton({ label: linkingSource?.id === node.id ? "Linking..." : "Start Link", iconName: "hub", onclick: () => startLinkFromNode(node), disabled: Boolean(linkingSource && linkingSource.id === node.id) }),
         linkingSource ? inspectorActionButton({ label: "Cancel Link", iconName: "link_off", onclick: cancelLinkMode }) : null,
-        canDeleteRuntimeNode ? inspectorActionButton({ label: draft ? "Delete Draft" : "Delete Node", iconName: "delete", className: "is-danger", onclick: () => requestDraftNodeDelete(node) }) : null
+        canDeleteRuntimeNode ? inspectorActionButton({ label: isEmbeddedFlowMapNode(node) ? "Delete Alias" : draft ? "Delete Draft" : "Delete Node", iconName: "delete", className: "is-danger", onclick: () => requestDraftNodeDelete(node) }) : null
       )
     ) : _.p({ class: "tl-flow-muted" }, "Nessun nodo selezionato."),
     node ? renderInspectorPanelStack("node", panels) : null

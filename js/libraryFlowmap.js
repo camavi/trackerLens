@@ -381,6 +381,92 @@ const saveFlowMapColor = async (item, color, event = null) => {
   }
 };
 
+const createDefaultFlowBoundaryNodes = (workspaceId, now) => {
+  const boundaryNode = ({
+    id,
+    label,
+    subtype,
+    iconName,
+    tone,
+    permission,
+    port,
+    side,
+    x,
+  }) => {
+    const inputs = side === "in" ? [port] : [];
+    const outputs = side === "out" ? [port] : [];
+    return {
+      id,
+      workspaceId,
+      type: "flowPort",
+      label,
+      sourceRef: "",
+      assetId: "",
+      inputs,
+      outputs,
+      channels: [port.name],
+      status: "active",
+      runtime: {
+        status: "active",
+        active: true,
+      },
+      position: { x: 1, y: 1 },
+      flowPosition: { x, y: "42%" },
+      metadata: {
+        configured: true,
+        draft: false,
+        paletteLabel: label,
+        paletteAction: subtype === "flow-in" ? "Flow Map Input" : "Flow Map Output",
+        tone,
+        icon: iconName,
+        runtimeType: "flowPort",
+        subtype,
+        category: "flow-maps",
+        flowPorts: [port],
+        hasInput: side === "in",
+        hasOutput: side === "out",
+        permissions: [permission],
+        manifest: {
+          version: "1.0.0",
+          type: "flowPort",
+          subtype,
+          category: "flow-maps",
+          inputs,
+          outputs,
+          permissions: [permission],
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
+
+  return [
+    boundaryNode({
+      id: `flow_in_${safeFlowId(workspaceId)}`,
+      label: "Flow In",
+      subtype: "flow-in",
+      iconName: "login",
+      tone: "green",
+      permission: "flow.input",
+      port: { id: "flow.in", name: "flow.in", type: "object", schema: null, required: false },
+      side: "out",
+      x: "12%",
+    }),
+    boundaryNode({
+      id: `flow_out_${safeFlowId(workspaceId)}`,
+      label: "Flow Out",
+      subtype: "flow-out",
+      iconName: "logout",
+      tone: "cyan",
+      permission: "flow.output",
+      port: { id: "flow.out", name: "flow.out", type: "object", schema: null, required: false },
+      side: "in",
+      x: "70%",
+    }),
+  ];
+};
+
 const createFlowMapFromDialog = async ({ close, titleInput, descriptionInput, categoryInput, colorInput, versionInput }) => {
   const title = normalizeText(titleInput.value, "Nuovo Flow Map");
   const category = normalizeText(categoryInput.value, "global");
@@ -439,11 +525,13 @@ const createFlowMapFromDialog = async ({ close, titleInput, descriptionInput, ca
     createdAt: now,
     updatedAt: now,
   };
+  const boundaryNodes = createDefaultFlowBoundaryNodes(workspaceId, now);
 
   try {
     await Promise.all([
       writeRecord(PAGE_STORE, { id: workspaceId, content: pageContent }),
       writeRecord(FLOW_STORE, flow),
+      ...boundaryNodes.map((node) => writeRecord(NODE_STORE, node)),
     ]);
     close?.();
     await loadFlowLibrary();

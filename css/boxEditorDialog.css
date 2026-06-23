@@ -82,8 +82,15 @@ textarea.tl-box-dialog-input {
   min-height: 560px;
 }
 
+.tl-box-dialog-tracker-advanced {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.45fr);
+  align-items: stretch;
+  min-height: 520px;
+}
+
 .tl-box-dialog-code-panel,
-.tl-box-dialog-live-panel {
+.tl-box-dialog-live-panel,
+.tl-box-dialog-tracker-preview {
   min-height: 0;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -94,6 +101,10 @@ textarea.tl-box-dialog-input {
 .tl-box-dialog-code-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.tl-box-dialog-tracker-advanced .tl-box-dialog-code-panel {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .tl-box-dialog-tabs {
@@ -125,6 +136,36 @@ textarea.tl-box-dialog-input {
 .tl-box-dialog-code-body {
   min-height: 0;
   overflow: hidden;
+}
+
+.tl-box-dialog-tracker-panel {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.tl-box-dialog-tracker-panel h3 {
+  margin: 0;
+  color: var(--tl-text);
+  font-size: 14px;
+}
+
+.tl-box-dialog-muted {
+  margin: 0;
+  color: var(--tl-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tl-box-dialog-mono,
+.tl-box-dialog-json-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
 }
 
 .tl-box-dialog-cm-host {
@@ -184,6 +225,12 @@ textarea.tl-box-dialog-input {
 .tl-box-dialog-live-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  padding: 16px;
+}
+
+.tl-box-dialog-tracker-preview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   padding: 16px;
 }
 
@@ -285,6 +332,107 @@ textarea.tl-box-dialog-input {
   max-width: 100%;
 }
 
+.tl-box-dialog-test-card {
+  min-height: 0;
+  overflow: auto;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: var(--tl-radius-sm);
+  background: rgba(3, 8, 14, 0.72);
+}
+
+.tl-box-dialog-test-row {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--tl-text-muted);
+  font-size: 12px;
+}
+
+.tl-box-dialog-test-row strong {
+  color: var(--tl-text);
+  font-weight: 800;
+}
+
+.tl-box-dialog-state-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  color: var(--tl-text);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.tl-box-dialog-state-pill.is-ok {
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.tl-box-dialog-state-pill.is-running {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.tl-box-dialog-state-pill.is-error {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.tl-box-dialog-summary-preview {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.tl-box-dialog-json-preview {
+  min-height: 300px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  color: #dbeafe;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: var(--tl-radius-sm);
+  background: #070c13;
+  white-space: pre-wrap;
+}
+
+.tl-box-dialog-preview-foot {
+  min-height: 44px;
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--tl-text-muted);
+  font-size: 12px;
+}
+
+.tl-box-dialog-preview-error {
+  min-height: 72px;
+  padding: 12px;
+  display: grid;
+  align-content: center;
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: var(--tl-radius-sm);
+  background: rgba(127, 29, 29, 0.18);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .tl-box-dialog-state,
 .tl-box-dialog-notice {
   padding: 10px 12px;
@@ -300,6 +448,10 @@ textarea.tl-box-dialog-input {
   }
 
   .tl-box-dialog-lens-advanced {
+    grid-template-columns: 1fr;
+  }
+
+  .tl-box-dialog-tracker-advanced {
     grid-template-columns: 1fr;
   }
 

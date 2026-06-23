@@ -396,6 +396,23 @@ body.is-flow-inspector-card-dragging {
     rgba(7, 15, 22, 0.94);
 }
 
+.tl-flow-map-choice.is-selected {
+  border-color: rgba(56, 189, 248, 0.72);
+  background:
+    linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(34, 197, 94, 0.08)),
+    rgba(7, 15, 22, 0.98);
+  box-shadow: inset 3px 0 0 rgb(56, 189, 248), 0 0 0 1px rgba(56, 189, 248, 0.1);
+}
+
+.tl-flow-map-choice.is-incompatible {
+  border-color: rgba(251, 113, 133, 0.2);
+}
+
+.tl-flow-map-choice.is-incompatible .tl-flow-library-asset-action,
+.tl-flow-map-choice.is-incompatible .tl-flow-library-asset-main em {
+  color: rgb(251, 113, 133);
+}
+
 .tl-flow-library-asset-icon {
   width: 34px;
   height: 34px;
@@ -488,6 +505,155 @@ body.is-flow-inspector-card-dragging {
   max-width: 360px;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.tl-flow-map-preview-panel {
+  --cms-dialog-body-max-height: min(72vh, 680px);
+}
+
+.tl-flow-map-preview-canvas {
+  position: relative;
+  width: min(100%, 1000px);
+  aspect-ratio: 1000 / 560;
+  overflow: hidden;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 8px;
+  background-color: #061018;
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.065) 1px, transparent 1px),
+    linear-gradient(rgba(34, 211, 238, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.025) 1px, transparent 1px);
+  background-size: 32px 32px, 32px 32px, 8px 8px, 8px 8px;
+  box-shadow: inset 0 0 42px rgba(0, 0, 0, 0.28);
+}
+
+.tl-flow-map-preview-edges,
+.tl-flow-map-preview-nodes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.tl-flow-map-preview-edges {
+  z-index: 1;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.tl-flow-map-preview-edges path {
+  fill: none;
+  stroke: rgb(var(--preview-rgb, 56, 189, 248));
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px rgba(var(--preview-rgb, 56, 189, 248), 0.42));
+}
+
+.tl-flow-map-preview-edges circle {
+  fill: rgb(var(--preview-rgb, 56, 189, 248));
+  stroke: #061018;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.tl-flow-map-preview-nodes {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.tl-flow-map-preview-node {
+  position: absolute;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  overflow: hidden;
+  color: #f8fafc;
+  border: 1px solid rgba(var(--preview-rgb, 56, 189, 248), 0.72);
+  border-radius: 7px;
+  background:
+    linear-gradient(90deg, rgba(var(--preview-rgb, 56, 189, 248), 0.16), rgba(5, 12, 18, 0.96) 46%),
+    #07111a;
+  box-shadow:
+    inset 3px 0 0 rgba(var(--preview-rgb, 56, 189, 248), 0.86),
+    0 0 16px rgba(var(--preview-rgb, 56, 189, 248), 0.12);
+}
+
+.tl-flow-map-preview-node-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: rgb(var(--preview-rgb, 56, 189, 248));
+  border: 1px solid rgba(var(--preview-rgb, 56, 189, 248), 0.3);
+  border-radius: 6px;
+  background: rgba(var(--preview-rgb, 56, 189, 248), 0.1);
+}
+
+.tl-flow-map-preview-node-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.tl-flow-map-preview-node-copy strong,
+.tl-flow-map-preview-node-copy em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-map-preview-node-copy strong {
+  font-size: 11px;
+}
+
+.tl-flow-map-preview-node-copy em {
+  color: rgba(203, 213, 225, 0.78);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.tl-flow-map-preview-empty {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--tl-text-muted);
+  border: 1px dashed rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  background: rgba(6, 16, 24, 0.84);
+  text-align: center;
+}
+
+.tl-flow-map-preview-empty strong {
+  color: var(--tl-text);
+}
+
+@media (max-width: 720px) {
+  .tl-flow-map-preview-node {
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 5px;
+    padding: 5px 6px;
+  }
+
+  .tl-flow-map-preview-node-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .tl-flow-map-preview-node-copy strong {
+    font-size: 9px;
+  }
+
+  .tl-flow-map-preview-node-copy em {
+    font-size: 8px;
+  }
 }
 
 .tl-flow-delete-dependencies {

@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-18.
+Last updated: 2026-06-21.
 
 ## Active Area
 
@@ -33,6 +33,12 @@ Flow Map library separation baseline is complete:
 - Workspace editor owns Lens insertion: Flow Map no longer exposes Lens palette items, while `editorWorkspace.html` shows draggable/clickable Lens templates plus saved boxLens assets in separate collapsible left-panel sections with edit actions.
 - Box editor dialog baseline: `boxEditorDialog.js` now provides a CMSwift, iframe-free universal settings dialog for creating/editing boxLens and boxTracker assets from Workspace and Flow Map surfaces, with local `tl_widgets` persistence and draft runtime promotion support.
 - Workspace editor layout now keeps workspace properties in a fixed drawer opened from the title edit button, removes the right grid column and keeps the mini navigator as a right-side fixed overlay with persisted minimize/expand state.
+- Flow Map composition baseline adds `Flow In`, `Flow Out` and embedded `Flow Map` palette nodes; embedded Flow Maps can be inserted only when the target Flow Map exposes at least one Flow In/Out port, and workspace boxLens linking can now use composable Flow Maps as hidden sources alongside boxTrackers.
+- Flow Map boundary ports are configurable: `Flow In` and `Flow Out` nodes expose an Add/Edit port dialog with typed ports (`string`, `int`, `float`, `object`, `array`, `bool`), render as dedicated gateway cards, place Flow In ports on the right and Flow Out ports on the left, and embedded/workspace Flow Map links inherit the configured port definitions.
+- New Flow Maps created from `libraryFlowmap.html` automatically start with configured `Flow In` and `Flow Out` boundary nodes, positioned on opposite sides with default `flow.in` and `flow.out` object ports.
+- Embedded Flow Map insertion now lists every available Flow Map in a selection dialog; insertion happens only from the explicit `Inserisci` action, which reloads the selected graph and blocks with an alert unless at least one `Flow In` or `Flow Out` node still exists.
+- Embedded Flow Map nodes expose and automatically refresh the source graph interface: internal `Flow In` definitions render as typed inputs on the left, internal `Flow Out` definitions render as typed outputs on the right, generic `all` ports remain available, and alias deletion removes only the virtual node plus its local links.
+- Embedded Flow Map aliases include a `View Flow Map` action that opens a read-only CMSwift dialog with a fitted minimal graph canvas, compact name/type node cards and source-colored connection paths loaded live from the referenced Flow Map.
 
 Flow Map canvas interaction refinement is complete:
 

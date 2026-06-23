@@ -48,7 +48,22 @@ const openChromePage = (url) => {
   window.location.assign(url);
 };
 
-const openCreateBox = () => openChromePage("editorBoxLens.html");
+const openUniversalBoxEditor = (options = {}, fallbackUrl = "") => {
+  if (!window.TrackerLensBoxEditorDialog?.open) {
+    if (fallbackUrl) openChromePage(fallbackUrl);
+    return;
+  }
+
+  window.TrackerLensBoxEditorDialog.open({
+    workspaceId: "library",
+    onSave: async () => {
+      await loadLibrary();
+    },
+    ...options,
+  });
+};
+
+const openCreateBox = () => openUniversalBoxEditor({ type: "boxLens" }, "editorBoxLens.html");
 
 const openBoxEditor = (box) => {
   if (box.type === "workspace") {
@@ -57,11 +72,11 @@ const openBoxEditor = (box) => {
   }
 
   if (box.type === "boxTracker") {
-    openChromePage(`editorBoxTracker.html?trackerId=${encodeURIComponent(box.id)}`);
+    openUniversalBoxEditor({ type: "boxTracker", id: box.id }, `editorBoxTracker.html?trackerId=${encodeURIComponent(box.id)}`);
     return;
   }
 
-  openChromePage(`editorBoxLens.html?lensId=${encodeURIComponent(box.id)}`);
+  openUniversalBoxEditor({ type: "boxLens", id: box.id }, `editorBoxLens.html?lensId=${encodeURIComponent(box.id)}`);
 };
 
 const openWorkspaceView = (workspaceId) => {

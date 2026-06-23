@@ -842,7 +842,8 @@ const loadRuntime = async (options = {}) => {
       return;
     }
 
-    const nodes = (await resolveAiAgentAliasNodes(enrichNodesWithLibrarySample(runtimeNodes, libraryItems))).map(normalizeLoadedNodeManifest);
+    const loadedNodes = (await resolveAiAgentAliasNodes(enrichNodesWithLibrarySample(runtimeNodes, libraryItems))).map(normalizeLoadedNodeManifest);
+    const nodes = await syncEmbeddedFlowMapAliases(loadedNodes);
     const mergedDependencies = await normalizeRuntimeDependencyChannels(
       nodes,
       mergeOptimisticDependencies(nodes, mergeConnectionDependencies(nodes, dependencies, connections)),
@@ -1320,6 +1321,7 @@ const FLOW_NODE_CATEGORY_OPTIONS = [
   { value: "custom", label: "Custom" },
   { value: "sources", label: "Sources" },
   { value: "trackers", label: "Trackers" },
+  { value: "flow-maps", label: "Flow Maps" },
   { value: "processors", label: "Processors" },
   { value: "knowledge", label: "Knowledge" },
   { value: "ai-agents", label: "AI Agents" },

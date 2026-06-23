@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-18.
+Last updated: 2026-06-21.
 
 ## Active
 
@@ -125,6 +125,12 @@ Main files:
 - Workspace Lens ownership pass: Lens templates and saved boxLens insertion now live in separate collapsible sections in `editorWorkspace.html`; Flow Map palette and local planner no longer create Lens nodes.
 - Universal box editor dialog baseline: Workspace and Flow Map can create/edit boxLens and boxTracker settings through a shared CMSwift dialog (`js/boxEditorDialog.js`) without iframe navigation, while legacy editor pages remain available.
 - Workspace editor space pass: right properties column is now a fixed drawer opened from workspace edit, and the mini navigator is a right-side fixed canvas overlay with persisted minimize/expand state.
+- Flow Map composition baseline: `Flow In`, `Flow Out` and embedded `Flow Map` nodes are available; embedded Flow Maps require at least one Flow In/Out port and boxLens workspace links can target composable Flow Maps as hidden sources.
+- Flow Map boundary port editor: `Flow In`/`Flow Out` nodes now manage typed custom ports through an Add/Edit dialog, render with gateway-specific cards and feed configured port definitions into embedded Flow Map nodes and workspace boxLens links.
+- Flow Map default boundary bootstrap: creating a Flow Map from the library now persists active `Flow In` and `Flow Out` runtime nodes with default typed ports and initial canvas positions.
+- Flow Map embed validation: the Flow Map node picker lists all available Flow Maps, requires an explicit selection and `Inserisci` confirmation, then revalidates the selected graph and rejects maps without any `Flow In` or `Flow Out` node.
+- Embedded Flow Map alias sync: source `Flow In` ports map to left-side inputs and source `Flow Out` ports map to right-side outputs; names, types, title and version refresh from the source while generic `all` ports remain available, and deleting the alias never deletes its source Flow Map.
+- Embedded Flow Map read-only preview: alias body action opens a minimal fitted graph dialog showing current source nodes by name/type and their connections without full node bodies or editing controls.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
 - Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
 - Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.

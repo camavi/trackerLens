@@ -175,6 +175,11 @@ const nodePalette = [
     paletteNode({ label: "Realtime Tracker", icon: "sync_alt", tone: "orange", nodeType: "boxTracker", subtype: "realtime", category: "trackers", inputs: ["raw"], outputs: ["channel"], permissions: ["channel.emit"], trackerSource: "websocket", runtimeMode: "real-time" }),
     paletteNode({ label: "Polling Tracker", icon: "update", tone: "gold", nodeType: "boxTracker", subtype: "polling", category: "trackers", inputs: ["raw"], outputs: ["channel"], permissions: ["channel.emit"], trackerSource: "rest", runtimeMode: "interval" }),
   ]],
+  ["Flow Maps", [
+    paletteNode({ label: "Flow In", icon: "login", tone: "green", nodeType: "flowPort", subtype: "flow-in", category: "flow-maps", outputs: ["flow.in"], permissions: ["flow.input"], connectionType: "Flow Map Input" }),
+    paletteNode({ label: "Flow Out", icon: "logout", tone: "cyan", nodeType: "flowPort", subtype: "flow-out", category: "flow-maps", inputs: ["flow.out"], permissions: ["flow.output"], connectionType: "Flow Map Output" }),
+    paletteNode({ label: "Flow Map", icon: "account_tree", tone: "blue", nodeType: "flowMap", subtype: "existing", category: "flow-maps", inputs: ["flow.in"], outputs: ["flow.out"], permissions: ["flow.invoke"] }),
+  ]],
   ["Processors", [
     paletteNode({ label: "Agent Bridge", icon: "network_node", tone: "cyan", nodeType: "processor", subtype: "agent-bridge", category: "processors", inputs: ["agent_control", "listening"], outputs: ["action"], permissions: ["graph.dispatch", "channel.emit"], settingsSchema: { support: "single-agent" }, runtime: { bridge: true, controlPort: "agent_control", compact: true }, connectionType: "Agent Bridge" }),
     paletteNode({ label: "Filter", icon: "filter_alt", tone: "purple", nodeType: "processor", subtype: "filter", category: "processors", inputs: ["input"], outputs: ["output"], connectionType: "Processor: Filter" }),

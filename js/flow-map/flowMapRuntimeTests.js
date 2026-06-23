@@ -3397,6 +3397,29 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
   if (contextNode?.metadata?.draft) query.set("draftNodeId", contextNode.id);
   if (contextNode?.label) query.set("runtimeLabel", contextNode.label);
 
+  const editorType = item.editorType || (item.url?.includes("editorBoxTracker") ? "boxTracker" : item.url?.includes("editorBoxLens") ? "boxLens" : "");
+  if (editorType) {
+    if (editorType && window.TrackerLensBoxEditorDialog?.open) {
+      window.TrackerLensBoxEditorDialog.open({
+        type: editorType,
+        id: contextNode?.sourceRef || contextNode?.assetId || "",
+        template: item,
+        workspaceId: workspaceId || "workspace_global",
+        channel,
+        draftNodeId: contextNode?.metadata?.draft ? contextNode.id : "",
+        runtimeNodeId: contextNode?.id || "",
+        runtimeLabel: contextNode?.label || "",
+        onSave: async () => {
+          await loadRuntime({ force: true, silent: true });
+        },
+      });
+      return;
+    }
+    const fallbackUrl = editorType === "boxTracker" ? "editorBoxTracker.html" : "editorBoxLens.html";
+    window.location.assign(`${item.url || fallbackUrl}${query.toString() ? `?${query.toString()}` : ""}`);
+    return;
+  }
+
   if (item.url) {
     window.location.assign(`${item.url}${query.toString() ? `?${query.toString()}` : ""}`);
     return;
@@ -3411,6 +3434,21 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
     query.set("source", item.trackerSource);
     query.set("trackerType", item.trackerSource);
     query.set("runtimeMode", item.runtimeMode || (item.trackerSource === "websocket" ? "real-time" : "interval"));
+    if (window.TrackerLensBoxEditorDialog?.open) {
+      window.TrackerLensBoxEditorDialog.open({
+        type: "boxTracker",
+        template: item,
+        workspaceId: workspaceId || "workspace_global",
+        channel,
+        draftNodeId: contextNode?.metadata?.draft ? contextNode.id : "",
+        runtimeNodeId: contextNode?.id || "",
+        runtimeLabel: contextNode?.label || item.name || "",
+        onSave: async () => {
+          await loadRuntime({ force: true, silent: true });
+        },
+      });
+      return;
+    }
     window.location.assign(`editorBoxTracker.html?${query.toString()}`);
     return;
   }

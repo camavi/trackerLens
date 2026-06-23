@@ -145,6 +145,169 @@ window.TrackerLensBoxEditorDialog = (() => {
     }
   };
 
+  const parseHeadersText = (value = "") => {
+    const text = String(value || "").trim();
+    if (!text) return {};
+    if (text.startsWith("{")) {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Headers JSON non valido.");
+      return parsed;
+    }
+    return text.split(/\r?\n/).reduce((headers, line) => {
+      const separator = line.indexOf(":");
+      if (separator <= 0) return headers;
+      const key = line.slice(0, separator).trim();
+      const headerValue = line.slice(separator + 1).trim();
+      if (key) headers[key] = headerValue;
+      return headers;
+    }, {});
+  };
+
+  const parseBodyText = (value = "") => {
+    const text = String(value || "").trim();
+    if (!text) return undefined;
+    if (text.startsWith("{") || text.startsWith("[")) return JSON.parse(text);
+    return text;
+  };
+
+  const buildUrlWithQuery = (endpoint, query = "") => {
+    const text = String(query || "").trim();
+    if (!text) return endpoint;
+    if (text.startsWith("?") || text.includes("=")) {
+      const separator = String(endpoint || "").includes("?") ? "&" : "?";
+      return `${endpoint}${separator}${text.replace(/^\?/, "")}`;
+    }
+    return endpoint;
+  };
+
+  const parseFeedPayload = (xmlText) => {
+    const parser = new DOMParser();
+    const xml = parser.parseFromString(String(xmlText || ""), "application/xml");
+    if (xml.querySelector("parsererror")) throw new Error("Feed RSS/Atom non valido.");
+    const items = [...xml.querySelectorAll("item, entry")].slice(0, 10).map((node) => ({
+      title: node.querySelector("title")?.textContent?.trim() || "",
+      link: node.querySelector("link")?.getAttribute("href") || node.querySelector("link")?.textContent?.trim() || "",
+      publishedAt: node.querySelector("pubDate, published, updated")?.textContent?.trim() || "",
+      summary: node.querySelector("description, summary, content")?.textContent?.trim() || "",
+    }));
+    return {
+      title: xml.querySelector("channel > title, feed > title")?.textContent?.trim() || "",
+      items,
+    };
+  };
+
+  const parseResponsePayload = async (response, source) => {
+    const contentType = response.headers.get("content-type") || "";
+    const text = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 180) || response.statusText}`);
+    if (source === "rss" || contentType.includes("xml") || contentType.includes("rss") || contentType.includes("atom")) return parseFeedPayload(text);
+    if (contentType.includes("json")) return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { text };
+    }
+  };
+
+  const parseWebSocketMessage = (data) => {
+    if (typeof data !== "string") return { data: String(data) };
+    try {
+      return JSON.parse(data);
+    } catch (_) {
+      return { text: data };
+    }
+  };
+
+  const getPathValue = (payload, path) =>
+    String(path || "").split(".").reduce((value, key) => {
+      if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+      return undefined;
+    }, payload);
+
+  const setPathValue = (payload, path, value) => {
+    const keys = String(path || "").split(".").filter(Boolean);
+    if (!keys.length) return;
+    const lastKey = keys.pop();
+    const target = keys.reduce((node, key) => {
+      if (!node[key] || typeof node[key] !== "object") node[key] = {};
+      return node[key];
+    }, payload);
+    target[lastKey] = value;
+  };
+
+  const applyTransformRules = (payload, transformText = "", started = performance.now(), tracker = {}) => {
+    const mapped = payload && typeof payload === "object" && !Array.isArray(payload) ? { ...payload } : { value: payload };
+    String(transformText || "").split(/\r?\n/).forEach((line) => {
+      const match = line.match(/^\s*([^#][^>-]*?)\s*(?:->|=>)\s*([A-Za-z0-9_.-]+)\s*$/);
+      if (!match) return;
+      const value = getPathValue(payload, match[1].trim());
+      if (value !== undefined) setPathValue(mapped, match[2].trim(), value);
+    });
+    return {
+      ...mapped,
+      _trackerTest: {
+        receivedAt: new Date().toISOString(),
+        latencyMs: Math.max(1, Math.round(performance.now() - started)),
+        source: tracker.source || tracker.trackerType || "manual",
+        endpoint: tracker.endpoint || "",
+      },
+    };
+  };
+
+  const executeTrackerTest = async (tracker, sampleOutput, started = performance.now()) => {
+    const source = tracker.source || tracker.trackerType || "manual";
+    if (!tracker.endpoint && !["manual", "script"].includes(source)) throw new Error("URL / Sorgente mancante.");
+    if (source === "manual") {
+      const queryPayload = parseBodyText(tracker.query || "");
+      return applyTransformRules(queryPayload === undefined ? sampleOutput : queryPayload, tracker.transformText, started, tracker);
+    }
+    if (source === "script") throw new Error("Runner script non implementato nel dialog.");
+    if (source === "mcp") throw new Error("Runner MCP non implementato nel dialog.");
+    if (source === "websocket") {
+      return new Promise((resolve, reject) => {
+        const timeoutMs = Math.max(1, Number(tracker.timeout) || 10) * 1000;
+        const socket = new WebSocket(tracker.endpoint);
+        const timer = setTimeout(() => {
+          socket.close();
+          reject(new Error("Timeout WebSocket: nessun messaggio ricevuto."));
+        }, timeoutMs);
+        socket.onopen = () => {
+          const query = String(tracker.query || "").trim();
+          if (query) socket.send(query);
+        };
+        socket.onmessage = (event) => {
+          clearTimeout(timer);
+          const payload = applyTransformRules(parseWebSocketMessage(event.data), tracker.transformText, started, tracker);
+          socket.close();
+          resolve(payload);
+        };
+        socket.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("Errore connessione WebSocket."));
+        };
+      });
+    }
+
+    const controller = new AbortController();
+    const timeoutMs = Math.max(1, Number(tracker.timeout) || 10) * 1000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const method = String(tracker.method || "GET").toUpperCase();
+    const headers = parseHeadersText(tracker.headersText);
+    const bodyValue = method === "GET" || method === "HEAD" ? undefined : parseBodyText(tracker.query || "");
+    if (bodyValue && typeof bodyValue === "object" && !headers["Content-Type"] && !headers["content-type"]) headers["Content-Type"] = "application/json";
+    try {
+      const response = await fetch(buildUrlWithQuery(tracker.endpoint, method === "GET" ? tracker.query || "" : ""), {
+        method,
+        headers,
+        signal: controller.signal,
+        body: bodyValue && typeof bodyValue === "object" ? JSON.stringify(bodyValue) : bodyValue,
+      });
+      return applyTransformRules(await parseResponsePayload(response, source), tracker.transformText, started, tracker);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const makeId = (type) => `${type === "boxTracker" ? "tracker" : "lens"}_${Date.now()}`;
 
   const defaultLensCode = (box) => ({
@@ -220,6 +383,114 @@ window.TrackerLensBoxEditorDialog = (() => {
     return fragment;
   };
 
+  const previewErrorNode = (message = "Preview error") =>
+    _.div({ class: "tl-box-dialog-preview-error" }, message);
+
+  const valueByPath = (data, path) =>
+    String(path || "").split(".").reduce((value, part) => value?.[part], data);
+
+  const applyPreviewBindings = (runtime, data = {}) => {
+    if (!runtime) return;
+    const setText = (selector, value) => {
+      if (value == null) return;
+      runtime.querySelectorAll(selector).forEach((element) => {
+        element.textContent = String(value);
+      });
+    };
+
+    runtime.querySelectorAll("[data-tl-bind], [data-bind]").forEach((element) => {
+      const path = element.getAttribute("data-tl-bind") || element.getAttribute("data-bind");
+      const value = valueByPath(data, path);
+      if (value != null) element.textContent = String(value);
+    });
+    setText(".value", data.c ?? data.price ?? data.btcPrice);
+    setText(".change", data.P ?? data.change24h);
+    setText(".title", data.title);
+    setText(".source", data.source);
+  };
+
+  const dialogPreviewPolicy = ({ box, code }) => {
+    if (!window.TrackerLensSandboxPolicy?.validateBox) return { ok: true, policy: null, violations: [] };
+    return window.TrackerLensSandboxPolicy.validateBox({
+      box,
+      code: {
+        manifest: code.manifest,
+        css: code.css,
+        html: code.html,
+        js: code.js,
+      },
+    });
+  };
+
+  const buildPreviewController = (js = "") => {
+    const source = String(js || "").trim();
+    if (!source) return null;
+    try {
+      if (/export\s+default\s+function\b/.test(source)) {
+        const body = source.replace(/export\s+default\s+function(?:\s+[$A-Z_a-z][$\w]*)?\s*\(/, "return function(");
+        return Function(body)();
+      }
+      if (/export\s+default\s+/.test(source)) {
+        return Function(source.replace(/export\s+default\s+/, "return "))();
+      }
+      if (/function\s+boxLens\s*\(/.test(source)) {
+        return Function(`${source}\nreturn typeof boxLens === "function" ? boxLens : null;`)();
+      }
+    } catch (error) {
+      if (/unsafe-eval|content security policy|evaluating a string/i.test(error.message || "")) {
+        return null;
+      }
+      throw new Error(`JS preview non eseguibile: ${error.message}`);
+    }
+    return null;
+  };
+
+  const normalizePreviewResult = (result) => {
+    const normalized = result && typeof result === "object" ? result : {};
+    const listener = typeof normalized.listener === "function"
+      ? { default: normalized.listener }
+      : normalized.listener && typeof normalized.listener === "object" ? normalized.listener : {};
+    return {
+      ...normalized,
+      status: normalized.status || "ready",
+      listener,
+    };
+  };
+
+  const executeLocalPreviewController = ({ runtime, box, code, data }) => {
+    const controller = buildPreviewController(code.js);
+    if (typeof controller !== "function") {
+      applyPreviewBindings(runtime, data);
+      return;
+    }
+
+    const context = {
+      mode: "preview",
+      box,
+      data,
+      channel: box.channels?.[0]?.id || "default",
+      emit: () => {},
+      updateData: (nextData = {}) => applyPreviewBindings(runtime, { ...data, ...nextData }),
+      fetch: () => Promise.reject(new Error("Network non disponibile nella preview locale")),
+    };
+    const result = normalizePreviewResult(controller(runtime, context));
+    const listeners = result.listener || {};
+    const channelNames = [
+      "default",
+      "*",
+      context.channel,
+      ...(box.channels || []).map((channel) => channel.id || channel).filter(Boolean),
+    ];
+    [...new Set(channelNames)].forEach((channel) => {
+      try {
+        listeners[channel]?.(data, { channel, mode: "preview", box });
+      } catch (error) {
+        throw new Error(`Listener ${channel}: ${error.message}`);
+      }
+    });
+    applyPreviewBindings(runtime, data);
+  };
+
   const mountLensDialogPreview = ({ previewId, box, code, device = "desktop" }) => {
     const canvas = document.getElementById(`${previewId}-canvas`);
     const runtime = document.getElementById(`${previewId}-runtime`);
@@ -233,22 +504,19 @@ window.TrackerLensBoxEditorDialog = (() => {
     canvas.style.setProperty("--tl-dialog-preview-height", `${height * 20}px`);
     canvas.dataset.device = device;
     style.textContent = `${scopeSelector}{box-sizing:border-box;padding:12px;} ${scopeSelector} *{box-sizing:border-box;}${scopeBoxLensCss(code.css || "", scopeSelector)}`;
-    runtime.replaceChildren(sanitizePreviewFragment(interpolateTemplate(code.html || "", previewData())));
-
-    const setText = (selector, value) => {
-      if (value == null) return;
-      runtime.querySelectorAll(selector).forEach((element) => {
-        element.textContent = String(value);
-      });
-    };
     const data = previewData();
-    runtime.querySelectorAll("[data-tl-bind], [data-bind]").forEach((element) => {
-      const path = element.getAttribute("data-tl-bind") || element.getAttribute("data-bind");
-      const value = path.split(".").reduce((acc, part) => acc?.[part], data);
-      if (value != null) element.textContent = String(value);
-    });
-    setText(".value", data.c);
-    setText(".change", data.P);
+    const validation = dialogPreviewPolicy({ box, code });
+    if (validation?.ok === false) {
+      runtime.replaceChildren(previewErrorNode(`Sandbox blocked: ${validation.violations.join(", ")}`));
+      return;
+    }
+
+    runtime.replaceChildren(sanitizePreviewFragment(interpolateTemplate(code.html || "", data)));
+    try {
+      executeLocalPreviewController({ runtime, box, code, data });
+    } catch (error) {
+      runtime.replaceChildren(previewErrorNode(error.message || "Errore preview JS"));
+    }
   };
 
   const defaultBox = ({ type, template = {}, id = "", runtimeLabel = "", channel = "" }) => {
@@ -353,6 +621,8 @@ window.TrackerLensBoxEditorDialog = (() => {
       const {
         sampleOutputJson,
         autoStartValue,
+        activeValue,
+        reconnectValue,
         ...trackerValues
       } = values;
       const sampleOutput = values.sampleOutputJson !== undefined
@@ -484,9 +754,16 @@ window.TrackerLensBoxEditorDialog = (() => {
       saving: false,
       advanced: Boolean(options.advanced),
       lensCodeTab: "html",
+      trackerTab: "Manifest",
+      trackerPreviewView: "json",
+      trackerTestStatus: "In attesa",
+      trackerTestLatency: "—",
+      trackerLastRun: "—",
+      trackerTestRunning: false,
       previewDevice: "desktop",
       previewId: `box-dialog-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       draftCode: null,
+      trackerDraft: null,
       record: null,
       box: defaultBox({ type, template: options.template || {}, id, runtimeLabel: options.runtimeLabel || "", channel: options.channel || "" }),
       notice: id ? "Caricamento..." : "",
@@ -508,6 +785,59 @@ window.TrackerLensBoxEditorDialog = (() => {
         public: code.public || code.Public || "",
       };
       return state.draftCode;
+    };
+    const sampleTrackerJson = () => window.TrackerLensBoxTrackerData?.sampleJson || {};
+    const trackerTabs = () => {
+      const tabs = window.TrackerLensBoxTrackerData?.tabs;
+      return Array.isArray(tabs) && tabs.length ? tabs : ["Manifest", "Endpoint", "Parametri", "Headers", "Trasformazione", "Output", "Test", "Avanzate"];
+    };
+    const currentTrackerDraft = () => {
+      if (state.trackerDraft) return state.trackerDraft;
+      const box = state.box || {};
+      state.trackerDraft = {
+        id: box.id || makeId("boxTracker"),
+        name: box.name || "Box Tracker",
+        category: box.category || "Dati",
+        version: box.version || "0.1.0",
+        runtimeVersion: box.runtimeVersion || ">=0.1.0",
+        icon: box.icon || "cloud_queue",
+        color: box.color || "#35c979",
+        description: box.description || "",
+        trackerType: box.trackerType || box.source || "manual",
+        runtimeMode: box.runtimeMode || "manual",
+        source: box.source || box.trackerType || "manual",
+        outputChannel: box.outputChannel || "default",
+        method: box.method || "GET",
+        timeout: String(box.timeout || 10),
+        endpoint: box.endpoint || "",
+        reconnectInterval: String(box.reconnectInterval || 5),
+        intervalMs: String(box.intervalMs || 0),
+        visibility: box.visibility || "private",
+        autoStartValue: box.autoStart === false ? "false" : "true",
+        activeValue: box.active === false ? "false" : "true",
+        reconnectValue: box.reconnect === false ? "false" : "true",
+        query: box.query || "",
+        headersText: box.headersText || "",
+        transformText: box.transformText || "",
+        sampleOutputJson: safeJsonStringify(box.sampleOutput || sampleTrackerJson(), {}),
+        logLevel: box.logLevel || "Info",
+        note: box.note || "",
+      };
+      return state.trackerDraft;
+    };
+    const updateTrackerDraft = (patch) => {
+      if (type !== "boxTracker") return;
+      state.trackerDraft = { ...currentTrackerDraft(), ...patch };
+      state.box = { ...state.box, ...patch };
+    };
+    const readControlValue = (event) => event?.currentTarget?.value ?? event?.target?.value ?? "";
+    const setTrackerTab = (tab) => {
+      state.trackerTab = tab;
+      rerender({ persist: false });
+    };
+    const setTrackerPreviewView = (view) => {
+      state.trackerPreviewView = view;
+      rerender({ persist: false });
     };
 
     const activeCodeTab = () => {
@@ -688,26 +1018,254 @@ window.TrackerLensBoxEditorDialog = (() => {
       );
     };
 
-    const renderTrackerAdvanced = (box) =>
-      _.section(
-        { class: "tl-box-dialog-advanced" },
+    const trackerStateClass = () => {
+      if (state.trackerTestStatus === "Errore") return "is-error";
+      if (state.trackerTestStatus === "In esecuzione") return "is-running";
+      if (state.trackerTestStatus === "Connesso") return "is-ok";
+      return "";
+    };
+    const trackerValueInput = (key, attrs = {}) => input({
+      ...attrs,
+      value: currentTrackerDraft()[key] ?? "",
+      oninput: (event) => updateTrackerDraft({ [key]: readControlValue(event) }),
+    });
+    const trackerValueTextarea = (key, attrs = {}) => textarea({
+      ...attrs,
+      oninput: (event) => updateTrackerDraft({ [key]: readControlValue(event) }),
+    }, currentTrackerDraft()[key] ?? "");
+    const trackerValueSelect = (key, options, attrs = {}) => select({
+      ...attrs,
+      value: currentTrackerDraft()[key] ?? "",
+      onchange: (event) => updateTrackerDraft({ [key]: readControlValue(event) }),
+    }, options);
+    const trackerHiddenFields = () => Object.entries(currentTrackerDraft()).map(([name, value]) => input({
+      type: "hidden",
+      name,
+      value: String(value ?? ""),
+    }));
+    const trackerSamplePayload = () => {
+      try {
+        return parseJsonField(currentTrackerDraft().sampleOutputJson, "Sample output", {});
+      } catch (_) {
+        return { error: "Sample output JSON non valido" };
+      }
+    };
+    const emitTrackerTestEvent = async ({ payload = {}, latency = 0, status = "ok", error = "" } = {}) => {
+      if (!window.TrackerLensEventBus?.get) return null;
+      const bus = window.TrackerLensEventBus.get(options.workspaceId || "workspace_global", {
+        eventStore: window.TrackerLensEventLogStore,
+        channelRegistry: window.TrackerLensChannelRegistry,
+      });
+      if (!bus?.emit) return null;
+      const draft = currentTrackerDraft();
+      return bus.emit(draft.outputChannel || "default", status === "error" ? { error } : payload, {
+        workspaceId: options.workspaceId || "workspace_global",
+        eventType: status === "error" ? "tracker_test_error" : "tracker_test",
+        sourceNodeId: options.draftNodeId || draft.id,
+        status,
+        latencyMs: Number(latency) || payload?._trackerTest?.latencyMs || 0,
+        meta: {
+          source: "box-editor-dialog",
+          trackerId: draft.id,
+          trackerName: draft.name,
+          draftNodeId: options.draftNodeId || "",
+        },
+      });
+    };
+    const runTrackerTest = async () => {
+      if (state.trackerTestRunning) return;
+      const started = performance.now();
+      state.trackerTestRunning = true;
+      state.trackerTestStatus = "In esecuzione";
+      state.trackerTestLatency = "—";
+      state.notice = "Esecuzione test tracker...";
+      rerender({ persist: false });
+      try {
+        const draft = currentTrackerDraft();
+        const sampleOutput = parseJsonField(draft.sampleOutputJson, "Sample output", {});
+        const payload = await executeTrackerTest(draft, sampleOutput, started);
+        const latency = Math.max(1, Math.round(performance.now() - started));
+        updateTrackerDraft({ sampleOutputJson: safeJsonStringify(payload, {}) });
+        state.trackerTestStatus = "Connesso";
+        state.trackerTestLatency = `${latency} ms`;
+        state.trackerLastRun = new Date().toLocaleTimeString();
+        state.notice = "Test manuale eseguito";
+        await emitTrackerTestEvent({ payload, latency, status: "ok" });
+        notify("success", state.notice);
+      } catch (error) {
+        console.error(error);
+        const latency = Math.max(1, Math.round(performance.now() - started));
+        state.trackerTestStatus = "Errore";
+        state.trackerTestLatency = "—";
+        state.trackerLastRun = new Date().toLocaleTimeString();
+        state.notice = error.message || "Test manuale non riuscito.";
+        await emitTrackerTestEvent({ latency, status: "error", error: state.notice });
+        notify("error", state.notice);
+      } finally {
+        state.trackerTestRunning = false;
+        rerender({ persist: false });
+      }
+    };
+    const renderTrackerTabPanel = () => {
+      const draft = currentTrackerDraft();
+      if (state.trackerTab === "Endpoint") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Endpoint"),
+          _.div(
+            { class: "tl-box-dialog-grid" },
+            formRow("Metodo", trackerValueSelect("method", ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({ value, label: value })))),
+            formRow("Tipo sorgente", select({
+              class: "tl-box-dialog-input",
+              value: draft.source || draft.trackerType,
+              onchange: (event) => updateTrackerDraft({ source: readControlValue(event), trackerType: readControlValue(event) }),
+            }, trackerTypeOptions()))
+          ),
+          formRow("URL / Sorgente", trackerValueInput("endpoint", { placeholder: "https://... o wss://..." }))
+        );
+      }
+      if (state.trackerTab === "Parametri") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Parametri"),
+          _.p({ class: "tl-box-dialog-muted" }, "Per REST GET diventano query string. Per POST/PUT/PATCH diventano body. Per WebSocket vengono inviati all'apertura."),
+          formRow("Query / subscription", trackerValueTextarea("query", { rows: 8, spellcheck: "false" }))
+        );
+      }
+      if (state.trackerTab === "Headers") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Headers"),
+          _.p({ class: "tl-box-dialog-muted" }, "Accetta JSON oppure righe key:value."),
+          formRow("Headers", trackerValueTextarea("headersText", { rows: 10, placeholder: "Authorization: Bearer ...", spellcheck: "false" }))
+        );
+      }
+      if (state.trackerTab === "Trasformazione") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Trasformazione"),
+          _.p({ class: "tl-box-dialog-muted" }, "Regole di mapping per normalizzare l'output prima di inviarlo ai boxLens."),
+          formRow("Mapping / note trasformazione", trackerValueTextarea("transformText", { rows: 10, placeholder: "c -> price\nP -> change24h", spellcheck: "false" }))
+        );
+      }
+      if (state.trackerTab === "Output") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Output"),
+          formRow("Canale output", trackerValueInput("outputChannel")),
+          formRow("Sample JSON", trackerValueTextarea("sampleOutputJson", { class: "tl-box-dialog-input tl-box-dialog-mono", rows: 12, spellcheck: "false" }))
+        );
+      }
+      if (state.trackerTab === "Test") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Test"),
+          _.div({ class: "tl-box-dialog-test-row" }, _.span("Stato test"), _.span({ class: `tl-box-dialog-state-pill ${trackerStateClass()}` }, state.trackerTestStatus)),
+          _.div({ class: "tl-box-dialog-test-row" }, _.span("Latenza"), _.strong(state.trackerTestLatency)),
+          _.div({ class: "tl-box-dialog-test-row" }, _.span("Ultima esecuzione"), _.strong(state.trackerLastRun)),
+          btn({ class: "is-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale")
+        );
+      }
+      if (state.trackerTab === "Avanzate") {
+        return _.section(
+          { class: "tl-box-dialog-tracker-panel" },
+          _.h3("Avanzate"),
+          _.div(
+            { class: "tl-box-dialog-grid" },
+            formRow("Versione", trackerValueInput("version")),
+            formRow("Runtime", trackerValueInput("runtimeVersion")),
+            formRow("Livello log", trackerValueSelect("logLevel", ["Debug", "Info", "Warn", "Error"].map((value) => ({ value, label: value })))),
+            formRow("Visibilità", trackerValueSelect("visibility", [
+              { value: "private", label: "Private" },
+              { value: "public", label: "Public" },
+            ]))
+          ),
+          formRow("Note", trackerValueTextarea("note", { rows: 5 }))
+        );
+      }
+      return _.section(
+        { class: "tl-box-dialog-tracker-panel" },
+        _.h3("Manifest"),
         _.div(
           { class: "tl-box-dialog-grid" },
-          formRow("Reconnect interval", input({ name: "reconnectInterval", type: "number", min: "0", value: String(box.reconnectInterval || 5) })),
-          formRow("Interval ms", input({ name: "intervalMs", type: "number", min: "0", value: String(box.intervalMs || 0) })),
-          formRow("Visibility", select({ name: "visibility", value: box.visibility || "private" }, [
-            { value: "private", label: "Private" },
-            { value: "public", label: "Public" },
+          formRow("Nome", trackerValueInput("name", { required: true })),
+          formRow("Categoria", trackerValueInput("category")),
+          formRow("Icona", trackerValueInput("icon")),
+          formRow("Colore", trackerValueInput("color", { type: "color" })),
+          formRow("Runtime mode", trackerValueSelect("runtimeMode", [
+            { value: "manual", label: "Manuale" },
+            { value: "real-time", label: "Real-time" },
+            { value: "interval", label: "Intervallo" },
           ])),
-          formRow("Auto start", select({ name: "autoStartValue", value: box.autoStart === false ? "false" : "true" }, [
+          formRow("Timeout richiesta (s)", trackerValueInput("timeout", { type: "number", min: "1" })),
+          formRow("Riconnessione", trackerValueSelect("reconnectValue", [
+            { value: "true", label: "Attiva" },
+            { value: "false", label: "Disattiva" },
+          ])),
+          formRow("Intervallo riconnessione (s)", trackerValueInput("reconnectInterval", { type: "number", min: "0" })),
+          formRow("Intervallo mock runtime (ms)", trackerValueInput("intervalMs", { type: "number", min: "0" })),
+          formRow("Auto start", trackerValueSelect("autoStartValue", [
+            { value: "true", label: "Attivo" },
+            { value: "false", label: "Disattivo" },
+          ])),
+          formRow("Stato iniziale", trackerValueSelect("activeValue", [
             { value: "true", label: "Attivo" },
             { value: "false", label: "Disattivo" },
           ]))
         ),
-        formRow("Query", textarea({ name: "query", rows: 3 }, box.query || "")),
-        formRow("Headers", textarea({ name: "headersText", rows: 4, spellcheck: "false" }, box.headersText || "")),
-        formRow("Transform", textarea({ name: "transformText", rows: 5, spellcheck: "false" }, box.transformText || "")),
-        formRow("Sample output JSON", textarea({ name: "sampleOutputJson", class: "tl-box-dialog-input tl-box-dialog-code is-active", rows: 12, spellcheck: "false" }, safeJsonStringify(box.sampleOutput, {})))
+        formRow("Descrizione", trackerValueTextarea("description", { rows: 4 }))
+      );
+    };
+    const renderTrackerPreview = () => {
+      const sample = trackerSamplePayload();
+      return _.section(
+        { class: "tl-box-dialog-tracker-preview" },
+        _.div(
+          { class: "tl-box-dialog-live-head" },
+          _.div({ class: "tl-box-dialog-live-title" }, "Anteprima / Test", _.span({ class: "tl-box-dialog-live-dot" })),
+          _.div(
+            { class: "tl-box-dialog-device-icons" },
+            btn({ class: state.trackerPreviewView === "summary" ? "is-active" : "", "aria-label": "Summary", onclick: () => setTrackerPreviewView("summary") }, icon("article", "sm")),
+            btn({ class: state.trackerPreviewView === "json" ? "is-active" : "", "aria-label": "JSON", onclick: () => setTrackerPreviewView("json") }, icon("code", "sm")),
+            btn({ "aria-label": "Esegui test", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"))
+          )
+        ),
+        _.div(
+          { class: "tl-box-dialog-test-card" },
+          _.div({ class: "tl-box-dialog-test-row" }, _.span("Stato"), _.span({ class: `tl-box-dialog-state-pill ${trackerStateClass()}` }, state.trackerTestStatus)),
+          _.div({ class: "tl-box-dialog-test-row" }, _.span("Ultimo messaggio ricevuto"), _.strong(state.trackerLastRun)),
+          state.trackerPreviewView === "summary"
+            ? _.div(
+              { class: "tl-box-dialog-summary-preview" },
+              _.div({ class: "tl-box-dialog-test-row" }, _.span("Canale"), _.strong(currentTrackerDraft().outputChannel || "default")),
+              _.div({ class: "tl-box-dialog-test-row" }, _.span("Prezzo"), _.strong(sample.c || sample.price || "—")),
+              _.div({ class: "tl-box-dialog-test-row" }, _.span("Cambio"), _.strong(sample.P || sample.change24h || "—"))
+            )
+            : _.pre({ class: "tl-box-dialog-json-preview" }, safeJsonStringify(sample, {}))
+        ),
+        _.div(
+          { class: "tl-box-dialog-preview-foot" },
+          btn({ class: "is-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale"),
+          _.span("Risposta: ", _.strong({ class: `tl-box-dialog-state-pill ${trackerStateClass()}` }, state.trackerTestLatency))
+        )
+      );
+    };
+    const renderTrackerAdvanced = () =>
+      _.section(
+        { class: "tl-box-dialog-advanced tl-box-dialog-tracker-advanced" },
+        ...trackerHiddenFields(),
+        _.section(
+          { class: "tl-box-dialog-code-panel" },
+          _.div(
+            { class: "tl-box-dialog-tabs" },
+            ...trackerTabs().map((tab) => btn({
+              class: tab === state.trackerTab ? "is-active" : "",
+              onclick: () => setTrackerTab(tab),
+            }, tab))
+          ),
+          renderTrackerTabPanel()
+        ),
+        renderTrackerPreview()
       );
 
     const renderBody = () => {
@@ -737,7 +1295,7 @@ window.TrackerLensBoxEditorDialog = (() => {
         },
         input({ type: "hidden", name: "id", value: box.id }),
         state.advanced && !isTracker ? hiddenLensSettings() : null,
-        state.advanced && !isTracker ? null : _.div(
+        state.advanced ? null : _.div(
             { class: "tl-box-dialog-grid" },
             formRow("Nome", input({ name: "name", value: box.name || "", required: true })),
             formRow("Categoria", input({ name: "category", value: box.category || "" })),
@@ -746,8 +1304,8 @@ window.TrackerLensBoxEditorDialog = (() => {
             formRow("Icona", input({ name: "icon", value: box.icon || (isTracker ? "cloud_queue" : "dashboard") })),
             formRow("Colore", input({ name: "color", type: "color", value: box.color || (isTracker ? "#35c979" : "#9b5cf5") }))
           ),
-        state.advanced && !isTracker ? null : formRow("Descrizione", textarea({ name: "description", rows: 3 }, box.description || "")),
-        state.advanced && !isTracker ? null : isTracker
+        state.advanced ? null : formRow("Descrizione", textarea({ name: "description", rows: 3 }, box.description || "")),
+        state.advanced ? null : isTracker
           ? _.div(
             { class: "tl-box-dialog-grid" },
             formRow("Tipo tracker", select({ name: "trackerType", value: box.trackerType || "manual" }, trackerTypeOptions())),
@@ -768,8 +1326,8 @@ window.TrackerLensBoxEditorDialog = (() => {
             formRow("Larghezza", input({ name: "width", type: "number", min: "1", value: String(box.width || 10) })),
             formRow("Altezza", input({ name: "height", type: "number", min: "1", value: String(box.height || 6) }))
           ),
-        state.advanced && !isTracker ? null : isTracker ? formRow("Endpoint", input({ name: "endpoint", value: box.endpoint || "", placeholder: "https://..." })) : null,
-        state.advanced ? (isTracker ? renderTrackerAdvanced(box) : renderLensAdvanced()) : null,
+        state.advanced ? null : isTracker ? formRow("Endpoint", input({ name: "endpoint", value: box.endpoint || "", placeholder: "https://..." })) : null,
+        state.advanced ? (isTracker ? renderTrackerAdvanced() : renderLensAdvanced()) : null,
         state.notice ? _.div({ class: "tl-box-dialog-notice" }, state.notice) : null
       );
     };
@@ -778,8 +1336,8 @@ window.TrackerLensBoxEditorDialog = (() => {
       const data = new FormData(form);
       const values = Object.fromEntries(data.entries());
       if (type === "boxTracker") {
-        values.reconnect = state.box.reconnect !== false;
-        values.active = state.box.active !== false;
+        values.reconnect = values.reconnectValue !== undefined ? values.reconnectValue !== "false" : state.box.reconnect !== false;
+        values.active = values.activeValue !== undefined ? values.activeValue !== "false" : state.box.active !== false;
         values.autoStart = values.autoStartValue !== undefined ? values.autoStartValue !== "false" : state.box.autoStart !== false;
         values.intervalMs = values.intervalMs ?? state.box.intervalMs ?? 0;
         values.reconnectInterval = values.reconnectInterval ?? state.box.reconnectInterval ?? 5;
@@ -880,10 +1438,11 @@ window.TrackerLensBoxEditorDialog = (() => {
 
     if (id) {
       try {
-        state.record = await getWidgetRecord(id);
+          state.record = await getWidgetRecord(id);
         if (state.record) {
           state.box = normalizeRecordContent(state.record, type, state.box);
           state.draftCode = null;
+          state.trackerDraft = null;
           state.notice = "";
         } else {
           state.notice = "Box non trovato. Puoi salvarlo come nuovo.";
