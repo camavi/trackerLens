@@ -58,6 +58,28 @@ const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const WORKSPACE_ASSET_MIME = "application/x-trackerlens-workspace-asset";
 
+const refreshAssetsAfterBoxEdit = async ({ type, id, box } = {}) => {
+  await loadLocalAssets();
+  const assetId = id || box?.id;
+  if (assetId) workspaceState.selectedAssetId = assetId;
+  workspaceState.type = type || workspaceState.type;
+  setNotice(type === "boxTracker" ? "boxTracker salvato in libreria" : "boxLens salvato in libreria");
+  mountWorkspace();
+};
+
+const openUniversalBoxEditor = (options = {}, fallbackUrl = "") => {
+  if (!window.TrackerLensBoxEditorDialog?.open) {
+    if (fallbackUrl) openChromePage(fallbackUrl);
+    return;
+  }
+
+  window.TrackerLensBoxEditorDialog.open({
+    workspaceId: workspaceState.workspace.id || "workspace_global",
+    onSave: refreshAssetsAfterBoxEdit,
+    ...options,
+  });
+};
+
 const lensTemplateAssets = [
   { id: "lens-template-chart", name: "Chart Lens", boxType: "chart", category: "Lens Template", description: "Grafico e serie dati per il workspace.", icon: "insert_chart", color: "#38bdf8", width: 12, height: 8 },
   { id: "lens-template-stats", name: "Stats Lens", boxType: "card", category: "Lens Template", description: "KPI, contatori e statistiche compatte.", icon: "monitoring", color: "#60a5fa", width: 10, height: 6 },
@@ -410,7 +432,14 @@ const openAssetEditor = (event, asset) => {
   event?.preventDefault?.();
   if (asset.type === "boxTracker") {
     const trackerId = asset.isTemplate ? "" : asset.sourceId || asset.id;
-    openChromePage(`editorBoxTracker.html${trackerId ? `?trackerId=${encodeURIComponent(trackerId)}` : ""}`);
+    openUniversalBoxEditor(
+      {
+        type: "boxTracker",
+        id: trackerId,
+        template: asset.isTemplate ? asset : null,
+      },
+      `editorBoxTracker.html${trackerId ? `?trackerId=${encodeURIComponent(trackerId)}` : ""}`
+    );
     return;
   }
 
@@ -421,7 +450,15 @@ const openAssetEditor = (event, asset) => {
   } else {
     params.set("lensId", asset.sourceId || asset.id);
   }
-  openChromePage(`editorBoxLens.html${params.toString() ? `?${params.toString()}` : ""}`);
+  openUniversalBoxEditor(
+    {
+      type: "boxLens",
+      id: asset.isTemplate ? "" : asset.sourceId || asset.id,
+      template: asset.isTemplate ? asset : null,
+      runtimeLabel: asset.isTemplate ? asset.name || "Box Lens" : "",
+    },
+    `editorBoxLens.html${params.toString() ? `?${params.toString()}` : ""}`
+  );
 };
 
 const setDevice = (device) => {
@@ -817,8 +854,8 @@ const renderAddPanel = () =>
     ),
     _.Grid(
       { class: "tl-create-actions", cols: 2, gap: 8, margin: "0 0 14px" },
-      btn({ class: "tl-create-box-btn is-lens", onclick: () => openChromePage("editorBoxLens.html") }, icon("add", "sm"), "Crea boxLens"),
-      btn({ class: "tl-create-box-btn is-tracker", onclick: () => openChromePage("editorBoxTracker.html") }, icon("add", "sm"), "Crea boxTracker")
+      btn({ class: "tl-create-box-btn is-lens", onclick: () => openUniversalBoxEditor({ type: "boxLens" }, "editorBoxLens.html") }, icon("add", "sm"), "Crea boxLens"),
+      btn({ class: "tl-create-box-btn is-tracker", onclick: () => openUniversalBoxEditor({ type: "boxTracker" }, "editorBoxTracker.html") }, icon("add", "sm"), "Crea boxTracker")
     ),
     _.div(
       { class: "tl-search" },
@@ -960,6 +997,17 @@ const renderPlacedBox = (box) =>
           onclick: (event) => openTrackerLinkDialog(event, box),
         },
         icon("hub", "sm")
+      )
+      : null,
+    box.type === "boxLens" && !workspaceState.previewMode
+      ? btn(
+        {
+          class: "tl-delete-box-btn",
+          "aria-label": `Elimina ${box.name}`,
+          onmousedown: (event) => event.stopPropagation(),
+          onclick: (event) => deletePlacedBox(event, box),
+        },
+        icon("delete", "sm")
       )
       : null,
     isBoxSelected(box.id) && workspaceState.activeTool === "resize" ? renderResizeHandles(box.id) : null
@@ -1218,7 +1266,6 @@ const renderShortcuts = () =>
       _.span("Sposta ", _.kbd({ class: "tl-kbd" }, "M")),
       _.span("Ridimensiona ", _.kbd({ class: "tl-kbd" }, "R")),
       _.span("Collega ", _.kbd({ class: "tl-kbd" }, "C")),
-      _.span("Elimina ", _.kbd({ class: "tl-kbd" }, "Del")),
       _.span("Duplica ", _.kbd({ class: "tl-kbd" }, "Ctrl D")),
       _.span("Anteprima ", _.kbd({ class: "tl-kbd" }, "P")),
       _.span({ class: "tl-help" }, icon("help_outline", "sm"), " Serve aiuto? ", btn({ class: "tl-top-icon", onclick: () => setNotice("Guida rapida: clicca un box dalla lista per inserirlo, poi usa la toolbar.") }, "Apri guida", icon("chevron_right", "sm")))
@@ -1492,6 +1539,13 @@ const deleteSelectedBoxes = async () => {
   mountWorkspace();
 };
 
+const deletePlacedBox = (event, box) => {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  selectBoxes([box.id]);
+  deleteSelectedBoxes();
+};
+
 const confirmPendingDelete = (force = false) => {
   const ids = workspaceState.pendingConfirm?.type === "delete" ? workspaceState.pendingConfirm.ids : [];
   if (!ids.length) return cancelPendingConfirm();
@@ -1753,7 +1807,12 @@ const boxesInsideRect = (rect) => {
 
 const openBoxEditor = (box) => {
   const sourceId = box.sourceId || box.assetId;
-  openChromePage(
+  openUniversalBoxEditor(
+    {
+      type: box.type === "boxTracker" ? "boxTracker" : "boxLens",
+      id: sourceId || "",
+      template: sourceId ? null : box,
+    },
     box.type === "boxTracker"
       ? `editorBoxTracker.html${sourceId ? `?trackerId=${encodeURIComponent(sourceId)}` : ""}`
       : `editorBoxLens.html${sourceId ? `?lensId=${encodeURIComponent(sourceId)}` : ""}`
@@ -1927,7 +1986,10 @@ const redoWorkspace = () => {
 };
 
 const handleWorkspaceKeys = (event) => {
-  if (event.target?.matches?.("input, textarea")) return;
+  if (
+    event.target?.matches?.("input, textarea, select, [contenteditable='true']") ||
+    event.target?.closest?.(".cms-dialog, .cm-editor, .cm-content")
+  ) return;
   const key = event.key.toLowerCase();
   if ((event.metaKey || event.ctrlKey) && key === "s") {
     event.preventDefault();
@@ -1966,7 +2028,6 @@ const handleWorkspaceKeys = (event) => {
     mountWorkspace();
     return;
   }
-  if (key === "delete" || key === "backspace") deleteSelectedBoxes();
   if (key === "v") setActiveTool("select");
   if (key === "m") setActiveTool("move");
   if (key === "r") setActiveTool("resize");

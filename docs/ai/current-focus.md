@@ -31,6 +31,7 @@ Flow Map library separation baseline is complete:
 - Flow Map and asset library environments are separated: `library.html` filters out Flow Map page records, while `libraryFlowmap.html` lists only `.tlflow`/flowmap-marked records and imports legacy bundles as Flow Map when invoked there.
 - Asset library cards now have a modern gradient/accent treatment, single-line left-aligned titles, UI-only color picker, no workspace Flow button and confirmed delete actions.
 - Workspace editor owns Lens insertion: Flow Map no longer exposes Lens palette items, while `editorWorkspace.html` shows draggable/clickable Lens templates plus saved boxLens assets in separate collapsible left-panel sections with edit actions.
+- Box editor dialog baseline: `boxEditorDialog.js` now provides a CMSwift, iframe-free universal settings dialog for creating/editing boxLens and boxTracker assets from Workspace and Flow Map surfaces, with local `tl_widgets` persistence and draft runtime promotion support.
 - Workspace editor layout now keeps workspace properties in a fixed drawer opened from the title edit button, removes the right grid column and keeps the mini navigator as a right-side fixed overlay with persisted minimize/expand state.
 
 Flow Map canvas interaction refinement is complete:
