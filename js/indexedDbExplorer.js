@@ -324,7 +324,7 @@ const openEditor = () => {
       window.TrackerLensBoxEditorDialog.open({ type: "boxTracker", id: record.id, workspaceId: "database" });
       return;
     }
-    window.location.assign(`editorBoxTracker.html?trackerId=${encodeURIComponent(record.id)}`);
+    CMSwift.notify?.error?.("Editor universale non disponibile.");
   } else if (record.type === "workspace") {
     window.location.assign(`editorWorkspace.html?workspaceId=${encodeURIComponent(record.id)}`);
   } else {
@@ -332,7 +332,7 @@ const openEditor = () => {
       window.TrackerLensBoxEditorDialog.open({ type: "boxLens", id: record.id, workspaceId: "database" });
       return;
     }
-    window.location.assign(`editorBoxLens.html?lensId=${encodeURIComponent(record.id)}`);
+    CMSwift.notify?.error?.("Editor universale non disponibile.");
   }
 };
 

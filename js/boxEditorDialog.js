@@ -113,9 +113,10 @@ window.TrackerLensBoxEditorDialog = (() => {
       return await new Promise((resolve, reject) => {
         const transaction = db.transaction(WIDGET_STORE(), "readwrite");
         const store = transaction.objectStore(WIDGET_STORE());
-        const request = store.put(payload);
-        request.onsuccess = () => resolve(payload);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio box"));
+        store.put(payload);
+        transaction.oncomplete = () => resolve(payload);
+        transaction.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio box"));
+        transaction.onabort = (event) => reject(event.target.error || new Error("Salvataggio box annullato"));
       });
     } finally {
       db.close();
@@ -228,22 +229,11 @@ window.TrackerLensBoxEditorDialog = (() => {
 
   const applyPreviewBindings = (runtime, data = {}) => {
     if (!runtime) return;
-    const setText = (selector, value) => {
-      if (value == null) return;
-      runtime.querySelectorAll(selector).forEach((element) => {
-        element.textContent = String(value);
-      });
-    };
-
     runtime.querySelectorAll("[data-tl-bind], [data-bind]").forEach((element) => {
       const path = element.getAttribute("data-tl-bind") || element.getAttribute("data-bind");
       const value = valueByPath(data, path);
       if (value != null) element.textContent = String(value);
     });
-    setText(".value", data.c ?? data.price ?? data.btcPrice);
-    setText(".change", data.P ?? data.change24h);
-    setText(".title", data.title);
-    setText(".source", data.source);
   };
 
   const dialogPreviewPolicy = ({ box, code }) => {
@@ -413,6 +403,25 @@ window.TrackerLensBoxEditorDialog = (() => {
 
   const normalizeRecordContent = (record, type, fallback) => {
     const content = record?.content && typeof record.content === "object" ? record.content : {};
+    if (type === "boxTracker") {
+      const runtime = content.runtime && typeof content.runtime === "object" ? content.runtime : {};
+      return normalizeBox({
+        ...fallback,
+        ...content,
+        id: record?.id || content.id || fallback.id,
+        type,
+        runtimeMode: content.runtimeMode || runtime.mode || fallback.runtimeMode,
+        source: content.source || runtime.source || fallback.source,
+        trackerType: content.trackerType || runtime.source || fallback.trackerType,
+        outputChannel: content.outputChannel || runtime.output || fallback.outputChannel,
+        endpoint: content.endpoint || runtime.endpoint || fallback.endpoint,
+        method: content.method || runtime.method || fallback.method,
+        timeout: content.timeout ?? runtime.timeout ?? fallback.timeout,
+        reconnect: content.reconnect ?? runtime.reconnect ?? fallback.reconnect,
+        reconnectInterval: content.reconnectInterval ?? runtime.reconnectInterval ?? fallback.reconnectInterval,
+        intervalMs: content.intervalMs ?? runtime.intervalMs ?? fallback.intervalMs,
+      });
+    }
     return normalizeBox({
       ...fallback,
       ...content,
@@ -565,6 +574,56 @@ window.TrackerLensBoxEditorDialog = (() => {
       workspaceId,
       node: {
         id: payload.id,
+        workspaceId,
+        type: "boxLens",
+        label: payload.content.name || payload.id,
+        sourceRef: payload.id,
+        assetId: payload.id,
+        inputs: channels,
+        outputs: [],
+        channels,
+        status: payload.content.status !== false ? "active" : "inactive",
+        metadata: {
+          paletteLabel: options.runtimeLabel || "",
+          boxType: payload.content.boxType,
+          visibility: payload.content.visibility,
+        },
+      },
+    });
+  };
+
+  const syncExistingRuntimeNode = async ({ type, payload, options }) => {
+    if (!options.runtimeNodeId || options.draftNodeId || !window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode) return null;
+    const workspaceId = options.workspaceId || "workspace_global";
+    if (type === "boxTracker") {
+      const channel = payload.content.outputChannel || payload.content.runtime?.output || "default";
+      return window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({
+        node: {
+          id: options.runtimeNodeId,
+          workspaceId,
+          type: "boxTracker",
+          label: payload.content.name || payload.id,
+          sourceRef: payload.id,
+          assetId: payload.id,
+          inputs: [],
+          outputs: [channel].filter(Boolean),
+          channels: [channel].filter(Boolean),
+          status: payload.content.active !== false ? "active" : "inactive",
+          metadata: {
+            paletteLabel: options.runtimeLabel || "",
+            trackerType: payload.content.trackerType,
+            runtimeMode: payload.content.runtimeMode,
+            source: payload.content.source,
+            sampleOutput: payload.content.sampleOutput || {},
+          },
+        },
+      });
+    }
+
+    const channels = (payload.content.channels || []).map((channel) => channel.id || channel).filter(Boolean);
+    return window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({
+      node: {
+        id: options.runtimeNodeId,
         workspaceId,
         type: "boxLens",
         label: payload.content.name || payload.id,
@@ -1172,7 +1231,10 @@ window.TrackerLensBoxEditorDialog = (() => {
 
     const readValues = (form) => {
       const data = new FormData(form);
-      const values = Object.fromEntries(data.entries());
+      const values = {
+        ...Object.fromEntries(data.entries()),
+        ...(type === "boxTracker" && state.advanced ? currentTrackerDraft() : {}),
+      };
       if (type === "boxTracker") {
         values.reconnect = values.reconnectValue !== undefined ? values.reconnectValue !== "false" : state.box.reconnect !== false;
         values.active = values.activeValue !== undefined ? values.activeValue !== "false" : state.box.active !== false;
@@ -1231,6 +1293,7 @@ window.TrackerLensBoxEditorDialog = (() => {
           });
         }
         await syncDraftRuntimeNode({ type, payload, options });
+        await syncExistingRuntimeNode({ type, payload, options });
         state.record = payload;
         state.box = normalizeRecordContent(payload, type, state.box);
         state.notice = "Salvato localmente";

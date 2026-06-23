@@ -70,9 +70,10 @@ const refreshAssetsAfterBoxEdit = async ({ type, id, box } = {}) => {
   mountWorkspace();
 };
 
-const openUniversalBoxEditor = (options = {}, fallbackUrl = "") => {
+const openUniversalBoxEditor = (options = {}) => {
   if (!window.TrackerLensBoxEditorDialog?.open) {
-    if (fallbackUrl) openChromePage(fallbackUrl);
+    setNotice("Editor universale non disponibile in questa pagina.");
+    mountWorkspace();
     return;
   }
 
@@ -441,27 +442,18 @@ const openAssetEditor = (event, asset) => {
         type: "boxTracker",
         id: trackerId,
         template: asset.isTemplate ? asset : null,
-      },
-      `editorBoxTracker.html${trackerId ? `?trackerId=${encodeURIComponent(trackerId)}` : ""}`
+      }
     );
     return;
   }
 
-  const params = new URLSearchParams();
-  if (asset.isTemplate) {
-    params.set("boxType", asset.boxType || "empty");
-    params.set("runtimeLabel", asset.name || "Box Lens");
-  } else {
-    params.set("lensId", asset.sourceId || asset.id);
-  }
   openUniversalBoxEditor(
     {
       type: "boxLens",
       id: asset.isTemplate ? "" : asset.sourceId || asset.id,
       template: asset.isTemplate ? asset : null,
       runtimeLabel: asset.isTemplate ? asset.name || "Box Lens" : "",
-    },
-    `editorBoxLens.html${params.toString() ? `?${params.toString()}` : ""}`
+    }
   );
 };
 
@@ -915,7 +907,7 @@ const renderTrackerLinkDialogContent = (lensBox, closeDialog) => {
       _.p("Crea un boxTracker o un Flow Map con almeno una porta Flow In/Flow Out, poi torna qui per collegarlo al boxLens."),
       _.Row(
         { gap: 8 },
-        btn({ onclick: () => { closeDialog?.(); openUniversalBoxEditor({ type: "boxTracker" }, "editorBoxTracker.html"); } }, icon("add", "sm"), "Crea boxTracker"),
+        btn({ onclick: () => { closeDialog?.(); openUniversalBoxEditor({ type: "boxTracker" }); } }, icon("add", "sm"), "Crea boxTracker"),
         btn({ onclick: () => { closeDialog?.(); openChromePage("libraryFlowmap.html"); } }, icon("account_tree", "sm"), "Flow Map")
       )
     );
@@ -1108,8 +1100,8 @@ const renderAddPanel = () =>
     ),
     _.Grid(
       { class: "tl-create-actions", cols: 2, gap: 8, margin: "0 0 14px" },
-      btn({ class: "tl-create-box-btn is-lens", onclick: () => openUniversalBoxEditor({ type: "boxLens" }, "editorBoxLens.html") }, icon("add", "sm"), "Crea boxLens"),
-      btn({ class: "tl-create-box-btn is-tracker", onclick: () => openUniversalBoxEditor({ type: "boxTracker" }, "editorBoxTracker.html") }, icon("add", "sm"), "Crea boxTracker")
+      btn({ class: "tl-create-box-btn is-lens", onclick: () => openUniversalBoxEditor({ type: "boxLens" }) }, icon("add", "sm"), "Crea boxLens"),
+      btn({ class: "tl-create-box-btn is-tracker", onclick: () => openUniversalBoxEditor({ type: "boxTracker" }) }, icon("add", "sm"), "Crea boxTracker")
     ),
     _.div(
       { class: "tl-search" },
@@ -2066,10 +2058,7 @@ const openBoxEditor = (box) => {
       type: box.type === "boxTracker" ? "boxTracker" : "boxLens",
       id: sourceId || "",
       template: sourceId ? null : box,
-    },
-    box.type === "boxTracker"
-      ? `editorBoxTracker.html${sourceId ? `?trackerId=${encodeURIComponent(sourceId)}` : ""}`
-      : `editorBoxLens.html${sourceId ? `?lensId=${encodeURIComponent(sourceId)}` : ""}`
+    }
   );
 };
 
@@ -2339,6 +2328,10 @@ const loadLocalAssets = async () => {
 const initializeWorkspace = async () => {
   await loadWorkspaceFromQuery();
   await loadLocalAssets();
+  const createType = new URLSearchParams(window.location.search).get("create");
+  if (createType === "boxLens" || createType === "boxTracker") {
+    openUniversalBoxEditor({ type: createType });
+  }
 };
 
 CMSwift.ready(initializeWorkspace);

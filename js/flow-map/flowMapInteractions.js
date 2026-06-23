@@ -1196,7 +1196,7 @@ const openExistingLibraryDialog = async (item, options = {}) => {
             });
             return;
           }
-          window.location.assign(kind === "boxTracker" ? "editorBoxTracker.html" : "editorBoxLens.html");
+          CMSwift.notify?.error?.("Editor universale non disponibile.");
         },
       }, icon("add", "sm"), kind === "boxTracker" ? "New Tracker" : "New Lens")
     ),

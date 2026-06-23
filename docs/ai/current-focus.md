@@ -40,8 +40,8 @@ Flow Map library separation baseline is complete:
 - Embedded Flow Map nodes expose and automatically refresh the source graph interface: internal `Flow In` definitions render as typed inputs on the left, internal `Flow Out` definitions render as typed outputs on the right, generic `all` ports remain available, and alias deletion removes only the virtual node plus its local links.
 - Embedded Flow Map aliases include a `View Flow Map` action that opens a read-only CMSwift dialog with a fitted minimal graph canvas, compact name/type node cards and source-colored connection paths loaded live from the referenced Flow Map.
 - Universal box editor is now the primary editor path for boxLens and boxTracker creation/editing across Workspace, Flow Map, Library and Database Explorer.
-- Legacy `editorBoxLens.html` and `editorBoxTracker.html` remain available only as fallback/debug surfaces, not as the default navigation path.
-- Tracker manual test execution is centralized in `core/runtime/tracker-test-runner.js` and consumed by both the universal dialog and legacy `boxTrackerEditor.js`.
+- Legacy `editorBoxLens.html`/`editorBoxTracker.html` pages and their editor CSS/JS have been removed; the universal dialog is now the only boxLens/boxTracker editor surface.
+- Tracker manual test execution is centralized in `core/runtime/tracker-test-runner.js` and consumed by the universal dialog.
 
 Flow Map canvas interaction refinement is complete:
 

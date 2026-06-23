@@ -443,6 +443,43 @@ textarea.tl-box-dialog-input {
   background: rgba(255, 255, 255, 0.035);
 }
 
+@media (min-width: 721px) and (max-width: 1180px) {
+  .tl-box-editor-dialog.is-advanced {
+    --cms-dialog-width: calc(100vw - 28px);
+    --cms-dialog-body-max-height: min(76vh, 720px);
+  }
+
+  .tl-box-dialog-lens-advanced {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.62fr);
+    min-height: 500px;
+  }
+
+  .tl-box-dialog-tracker-advanced {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.42fr);
+    min-height: 500px;
+  }
+
+  .tl-box-dialog-tabs .cms-btn {
+    padding-inline: 12px;
+  }
+
+  .tl-box-dialog-live-panel,
+  .tl-box-dialog-tracker-preview {
+    padding: 12px;
+  }
+
+  .tl-box-dialog-preview-canvas[data-device="tablet"] {
+    max-width: 360px;
+  }
+
+  .tl-box-dialog-cm-host,
+  .tl-box-dialog-cm-host .cm-editor,
+  .tl-box-dialog-cm-host .cm-scroller,
+  .tl-box-dialog-code {
+    min-height: 380px;
+  }
+}
+
 @media (max-width: 720px) {
   .tl-box-editor-dialog,
   .tl-box-editor-dialog.is-advanced {

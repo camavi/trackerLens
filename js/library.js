@@ -48,9 +48,9 @@ const openChromePage = (url) => {
   window.location.assign(url);
 };
 
-const openUniversalBoxEditor = (options = {}, fallbackUrl = "") => {
+const openUniversalBoxEditor = (options = {}) => {
   if (!window.TrackerLensBoxEditorDialog?.open) {
-    if (fallbackUrl) openChromePage(fallbackUrl);
+    CMSwift.notify?.error?.("Editor universale non disponibile.");
     return;
   }
 
@@ -63,7 +63,7 @@ const openUniversalBoxEditor = (options = {}, fallbackUrl = "") => {
   });
 };
 
-const openCreateBox = () => openUniversalBoxEditor({ type: "boxLens" }, "editorBoxLens.html");
+const openCreateBox = () => openUniversalBoxEditor({ type: "boxLens" });
 
 const openBoxEditor = (box) => {
   if (box.type === "workspace") {
@@ -72,11 +72,11 @@ const openBoxEditor = (box) => {
   }
 
   if (box.type === "boxTracker") {
-    openUniversalBoxEditor({ type: "boxTracker", id: box.id }, `editorBoxTracker.html?trackerId=${encodeURIComponent(box.id)}`);
+    openUniversalBoxEditor({ type: "boxTracker", id: box.id });
     return;
   }
 
-  openUniversalBoxEditor({ type: "boxLens", id: box.id }, `editorBoxLens.html?lensId=${encodeURIComponent(box.id)}`);
+  openUniversalBoxEditor({ type: "boxLens", id: box.id });
 };
 
 const openWorkspaceView = (workspaceId) => {

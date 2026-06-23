@@ -192,9 +192,9 @@ const renderFooter = () =>
 const handleQuickAction = (actionId) => {
   const routes = {
     "new-workspace": "editorWorkspace.html",
-    "new-box-lens": "editorBoxLens.html",
-    "new-box-tracker": "editorBoxTracker.html",
-    "asset-library": "widgets.html",
+    "new-box-lens": "editorWorkspace.html?create=boxLens",
+    "new-box-tracker": "editorWorkspace.html?create=boxTracker",
+    "asset-library": "library.html",
     "import-export": "options.html",
     sync: "options.html",
     help: "info.html",

@@ -3397,7 +3397,7 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
   if (contextNode?.metadata?.draft) query.set("draftNodeId", contextNode.id);
   if (contextNode?.label) query.set("runtimeLabel", contextNode.label);
 
-  const editorType = item.editorType || (item.url?.includes("editorBoxTracker") ? "boxTracker" : item.url?.includes("editorBoxLens") ? "boxLens" : "");
+  const editorType = item.editorType || "";
   if (editorType) {
     if (editorType && window.TrackerLensBoxEditorDialog?.open) {
       window.TrackerLensBoxEditorDialog.open({
@@ -3415,8 +3415,7 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
       });
       return;
     }
-    const fallbackUrl = editorType === "boxTracker" ? "editorBoxTracker.html" : "editorBoxLens.html";
-    window.location.assign(`${item.url || fallbackUrl}${query.toString() ? `?${query.toString()}` : ""}`);
+    CMSwift.notify?.error?.("Editor universale non disponibile.");
     return;
   }
 
@@ -3449,7 +3448,7 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
       });
       return;
     }
-    window.location.assign(`editorBoxTracker.html?${query.toString()}`);
+    CMSwift.notify?.error?.("Editor universale non disponibile.");
     return;
   }
 

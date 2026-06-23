@@ -31,8 +31,7 @@ The core product direction is:
 - `analytics.html`: runtime/system analytics.
 - `ai.html`: AI Runtime Center.
 - `settings.html`: settings/control panel.
-- `editorBoxLens.html`: boxLens editor.
-- `editorBoxTracker.html`: boxTracker editor.
+- boxLens/boxTracker editing is handled by the shared universal dialog loaded into Workspace, Flow Map, Library and Database Explorer.
 
 ## Implementation Reality
 
