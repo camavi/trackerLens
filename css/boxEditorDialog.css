@@ -1,6 +1,7 @@
 .tl-box-editor-dialog {
   --cms-dialog-width: min(860px, calc(100vw - 28px));
   --cms-dialog-body-max-height: min(68vh, 720px);
+  background: linear-gradient(180deg, #111820 0%, #0d141d 100%);
 }
 
 .tl-box-editor-dialog.is-advanced {
@@ -443,16 +444,43 @@ textarea.tl-box-dialog-input {
 }
 
 @media (max-width: 720px) {
+  .tl-box-editor-dialog,
+  .tl-box-editor-dialog.is-advanced {
+    --cms-dialog-width: calc(100vw - 16px);
+    --cms-dialog-min-width: 0px;
+    --cms-dialog-max-width: calc(100vw - 16px);
+    --cms-dialog-max-height: calc(100dvh - 16px);
+    --cms-dialog-body-max-height: calc(100dvh - 178px);
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+  }
+
+  .tl-box-editor-dialog-panel {
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+  }
+
   .tl-box-dialog-grid {
     grid-template-columns: 1fr;
   }
 
-  .tl-box-dialog-lens-advanced {
-    grid-template-columns: 1fr;
-  }
-
+  .tl-box-dialog-lens-advanced,
   .tl-box-dialog-tracker-advanced {
     grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .tl-box-dialog-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  .tl-box-dialog-tabs .cms-btn {
+    flex: 0 0 auto;
+    padding-inline: 14px;
   }
 
   .tl-box-dialog-code {
