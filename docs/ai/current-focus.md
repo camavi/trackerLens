@@ -154,7 +154,7 @@ Verification notes:
 - `node --check js/profileView.js` passes.
 - Local authenticated dashboard HTTP flow verified against `127.0.0.1:8000`: register `201`, summary `200`, activity `200`, system-status `200`, logout `204`.
 
-Knowledge Runtime document upload/import UX is in progress:
+Knowledge Runtime document upload/import UX is complete and user-verified; Knowledge Graph quality and analytics is starting:
 
 - Knowledge requirements audited after API/backend Step 4 was verified by the user;
 - existing AI memory, runtime storage and provider registry were audited before adding new stores;
@@ -185,7 +185,7 @@ Knowledge Runtime document upload/import UX is in progress:
 - Knowledge Graph Step 6 base is implemented locally: `Entity Extractor` now extracts deterministic entities from chunks/manual text, persists `tl_knowledge_entities`, creates `co_occurs` relations in `tl_knowledge_relations`, emits `knowledge.entity.created` and `knowledge.relation.created`, and `Knowledge Graph` emits a `knowledge.graph.updated` snapshot with entity/relation counts and top entities.
 - First manual Knowledge Graph test produced a valid snapshot; follow-up fixes now propagate `collectionId` from Entity Extractor to graph snapshots, classify single proper nouns such as `Adam` as `proper-noun`, suppress short duplicate entities such as `LM` when `LM Studio` exists, and generate clearer relation ids from normalized labels.
 - Knowledge Graph inspector base is implemented: Knowledge nodes now show a `Knowledge Graph Debug` panel that reads local entity/relation/metric stores, shows counts, latest snapshot scope, top entities, recent relations, refresh and copy actions.
-- Knowledge Graph visualizer dialog base is implemented: Knowledge Graph nodes expose `View Graph` from the node body and inspector; the dialog includes search, type filter, layout mode, node limit, grouped legend/index, selection details and a local SVG graph view colored by entity type and sized by degree.
+- Knowledge Graph visualizer dialog base is implemented and user-verified: Knowledge Graph nodes expose `View Graph` from the node body and inspector; the dialog includes search, type filter, relation filter, layout mode, node limit, grouped legend/index, selection details and a canvas graph view colored by entity type and sized by degree.
 - Document Store upload UX is implemented: Document Store/Text Knowledge/Memory nodes expose `Upload Document` and document-count `Documents` actions from the node body plus `Knowledge Document Debug` in inspector; uploads accept `.txt`, `.md`, `.json` and `.csv`, emit a runtime EventBus document payload, and the documents dialog lists uploaded files with search, chunk counts, preview, copy and refresh actions.
 - Knowledge document dialog now supports CMSwift search/select controls and confirmed document deletion, removing the selected document plus derived chunks, embeddings, entities, relations, sources and graph metrics.
 - Knowledge upload now uses a DOM-attached file input and FileReader progress state, with visible selected/reading/processing/complete/error progress bars on the node, inspector and documents dialog; the dialog refreshes its document list after a successful upload.
@@ -198,21 +198,38 @@ Knowledge Runtime document upload/import UX is in progress:
 - Entity phrase cleanup now strips narrative stopword prefixes/suffixes before candidate persistence, so phrases like `Cuando Juliette`, `Pero Juliette`, `Aunque Juliette`, `Era Liber` collapse toward the meaningful entity token instead of becoming separate graph nodes.
 - Flow Map and runtime worker script URLs now include a Knowledge entity-cleanup cache-buster so browser/worker caches do not keep running an older `knowledge-runtime.js` after extraction changes.
 - Document Store Play now replays an existing stored document by emitting `knowledge.document.created` downstream instead of sending the text back into the Document Store input, preventing infinite duplicate document creation on every Play.
+- Step 8 Document Store upload/import UX is closed as user-verified after manual testing of upload, document listing, delete, preview/full document, graph debug and canvas graph visualizer interactions.
+- Step 9 Knowledge Graph quality and analytics has started: the View Graph `Info` pane now surfaces graph-level quality signals from the visible graph, including average degree, density, connected components, isolated entities, repeated relation pairs and clickable top hubs.
+- Knowledge relation quality now deduplicates equivalent source/target/type relations across chunks at document scope, preserving `occurrenceCount` and `chunkIds` metadata so repeated evidence does not over-densify the visual graph.
+- View Graph `Info` now reports repeated evidence from relation `occurrenceCount` and lists the strongest repeated relations, making the deduplicated graph easier to validate.
+- Entity quality now canonicalizes conservative water-source aliases such as `fuente de agua mágica/cristalina` -> `fuente de agua` and `agua del río` -> `agua`, preserving original labels in entity metadata aliases and surfacing aliases in the View Graph selection pane.
+- Knowledge Graph snapshots now include top-entity aliases so copied graph data can confirm which labels were canonicalized.
+- Relation quality now includes deterministic narrative relation inference from local context windows, adding stronger relation types such as `helps`, `heals`, `confronts`, `uses`, `travels_to`, `transforms` and `reveals` before falling back to generic `appears_in`, `interacts_with` or `co_occurs`.
+- Narrative relation inference now rejects self-edges after alias canonicalization and tightens `helps`, `reveals` and `transforms` to avoid obvious false positives such as object self-transforms or location-to-person help relations.
+- Narrative relation inference now uses stricter local windows for `heals` and removes generic `camino` as a `travels_to` trigger, reducing false positives where nearby characters are not the actual healed target or where a path is only being mentioned.
+- Narrative relation inference now also requires local person/object action windows for `uses`, reducing broad object-use edges caused by a person and object merely sharing the same chunk.
+- Narrative relation inference now tightens `heals` again so cure mentions alone do not mark nearby advisors/observers as healed; the healed person needs local drink/speech/voice/miracle evidence.
+- `heals` now requires local drink/take/voice evidence near the healed entity; generic `hablar`/miracle mentions were removed as direct triggers because they marked nearby advisors as healed.
+- `heals` now requires local drink/take evidence near the healed entity; `voz`/voice was removed as a direct trigger because it also matched descriptive voice text for non-healed characters.
+- `heals` now requires the full local pattern: drink/take evidence near the person, cure-object evidence near the object and a speech/voice/miracle outcome in the same context window.
+- `heals` is evaluated before generic `uses` so cure scenes such as a character drinking magic tea are not swallowed by the broader object-use relation.
+- `heals` now requires the healed entity to be the local subject of the drink/take verb, preventing nearby supporters such as Juliette from being marked as healed in the same scene.
+- `heals` subject detection now checks the candidate person directly, allowing descriptive words between the name and drink/take verb so "Liber ... tomó/bebió" is captured without matching nearby words such as "esperanza".
+- `heals` now uses a wider cure-scene context but only for candidate cure objects (`agua`/`té`), while `says` requires a proper-noun speaker plus quote to prevent quote-location false positives.
+- `says` no longer falls back from any proper-noun + quote pair; quotes are linked only when the candidate speaker appears before the quote and near a speech/action cue.
+- Speaker matching for `says` is capped to a tighter pre-quote window so nearby non-speakers in the same scene are not attached to the quote.
 
 ## Next Logical Step
 
-Knowledge Runtime browser verification for Document Upload, Knowledge Document Debug, Knowledge Graph Debug and View Graph dialog.
+Knowledge Graph quality and analytics.
 
 Target behavior:
 
-- `Knowledge Test` creates the full sample graph without manual wiring;
-- manual/channel text becomes a workspace-scoped Knowledge document;
-- uploaded text/markdown/json/csv files become workspace-scoped Knowledge documents;
-- chunks and local embeddings persist in IndexedDB;
-- provider-backed embeddings persist when an AI provider profile is configured, with local fallback metadata when unavailable;
-- RAG Search emits `knowledge.rag.context` for Preview and AI Agents;
-- Entity Extractor persists entities/relations and Knowledge Graph emits a local graph snapshot;
-- deleting nodes must not delete stored knowledge without explicit confirmation.
+- graph analytics should make noisy extraction visible without requiring raw store inspection;
+- View Graph should help identify hubs, isolated entities, duplicate/repeated pairs and overly dense relation clusters;
+- Entity Extractor should continue reducing low-value narrative terms without hard-coding a single document;
+- relation quality should move beyond generic `co_occurs` where deterministic local signals are strong enough;
+- analytics should remain local-first and scoped by workspace/document/collection filters.
 
 ## Required Updates When Work Changes
 

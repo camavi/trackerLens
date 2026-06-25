@@ -696,7 +696,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const inferRelationType = (source = {}, target = {}, fallback = "co_occurs") => {
     const types = new Set([source.entityType || "term", target.entityType || "term"]);
-    if (types.has("proper-noun") && types.has("quote")) return "says";
+    if (types.has("proper-noun") && types.has("quote")) return fallback || "co_occurs";
     if (types.has("proper-noun") && types.has("creature")) return "encounters";
     if (types.has("proper-noun") && types.has("object")) return "interacts_with";
     if (types.has("proper-noun") && types.has("location")) return "appears_in";
@@ -710,6 +710,98 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return fallback || "co_occurs";
   };
 
+  const relationContextBetween = (text = "", left = {}, right = {}, radius = 180) => {
+    const leftPositions = entityLabelPositions(text, left.label);
+    const rightPositions = entityLabelPositions(text, right.label);
+    if (!leftPositions.length || !rightPositions.length) return "";
+    let best = null;
+    leftPositions.forEach((leftPosition) => {
+      rightPositions.forEach((rightPosition) => {
+        const distance = Math.abs(leftPosition - rightPosition);
+        if (!best || distance < best.distance) best = { leftPosition, rightPosition, distance };
+      });
+    });
+    if (!best) return "";
+    const start = Math.max(0, Math.min(best.leftPosition, best.rightPosition) - radius);
+    const end = Math.min(String(text || "").length, Math.max(best.leftPosition, best.rightPosition) + radius);
+    return String(text || "").slice(start, end).toLowerCase();
+  };
+
+  const entityNearPattern = (context = "", label = "", patterns = [], radius = 90) => {
+    const cleanLabel = normalizeEntityToken(label);
+    const cleanContext = normalizeEntityToken(context);
+    if (!cleanLabel || !cleanContext) return false;
+    const index = cleanContext.indexOf(cleanLabel);
+    if (index < 0) return false;
+    const start = Math.max(0, index - radius);
+    const end = Math.min(cleanContext.length, index + cleanLabel.length + radius);
+    const windowText = cleanContext.slice(start, end);
+    return patterns.some((pattern) => pattern.test(windowText));
+  };
+
+  const quoteSpokenByPerson = (text = "", person = {}, quote = {}) => {
+    const personKey = normalizeEntityToken(person?.label);
+    const quoteLabel = String(quote?.label || "");
+    if (!personKey || !quoteLabel) return false;
+    const personPositions = entityLabelPositions(text, person.label);
+    const quotePositions = entityLabelPositions(text, quoteLabel);
+    if (!personPositions.length || !quotePositions.length) return false;
+    const speechPattern = new RegExp(`\\b${escapedRegExp(personKey)}\\b(?:\\s+[a-z0-9'’_-]+){0,30}\\s+(?:dijo|respondio|pregunto|grito|hablar|pronuncio|pronunciar|voz|boca|said|asked|answered|shouted|spoke)\\b`);
+    return quotePositions.some((quotePosition) =>
+      personPositions.some((personPosition) => {
+        if (personPosition >= quotePosition) return false;
+        if (quotePosition - personPosition > 320) return false;
+        const excerpt = normalizeEntityToken(String(text || "").slice(personPosition, quotePosition + quoteLabel.length));
+        return speechPattern.test(excerpt);
+      })
+    );
+  };
+
+  const inferNarrativeRelationType = (text = "", source = {}, target = {}) => {
+    const context = normalizeEntityToken(relationContextBetween(text, source, target));
+    if (!context) return "";
+    const types = new Set([source.entityType || "term", target.entityType || "term"]);
+    const hasPerson = types.has("proper-noun");
+    const hasObject = types.has("object");
+    const hasLocation = types.has("location");
+    const hasConcept = types.has("concept");
+    const hasCreature = types.has("creature");
+    const hasQuote = types.has("quote");
+    const hasAny = (patterns = []) => patterns.some((pattern) => pattern.test(context));
+    if (hasPerson && hasQuote) {
+      const person = [source, target].find((entity) => entity.entityType === "proper-noun");
+      const quote = [source, target].find((entity) => entity.entityType === "quote");
+      return quoteSpokenByPerson(text, person, quote) ? "says" : "";
+    }
+    if (hasPerson && hasObject) {
+      const person = [source, target].find((entity) => entity.entityType === "proper-noun");
+      const object = [source, target].find((entity) => entity.entityType === "object");
+      const cureContext = normalizeEntityToken(relationContextBetween(text, source, target, 360));
+      const personKey = normalizeEntityToken(person?.label);
+      const objectKey = normalizeEntityToken(object?.label);
+      const personDrinkPattern = personKey
+        ? new RegExp(`\\b${escapedRegExp(personKey)}(?:\\s+[a-z0-9'’_-]+){0,12}\\s+(?:bebi[oó]|beba|beber|tom[oó]|tomo|drink|drank)\\b`)
+        : null;
+      const personIsDrinkingSubject = Boolean(personDrinkPattern?.test(cureContext || context));
+      const personReceivesCure = entityNearPattern(cureContext || context, person?.label, [/\b(?:bebi[oó]|beba|beber|tom[oó]|tomo|drink|drank)\b/], 180);
+      const objectIsCure = /\b(?:te|agua)\b/.test(objectKey) &&
+        entityNearPattern(cureContext || context, object?.label, [/\b(?:te|t[eé]|agua|cura|curar|milagro|healed)\b/], 160);
+      const cureOutcome = /\b(?:hablar|voz|milagro|voice|speak)\b/.test(cureContext || context);
+      if (personIsDrinkingSubject && personReceivesCure && objectIsCure && cureOutcome) return "heals";
+      const personUses = entityNearPattern(context, person?.label, [/\b(?:bebi[oó]|beber|tom[oó]|tomar|sumergio|sumergi[oó]|preparar|preparo|prepar[oó]|lleno|llen[oó]|golpe[oó]|filled|drank|drink|immerse|prepar|hit|struck)\b/], 110);
+      const objectUsed = entityNearPattern(context, object?.label, [/\b(?:bebi[oó]|beber|tom[oó]|tomar|sumergio|sumergi[oó]|preparar|preparo|prepar[oó]|lleno|llen[oó]|golpe[oó]|agua|flor|fuente|manantial|palo|taza|te|t[eé]|filled|drank|drink|immerse|prepar|hit|struck)\b/], 100);
+      if (personUses && objectUsed) return "uses";
+    }
+    if (hasPerson && hasCreature && hasAny([/\b(?:golpe[oó]|ataco|atac[oó]|arremetio|arremeti[oó]|defend|attack|hit|struck|colp)\b/])) return "confronts";
+    if (hasPerson && [source, target].every((entity) => entity.entityType === "proper-noun") && hasAny([/\b(?:ayud[oó]|ayudar|llevo|llev[oó]|tom[oó] su mano|amigo|amigos|helped|helps|took|friend|aiut|aide)\b/])) return "helps";
+    if (hasPerson && hasLocation && !hasAny([/\b(?:aparecio|apareci[oó]|pregunto|pregunt[oó]|indico|indic[oó]|camino hacia|camino a)\b/]) && hasAny([/\b(?:emprendieron|llegaron|entraron|subieron|descendieron|regresar|regresaron|caminaron|viaje|travel|arrived|entered|returned|salir|partir)\b/])) return "travels_to";
+    if (hasPerson && hasConcept && hasAny([/\b(?:record[oó]|demostraba|mostrando|llena de|lleno de|con\s+(?:determinacion|esperanza|coraje|compasion|autocontrol)|showed|remembered|felt)\b/])) return "expresses";
+    if (hasObject && hasObject && source.id !== target.id && source.label !== target.label && hasAny([/\b(?:transform[oó]|transformandose|hervir|hervia|sumerg|became|turned|boil)\b/])) return "transforms";
+    if (hasPerson && (hasConcept || hasQuote) && hasAny([/\b(?:revel[oó]|secreto|advirti[oó]|indic[oó]|donde|solucion|solution|revealed|warned|told)\b/])) return "reveals";
+    if (hasLocation && (hasObject || hasCreature)) return "";
+    return "";
+  };
+
   const orientRelationPair = (left = {}, right = {}, relationType = "co_occurs") => {
     const withType = (type = "") => [left, right].find((entity) => entity.entityType === type) || null;
     const sourceFor = (sourceType = "", targetType = "") => {
@@ -717,14 +809,25 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const target = withType(targetType);
       return source && target ? { source, target } : { source: left, target: right };
     };
-    if (["appears_in", "interacts_with", "expresses", "encounters", "says"].includes(relationType)) {
+    if (["appears_in", "interacts_with", "expresses", "encounters", "says", "uses", "heals", "confronts", "helps", "travels_to", "reveals"].includes(relationType)) {
       const targetType = {
         appears_in: "location",
         interacts_with: "object",
         expresses: "concept",
         encounters: "creature",
         says: "quote",
+        uses: "object",
+        heals: withType("proper-noun") && withType("object") ? "proper-noun" : "object",
+        confronts: "creature",
+        helps: "proper-noun",
+        travels_to: "location",
+        reveals: withType("concept") ? "concept" : "quote",
       }[relationType];
+      if (relationType === "helps") {
+        const [first, second] = [left, right].filter((entity) => entity.entityType === "proper-noun");
+        return first && second ? { source: first, target: second } : { source: left, target: right };
+      }
+      if (relationType === "heals" && withType("object") && withType("proper-noun")) return sourceFor("object", "proper-noun");
       return sourceFor("proper-noun", targetType);
     }
     if (["contains", "context_for"].includes(relationType)) {
@@ -734,6 +837,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return sourceFor("location", targetType);
     }
     if (relationType === "associated_with") return sourceFor("object", "concept");
+    if (relationType === "transforms") return sourceFor("object", "object");
     if (relationType === "marks") return sourceFor("symbol", "location");
     if (relationType === "part_of") return sourceFor("symbol", "quote");
     return { source: left, target: right };
@@ -791,6 +895,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
     if (words.length >= 2) return true;
     return occurrences >= 2 || candidate.confidence >= 0.78;
+  };
+
+  const canonicalEntityCandidate = (candidate = {}, config = {}) => {
+    const enabled = config.canonicalizeEntityAliases !== false && String(config.canonicalizeEntityAliases || "true").toLowerCase() !== "false";
+    if (!enabled || ["seed", "declared-name"].includes(candidate.source)) return candidate;
+    const label = String(candidate.label || "").replace(/\s+/g, " ").trim();
+    const normalized = normalizeEntityToken(label);
+    let canonical = label;
+    if (candidate.entityType === "object") {
+      if (/^fuente de agua\s+/.test(normalized)) canonical = "fuente de agua";
+      if (/^agua\s+(?:de|del|della|du|of)\s+/.test(normalized)) canonical = "agua";
+      if (/^water\s+(?:source|spring)\s+/.test(normalized)) canonical = "water source";
+    }
+    if (candidate.entityType === "location" && /^castillo\s+de\s+musica$/.test(normalized)) canonical = "castillo";
+    if (canonical === label) return candidate;
+    return {
+      ...candidate,
+      label: canonical,
+      aliases: [...new Set([...(candidate.aliases || []), label])],
+    };
   };
 
   const entityCandidatesFromText = (text = "", config = {}) => {
@@ -855,10 +979,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((candidate) => candidate.source === "seed" || !isEntityStopWord(candidate.label, config))
       .filter((candidate) => isEntityAllowedByMode(candidate, clean, config))
       .filter((candidate) => !allowedTypes.length || allowedTypes.includes(candidate.entityType.toLowerCase()))
+      .map((candidate) => canonicalEntityCandidate(candidate, config))
       .forEach((candidate) => {
         const key = normalizeKnowledgeText(candidate.label);
         const previous = seen.get(key);
-        if (!previous || candidate.confidence > previous.confidence) seen.set(key, candidate);
+        if (!previous || candidate.confidence > previous.confidence) {
+          seen.set(key, candidate);
+          return;
+        }
+        if (candidate.aliases?.length) {
+          previous.aliases = [...new Set([...(previous.aliases || []), ...candidate.aliases])];
+        }
       });
     const deduped = [...seen.values()].filter((candidate) => {
       const key = normalizeKnowledgeText(candidate.label);
@@ -906,11 +1037,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxRelationsPerChunk = Math.max(0, Math.min(40, Number(config.maxRelationsPerChunk || 12)));
     const maxRelationsPerEntityPerChunk = Math.max(1, Math.min(12, Number(config.maxRelationsPerEntityPerChunk || 3)));
     const maxRelationDistance = Math.max(120, Math.min(1200, Number(config.maxRelationDistance || 520)));
+    const relationRecords = new Map();
     for (const chunk of validChunks) {
       const candidates = entityCandidatesFromText(chunk.text || "", config);
       const chunkEntities = [];
       for (const candidate of candidates) {
         const entityId = `kentity_${safeId(workspaceId)}_${safeId(chunk.documentId || "doc")}_${safeId(candidate.label.toLowerCase())}`;
+        const previousEntity = await getRecord(STORES.entities, entityId).catch(() => null);
+        const aliases = [...new Set([
+          ...(previousEntity?.metadata?.aliases || []),
+          ...(candidate.aliases || []),
+        ].filter(Boolean))];
         const record = {
           id: entityId,
           workspaceId,
@@ -919,15 +1056,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
           label: candidate.label,
           normalized: normalizeKnowledgeText(candidate.label),
           entityType: candidate.entityType,
-          confidence: candidate.confidence,
+          confidence: Math.max(Number(previousEntity?.confidence || 0), Number(candidate.confidence || 0)),
           source: candidate.source,
           metadata: {
+            ...(previousEntity?.metadata || {}),
             ...(chunk.metadata || {}),
             inputChannel: event?.channel || "",
             nodeId: node?.id || "",
             collectionId: chunk.metadata?.collectionId || config.collectionId || "",
+            aliases,
           },
-          createdAt: now,
+          createdAt: previousEntity?.createdAt || now,
           updatedAt: now,
         };
         entities.push(await putRecord(STORES.entities, record));
@@ -950,31 +1089,62 @@ window.TrackerLensKnowledgeRuntime = (() => {
           const confidence = Math.min(source.confidence || 0.6, target.confidence || 0.6);
           const distance = entityRelationDistance(chunk.text || "", source, target);
           if (distance > maxRelationDistance) continue;
+          const narrativeRelationType = inferNarrativeRelationType(chunk.text || "", source, target);
           const proximityScore = Number.isFinite(distance) ? Math.max(0, 0.18 - (distance / maxRelationDistance) * 0.18) : 0;
           const score = confidence +
             proximityScore +
+            (narrativeRelationType ? 0.2 : 0) +
             (hasPerson && hasNarrative ? 0.22 : 0) +
             (hasPerson ? 0.1 : 0) +
             (types.has("quote") ? 0.08 : 0) +
             (types.has("creature") || types.has("object") ? 0.06 : 0) -
             (source.entityType === target.entityType ? 0.08 : 0);
-          relationCandidates.push({ source, target, confidence, score });
+          relationCandidates.push({ source, target, confidence, score, narrativeRelationType });
         }
       }
       const selectedRelationCandidates = relationCandidates
         .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
       const chunkEntityRelationCounts = new Map();
       let chunkRelationCount = 0;
-      for (const { source, target, confidence } of selectedRelationCandidates) {
+      for (const { source, target, confidence, narrativeRelationType } of selectedRelationCandidates) {
         if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) break;
         const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
         const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
         if (sourceLocalCount >= maxRelationsPerEntityPerChunk || targetLocalCount >= maxRelationsPerEntityPerChunk) continue;
-        const relationType = config.relationType || inferRelationType(source, target);
+        const relationType = config.relationType || narrativeRelationType || inferRelationType(source, target);
         const oriented = orientRelationPair(source, target, relationType);
         const relationSource = oriented.source || source;
         const relationTarget = oriented.target || target;
-        const relationId = `krelation_${safeId(chunk.id || "chunk")}_${safeId(relationSource.normalized || relationSource.label)}_${safeId(relationTarget.normalized || relationTarget.label)}`;
+        if (relationSource.id === relationTarget.id) continue;
+        const relationKey = [
+          chunk.documentId || payload?.documentId || workspaceId,
+          relationType,
+          relationSource.id,
+          relationTarget.id,
+        ].join("::");
+        const existingRelation = relationRecords.get(relationKey);
+        if (existingRelation) {
+          const chunkIds = new Set([...(existingRelation.metadata?.chunkIds || []), chunk.id || ""].filter(Boolean));
+          const occurrenceCount = Number(existingRelation.metadata?.occurrenceCount || 1) + 1;
+          const updatedRelation = {
+            ...existingRelation,
+            confidence: Math.max(Number(existingRelation.confidence || 0), Number(confidence || 0)),
+            metadata: {
+              ...(existingRelation.metadata || {}),
+              chunkIds: [...chunkIds],
+              occurrenceCount,
+            },
+            updatedAt: now,
+          };
+          relationRecords.set(relationKey, updatedRelation);
+          const relationIndex = relations.findIndex((relation) => relation.id === existingRelation.id);
+          if (relationIndex >= 0) relations[relationIndex] = await putRecord(STORES.relations, updatedRelation);
+          chunkRelationCount += 1;
+          chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
+          chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
+          continue;
+        }
+        const relationId = `krelation_${safeId(chunk.documentId || payload?.documentId || workspaceId)}_${safeId(relationType)}_${safeId(relationSource.normalized || relationSource.label)}_${safeId(relationTarget.normalized || relationTarget.label)}`;
         const relation = {
           id: relationId,
           workspaceId,
@@ -990,10 +1160,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
             inputChannel: event?.channel || "",
             nodeId: node?.id || "",
             collectionId: chunk.metadata?.collectionId || config.collectionId || "",
+            chunkIds: [chunk.id || ""].filter(Boolean),
+            occurrenceCount: 1,
           },
           createdAt: now,
           updatedAt: now,
         };
+        relationRecords.set(relationKey, relation);
         relations.push(await putRecord(STORES.relations, relation));
         chunkRelationCount += 1;
         chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
@@ -1033,6 +1206,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           relation.sourceEntityId === entity.id || relation.targetEntityId === entity.id
         ).length,
         confidence: entity.confidence,
+        aliases: entity.metadata?.aliases || [],
       }))
       .sort((a, b) => b.degree - a.degree || String(a.label).localeCompare(String(b.label)))
       .slice(0, Math.max(1, Math.min(50, Number(config.topEntities || 12))));

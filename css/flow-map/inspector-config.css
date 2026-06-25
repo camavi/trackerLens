@@ -1809,6 +1809,16 @@ body.is-flow-inspector-port-dragging {
   border-style: dashed;
 }
 
+.tl-kg-view-group.is-hub {
+  background: rgba(34, 211, 238, 0.07);
+}
+
+.tl-kg-view-evidence span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tl-kg-view-group i {
   width: 9px;
   height: 9px;

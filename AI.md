@@ -3,7 +3,7 @@
 Purpose: minimal entrypoint for AI agents working on Trackers Lens.
 Read when: always, before touching code.
 Do not read when: never; this file is intentionally short.
-Last updated: 2026-06-23.
+Last updated: 2026-06-25.
 
 ## Read Order
 

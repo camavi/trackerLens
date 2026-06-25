@@ -3,13 +3,13 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-23.
+Last updated: 2026-06-25.
 
 ## Active
 
 ### TASK-027: Knowledge Runtime
 
-Status: Step 8 Document Store upload UX implemented; browser verification pending.
+Status: Step 8 Document Store upload UX complete and user-verified; Step 9 Knowledge Graph quality and analytics started.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -21,8 +21,9 @@ Current sub-steps:
 - Step 4 RAG Search node: base local search implemented and user-verified with clean single-result sample context.
 - Step 5 AI Agent consumes RAG context: first-class `knowledge.rag.context` prompt/job/result metadata implemented; Flow Map AI RAG Debug inspector panel added; browser verification pending.
 - Step 6 Knowledge Graph base: local Entity Extractor persists entities/relations, emits entity/relation channels, and Knowledge Graph emits local snapshots; inspector/analytics pending.
-- Step 7 Knowledge inspector and analytics: Flow Map `Knowledge Graph Debug` inspector panel and `View Graph` dialog added for local entity/relation/snapshot inspection; broader analytics pending.
-- Step 8 Document upload/import UX: Document Store/Text Knowledge/Memory nodes expose `Upload Document`, upload progress, document-count `Documents` dialog and `Knowledge Document Debug`; `.txt`, `.md`, `.json` and `.csv` uploads emit local EventBus document payloads, surface uploaded document/chunk metadata in inspector, support confirmed document/delete-derived-record cleanup, and preserve upload/replay scope through graph snapshots; browser verification pending.
+- Step 7 Knowledge inspector and analytics: Flow Map `Knowledge Graph Debug` inspector panel and `View Graph` dialog added for local entity/relation/snapshot inspection; graph visualizer migrated to canvas and user-verified.
+- Step 8 Document upload/import UX: complete and user-verified. Document Store/Text Knowledge/Memory nodes expose `Upload Document`, upload progress, document-count `Documents` dialog and `Knowledge Document Debug`; `.txt`, `.md`, `.json` and `.csv` uploads emit local EventBus document payloads, surface uploaded document/chunk metadata in inspector, support confirmed document/delete-derived-record cleanup, preserve upload/replay scope through graph snapshots, and replay stored documents without duplicating them.
+- Step 9 Knowledge Graph quality and analytics: started. View Graph now surfaces quality metrics/top hubs/repeated evidence, relation persistence deduplicates equivalent source/target/type edges across chunks while preserving occurrence metadata, conservative entity alias canonicalization has started for repeated water-source variants, and deterministic narrative relation inference adds stronger local relation types before generic fallbacks.
 
 Main files:
 

@@ -3281,6 +3281,13 @@ const knowledgeGraphRelationColors = {
   contains: "#60a5fa",
   encounters: "#f472b6",
   interacts_with: "#f59e0b",
+  uses: "#f97316",
+  helps: "#10b981",
+  heals: "#14b8a6",
+  confronts: "#ef4444",
+  travels_to: "#38bdf8",
+  transforms: "#e879f9",
+  reveals: "#fde047",
   expresses: "#a78bfa",
   context_for: "#22d3ee",
   associated_with: "#facc15",
@@ -4232,6 +4239,62 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     }, {});
+    const analytics = (() => {
+      const ids = new Set(visible.entities.map((entity) => entity.id));
+      const adjacency = new Map(visible.entities.map((entity) => [entity.id, new Set()]));
+      const localDegree = new Map(visible.entities.map((entity) => [entity.id, 0]));
+      const pairCounts = new Map();
+      const repeatedEvidence = [];
+      visible.relations.forEach((relation) => {
+        if (!ids.has(relation.sourceEntityId) || !ids.has(relation.targetEntityId)) return;
+        adjacency.get(relation.sourceEntityId)?.add(relation.targetEntityId);
+        adjacency.get(relation.targetEntityId)?.add(relation.sourceEntityId);
+        localDegree.set(relation.sourceEntityId, (localDegree.get(relation.sourceEntityId) || 0) + 1);
+        localDegree.set(relation.targetEntityId, (localDegree.get(relation.targetEntityId) || 0) + 1);
+        const pairKey = [relation.sourceEntityId, relation.targetEntityId].sort().join("::");
+        pairCounts.set(pairKey, (pairCounts.get(pairKey) || 0) + 1);
+        const occurrenceCount = Math.max(1, Number(relation.metadata?.occurrenceCount || 1));
+        if (occurrenceCount > 1) repeatedEvidence.push({ relation, occurrenceCount });
+      });
+      const seen = new Set();
+      let components = 0;
+      let isolated = 0;
+      visible.entities.forEach((entity) => {
+        if (seen.has(entity.id)) return;
+        components += 1;
+        const stack = [entity.id];
+        let size = 0;
+        seen.add(entity.id);
+        while (stack.length) {
+          const current = stack.pop();
+          size += 1;
+          adjacency.get(current)?.forEach((next) => {
+            if (seen.has(next)) return;
+            seen.add(next);
+            stack.push(next);
+          });
+        }
+        if (size === 1 && !(localDegree.get(entity.id) || 0)) isolated += 1;
+      });
+      const entityCount = visible.entities.length;
+      const relationCount = visible.relations.length;
+      const possiblePairs = entityCount > 1 ? (entityCount * (entityCount - 1)) / 2 : 0;
+      return {
+        avgDegree: entityCount ? (relationCount * 2) / entityCount : 0,
+        density: possiblePairs ? relationCount / possiblePairs : 0,
+        components,
+        isolated,
+        repeatedPairs: [...pairCounts.values()].filter((count) => count > 1).length,
+        repeatedEvidenceCount: repeatedEvidence.length,
+        repeatedEvidence: repeatedEvidence
+          .sort((a, b) => b.occurrenceCount - a.occurrenceCount || String(a.relation.sourceLabel || "").localeCompare(String(b.relation.sourceLabel || "")))
+          .slice(0, 6),
+        topEntities: visible.entities
+          .map((entity) => ({ entity, degree: localDegree.get(entity.id) || 0 }))
+          .sort((a, b) => b.degree - a.degree || String(a.entity.label || "").localeCompare(String(b.entity.label || "")))
+          .slice(0, 6),
+      };
+    })();
     const renderSelectionContent = (entity) => entity
       ? [
         _.div(
@@ -4241,6 +4304,9 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
         ),
         _.div(_.span("Connections"), _.strong(String(visible.degree.get(entity.id) || 0))),
         _.div(_.span("Confidence"), _.strong(Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence).toFixed(2) : "N/D")),
+        ...(Array.isArray(entity.metadata?.aliases) && entity.metadata.aliases.length
+          ? [_.div(_.span("Aliases"), _.strong(entity.metadata.aliases.slice(0, 4).join(", ")))]
+          : []),
         _.div(_.span("Document"), _.strong(entity.documentId || "N/D")),
         _.div(_.span("Chunk"), _.strong(entity.chunkId || "N/D")),
         _.div(_.span("Entity ID"), _.strong(entity.id || "N/D")),
@@ -4535,8 +4601,38 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 _.h3("Index"),
                 _.div(_.span("Entities"), _.strong(String(visible.entities.length))),
                 _.div(_.span("Relations"), _.strong(String(visible.relations.length))),
+                _.div(_.span("Avg degree"), _.strong(analytics.avgDegree.toFixed(2))),
+                _.div(_.span("Density"), _.strong(analytics.density.toFixed(3))),
+                _.div(_.span("Components"), _.strong(String(analytics.components))),
+                _.div(_.span("Isolated"), _.strong(String(analytics.isolated))),
+                _.div(_.span("Repeated evidence"), _.strong(String(analytics.repeatedEvidenceCount))),
                 _.div(_.span("Collection"), _.strong(graphData.collectionId || "all")),
                 _.div(_.span("Document"), _.strong(graphData.documentId || "all"))
+              ),
+              analytics.repeatedEvidence.length
+                ? _.section(
+                  _.h3("Repeated evidence"),
+                  ...analytics.repeatedEvidence.map(({ relation, occurrenceCount }) =>
+                    _.div(
+                      { class: "tl-kg-view-evidence" },
+                      _.span(`${relation.sourceLabel || "source"} -> ${relation.targetLabel || "target"}`),
+                      _.strong(`${occurrenceCount}x`)
+                    )
+                  )
+                )
+                : null,
+              _.section(
+                _.h3("Top hubs"),
+                ...analytics.topEntities.map(({ entity, degree: entityDegree }) =>
+                  _.button({
+                    type: "button",
+                    class: "tl-kg-view-group is-hub",
+                    onclick: (event) => {
+                      event.stopPropagation();
+                      focusGraphEntity(entity, { resetPan: false });
+                    },
+                  }, _.i({ style: `--kg-color:${knowledgeGraphTypeColors[entity.entityType] || knowledgeGraphTypeColors.entity}` }), _.span(entity.label || entity.id), _.strong(String(entityDegree)))
+                )
               ),
               _.section(
                 _.h3("Groups"),
