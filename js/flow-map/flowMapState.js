@@ -137,6 +137,10 @@ const state = {
   previewPayloads: {},
   previewClearedAt: {},
   storageInspectorRecords: {},
+  aiInspectorJobs: {},
+  knowledgeInspectorGraph: {},
+  knowledgeInspectorDocuments: {},
+  knowledgeUploadProgress: {},
   aiProcessing: {},
   runtimeWorker: {
     available: false,

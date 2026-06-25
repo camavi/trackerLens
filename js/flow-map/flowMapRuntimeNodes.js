@@ -574,6 +574,31 @@ const configFieldDefinitions = (node = {}) => {
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.rag.context" },
       ];
     }
+    if (subtype === "entity-extractor") {
+      return [
+        { key: "extractionMode", label: "Extraction mode", type: "select", options: ["strict", "balanced", "wide"], defaultValue: "strict" },
+        { key: "allowDocumentInput", label: "Allow direct document input", type: "checkbox", defaultValue: false },
+        { key: "entityTypes", label: "Entity types", placeholder: "proper-noun, technology, symbol, url, email" },
+        { key: "seedTerms", label: "Seed terms", type: "textarea", placeholder: "Trackers Lens\nKnowledge Runtime" },
+        { key: "stopWords", label: "Stop words", type: "textarea", placeholder: "aunque\nhola\nfrustrada" },
+        { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.6" },
+        { key: "maxEntities", label: "Max entities", placeholder: "24" },
+        { key: "maxRelations", label: "Max relations", placeholder: "36" },
+        { key: "relationType", label: "Relation type", placeholder: "co_occurs" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.entity.created" },
+      ];
+    }
+    if (subtype === "knowledge-graph") {
+      return [
+        { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"] },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "topEntities", label: "Top entities", placeholder: "12" },
+        { key: "maxRelations", label: "Max relations", placeholder: "24" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.updated" },
+      ];
+    }
     return [
       { key: "title", label: "Title", placeholder: "Knowledge Document" },
       { key: "sourceType", label: "Source type", placeholder: "manual" },

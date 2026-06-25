@@ -1111,6 +1111,66 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · v${node.metadata?.version || node.metadata?.config?.version || "0.1.0"}`),
     ];
   }
+  if (isKnowledgeDocumentStoreNode(node)) {
+    loadKnowledgeInspectorDocument(node);
+    const documentState = state.knowledgeInspectorDocuments[node.id] || { loading: true, count: 0 };
+    const documentCount = Number(documentState.count || 0);
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "Upload Document",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeDocumentUpload(node);
+        },
+      }, icon("upload_file", "sm"), "Upload Document"),
+      btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: documentState.loading ? "Loading documents" : `View ${documentCount} uploaded document${documentCount === 1 ? "" : "s"}`,
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openKnowledgeDocumentsDialog(node);
+        },
+      }, icon("folder_open", "sm"), documentState.loading ? "Documents..." : `${documentCount} Document${documentCount === 1 ? "" : "s"}`),
+      ...knowledgeUploadProgressNodes(node),
+      renderInlineNodeSettings(node),
+      _.span(
+        { class: "tl-flow-node-metrics" },
+        _.em(`${view.runtime.eventsPerMin}/min`),
+        _.em(`${view.runtime.latency || 0}ms`),
+        _.em(`${view.metrics.listeners || 0} listeners`)
+      ),
+    ];
+  }
+  if (nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-graph") {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "View Knowledge Graph",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openKnowledgeGraphViewDialog(node);
+        },
+      }, icon("account_tree", "sm"), "View Graph"),
+      renderInlineNodeSettings(node),
+      _.span(
+        { class: "tl-flow-node-metrics" },
+        _.em(`${view.runtime.eventsPerMin}/min`),
+        _.em(`${view.runtime.latency || 0}ms`),
+        _.em(`${view.metrics.listeners || 0} listeners`)
+      ),
+    ];
+  }
   return [
     _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
     _.p(view.description),
@@ -2220,6 +2280,2405 @@ const renderInspectorStorageRecord = (node = {}) => {
   );
 };
 
+const loadAiInspectorJob = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || nodeCategory(node) !== "ai-agents") return;
+  const cached = state.aiInspectorJobs[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.aiInspectorJobs = {
+    ...state.aiInspectorJobs,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const data = await window.TrackerLensAiRuntimeStore?.list?.().catch((error) => {
+      throw error;
+    });
+    const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+    const workspaceAliases = new Set([workspaceId, workspaceId === "workspace_global" ? "global" : "workspace_global"]);
+    const jobs = (data?.jobs || []).filter((job) =>
+      job.agentId === node.id &&
+      workspaceAliases.has(job.workspaceId || "workspace_global")
+    );
+    const latest = jobs
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+    state.aiInspectorJobs = {
+      ...state.aiInspectorJobs,
+      [node.id]: {
+        loading: false,
+        job: latest,
+        count: jobs.length,
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.aiInspectorJobs = {
+      ...state.aiInspectorJobs,
+      [node.id]: {
+        loading: false,
+        job: null,
+        count: 0,
+        loadedAt: Date.now(),
+        error: error?.message || "AI jobs read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const aiJobRagContext = (job = {}) =>
+  job.ragContext || job.result?.ragContext || null;
+
+const renderInspectorAiRag = (node = {}) => {
+  if (nodeCategory(node) !== "ai-agents") {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadAiInspectorJob(node);
+  const stateJob = state.aiInspectorJobs[node.id] || { loading: true, job: null, count: 0 };
+  const job = stateJob.job || null;
+  const ragContext = aiJobRagContext(job || {});
+  const result = job?.result || {};
+  const sources = Array.isArray(ragContext?.sources) ? ragContext.sources : [];
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("AI RAG Debug"),
+    ...[
+      ["Jobs", stateJob.loading ? "loading..." : stateJob.count || 0],
+      ["Job ID", job?.id || "N/D"],
+      ["Status", job?.status || "N/D"],
+      ["Provider", result.provider || job?.provider || "N/D"],
+      ["Model", result.model || job?.model || "N/D"],
+      ["Fallback", job?.status === "fallback" || result.provider === "fallback" ? (job?.error || result.reason || "active") : "no"],
+      ["RAG query", ragContext?.query || "N/D"],
+      ["RAG query ID", ragContext?.queryId || "N/D"],
+      ["RAG results", ragContext ? String(ragContext.resultCount ?? sources.length) : "N/D"],
+    ].map(([label, value]) => _.div(_.span(label), _.strong(String(value)))),
+    stateJob.error ? _.p({ class: "tl-flow-muted" }, stateJob.error) : null,
+    ragContext
+      ? _.div(
+        { class: "is-wide" },
+        _.span("RAG context"),
+        _.div(
+          { class: "tl-flow-storage-record-actions" },
+          copyRuntimeButton(ragContext, "Copy RAG context"),
+          btn({
+            class: "is-ghost is-compact",
+            title: "Refresh AI job",
+            onclick: () => loadAiInspectorJob(node, { force: true }),
+          }, icon("sync", "sm"), "Refresh")
+        ),
+        _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue({
+          query: ragContext.query,
+          context: ragContext.context,
+          scope: ragContext.scope,
+        }))
+      )
+      : _.p({ class: "tl-flow-muted" }, stateJob.loading ? "Caricamento ultimo job AI..." : "Nessun contesto RAG trovato per l'ultimo job AI."),
+    sources.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Sources"),
+        _.div(
+          { class: "tl-flow-rag-source-list" },
+          ...sources.slice(0, 6).map((source) =>
+            _.article(
+              { class: "tl-flow-rag-source" },
+              _.strong(`#${source.index || "?"} · score ${Number.isFinite(source.score) ? source.score.toFixed(3) : "N/D"}`),
+              _.span(source.documentId || source.chunkId || "source"),
+              _.p(source.text || "")
+            )
+          )
+        )
+      )
+      : null
+  );
+};
+
+const readKnowledgeInspectorStore = async (storeName = "") => {
+  if (!window.indexedDB || !storeName) return [];
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  return new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve([]);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.close();
+          resolve([]);
+          return;
+        }
+        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+        read.onsuccess = () => {
+          db.close();
+          resolve(Array.isArray(read.result) ? read.result : []);
+        };
+        read.onerror = () => {
+          db.close();
+          resolve([]);
+        };
+      } catch (_) {
+        db.close();
+        resolve([]);
+      }
+    };
+  });
+};
+
+const deleteKnowledgeInspectorStoreRecords = async (storeName = "", ids = []) => {
+  const safeIds = [...new Set((ids || []).filter(Boolean).map(String))];
+  if (!storeName || !safeIds.length) return [];
+  if (window.TrackerLensKnowledgeRuntime?.deleteRecords) {
+    return window.TrackerLensKnowledgeRuntime.deleteRecords(storeName, safeIds);
+  }
+  if (!window.indexedDB) return [];
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  return new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve([]);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.close();
+          resolve([]);
+          return;
+        }
+        const transaction = db.transaction(storeName, "readwrite");
+        const store = transaction.objectStore(storeName);
+        safeIds.forEach((id) => store.delete(id));
+        transaction.oncomplete = () => {
+          db.close();
+          resolve(safeIds);
+        };
+        transaction.onerror = () => {
+          db.close();
+          resolve([]);
+        };
+      } catch (_) {
+        db.close();
+        resolve([]);
+      }
+    };
+  });
+};
+
+const knowledgeTableName = (key = "", fallback = "") =>
+  window.tlConfig?.TABLES?.[key] || fallback;
+
+const cmsInputValue = (value) => value?.target?.value ?? value?.currentTarget?.value ?? value;
+
+const isKnowledgeDocumentStoreNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
+
+const knowledgeUploadMimeType = (file = {}) => {
+  const name = String(file.name || "").toLowerCase();
+  if (file.type) return file.type;
+  if (name.endsWith(".md")) return "text/markdown";
+  if (name.endsWith(".json")) return "application/json";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".txt")) return "text/plain";
+  return "text/plain";
+};
+
+const knowledgePayloadForUploadedFile = ({ file, text = "", node = {} } = {}) => {
+  const config = nodeRuntimeConfig(node);
+  const mimeType = knowledgeUploadMimeType(file);
+  let parsed = null;
+  if (mimeType.includes("json") || String(file?.name || "").toLowerCase().endsWith(".json")) {
+    try {
+      parsed = JSON.parse(text);
+    } catch (_) {
+      parsed = null;
+    }
+  }
+  const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const documentText = String(base.document || base.text || base.content || base.body || text || "").trim();
+  return {
+    ...base,
+    title: base.title || file?.name || node.label || "Uploaded Document",
+    document: documentText,
+    text: documentText,
+    mimeType,
+    sourceType: "upload",
+    collectionId: base.collectionId || config.collectionId || "",
+    metadata: {
+      ...(base.metadata && typeof base.metadata === "object" ? base.metadata : {}),
+      fileName: file?.name || "",
+      fileSize: Number(file?.size || 0),
+      mimeType,
+      uploadedAt: new Date().toISOString(),
+      uploadNodeId: node.id || "",
+    },
+  };
+};
+
+const setKnowledgeUploadProgress = (node = {}, patch = {}) => {
+  if (!node?.id) return;
+  state.knowledgeUploadProgress = {
+    ...state.knowledgeUploadProgress,
+    [node.id]: {
+      ...(state.knowledgeUploadProgress[node.id] || {}),
+      ...patch,
+      updatedAt: Date.now(),
+    },
+  };
+  if (state.mounted) mount({ preserveScroll: true });
+};
+
+const readKnowledgeUploadFileText = (file = null, node = {}) =>
+  new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error("Nessun file selezionato"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onprogress = (event) => {
+      const percent = event.lengthComputable && event.total
+        ? Math.max(1, Math.min(95, Math.round((event.loaded / event.total) * 95)))
+        : 35;
+      setKnowledgeUploadProgress(node, {
+        active: true,
+        phase: "reading",
+        percent,
+        fileName: file.name || "",
+        error: "",
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error("Lettura file fallita"));
+    reader.onload = () => {
+      setKnowledgeUploadProgress(node, {
+        active: true,
+        phase: "processing",
+        percent: 96,
+        fileName: file.name || "",
+        error: "",
+      });
+      resolve(String(reader.result || ""));
+    };
+    reader.readAsText(file);
+  });
+
+const emitUploadedKnowledgeDocument = async ({ node, file, text = "" } = {}) => {
+  if (!node?.id || !file) return;
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const inputChannel = nodePorts(node, "in")[0]?.name || node.inputs?.[0] || "document";
+  const config = nodeRuntimeConfig(node);
+  const outputChannel = config.outputChannel || config.output || nodePorts(node, "out")[0]?.name || node.outputs?.[0] || "knowledge.document.created";
+  const runId = `knowledge_upload_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const payload = knowledgePayloadForUploadedFile({ file, text, node });
+  if (!payload.document) throw new Error("Documento vuoto o formato non leggibile");
+  const bus = workspaceEventBus(workspaceId);
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  if (!knowledge?.createDocument) throw new Error("Knowledge Runtime non disponibile per upload");
+  const document = await knowledge.createDocument({
+    workspaceId,
+    node,
+    payload,
+    event: {
+      channel: inputChannel,
+      sourceNodeId: `upload_${node.id}`,
+      eventType: "knowledge_document_upload",
+      meta: { origin: "knowledge-upload", runId },
+    },
+    config,
+  });
+  if (bus?.emit) {
+    await bus.emit(outputChannel, {
+      document,
+      documentId: document.id,
+      collectionId: document.metadata?.collectionId || payload.collectionId || "",
+    }, {
+      workspaceId,
+      flowId: flowIdForWorkspace(workspaceId),
+      eventType: "knowledge_document_created",
+      sourceNodeId: node.id,
+      status: "ok",
+      latencyMs: 1,
+      meta: {
+        live: true,
+        runId,
+        origin: "knowledge-upload",
+        rootNodeId: node.id,
+        uploadNodeId: node.id,
+        inputChannel,
+        fileName: file.name || "",
+        fileSize: Number(file.size || 0),
+        mimeType: payload.mimeType || "",
+      },
+    });
+  }
+  await recordFlowAction({
+    workspaceId,
+    nodeId: node.id,
+    message: `Knowledge document uploaded: ${file.name || "document"}`,
+    context: {
+      action: "knowledge-document-upload",
+      runId,
+      inputChannel,
+      outputChannel,
+      emitted: Boolean(bus?.emit),
+      documentId: document.id,
+      fileName: file.name || "",
+      fileSize: Number(file.size || 0),
+      mimeType: payload.mimeType || "",
+      collectionId: payload.collectionId || "",
+    },
+  });
+  setTimeout(() => {
+    loadKnowledgeInspectorDocument(node, { force: true });
+    loadKnowledgeInspectorGraph(node, { force: true });
+  }, 600);
+  mount({ preserveScroll: true });
+};
+
+const requestKnowledgeDocumentUpload = (node = {}, { onComplete = null } = {}) => {
+  if (!node?.id) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json,text/csv";
+  input.style.position = "fixed";
+  input.style.left = "-9999px";
+  input.style.top = "0";
+  input.style.opacity = "0";
+  input.tabIndex = -1;
+  input.onchange = async () => {
+    const file = input.files?.[0] || null;
+    input.remove();
+    if (!file) return;
+    try {
+      setKnowledgeUploadProgress(node, {
+        active: true,
+        phase: "selected",
+        percent: 2,
+        fileName: file.name || "",
+        fileSize: Number(file.size || 0),
+        error: "",
+      });
+      const text = await readKnowledgeUploadFileText(file, node);
+      await emitUploadedKnowledgeDocument({ node, file, text });
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      await onComplete?.();
+      setKnowledgeUploadProgress(node, {
+        active: false,
+        phase: "complete",
+        percent: 100,
+        fileName: file.name || "",
+        fileSize: Number(file.size || 0),
+        error: "",
+      });
+    } catch (error) {
+      state.error = error?.message || "Upload documento Knowledge fallito";
+      setKnowledgeUploadProgress(node, {
+        active: false,
+        phase: "error",
+        percent: 0,
+        fileName: file?.name || "",
+        fileSize: Number(file?.size || 0),
+        error: state.error,
+      });
+      setErrorSignal?.(state.error);
+      await recordFlowAction({
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        nodeId: node.id || "",
+        level: "error",
+        message: state.error,
+        context: { action: "knowledge-document-upload-error", fileName: file?.name || "", error: state.error },
+      });
+      mount({ preserveScroll: true });
+    }
+  };
+  input.oncancel = () => {
+    input.remove();
+    setKnowledgeUploadProgress(node, { active: false, phase: "cancelled", percent: 0, error: "" });
+  };
+  document.body.appendChild(input);
+  input.click();
+};
+
+const renderKnowledgeUploadProgress = (node = {}) => {
+  const progress = state.knowledgeUploadProgress?.[node.id] || null;
+  if (!progress || (!progress.active && !["complete", "error"].includes(progress.phase))) return null;
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const label = progress.phase === "error"
+    ? progress.error || "Upload failed"
+    : progress.phase === "complete"
+      ? `Uploaded ${progress.fileName || "document"}`
+      : `${progress.phase || "upload"} ${progress.fileName || "document"} · ${percent}%`;
+  return _.div(
+    { class: `tl-kdoc-upload-progress is-${progress.phase || "idle"}` },
+    _.div(
+      { class: "tl-kdoc-upload-progress-head" },
+      _.span(label),
+      progress.fileSize ? _.strong(`${Math.max(1, Math.round(Number(progress.fileSize) / 1024))} KB`) : null
+    ),
+    _.span(
+      { class: "tl-kdoc-upload-progress-bar", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": percent },
+      _.i({ style: `--kdoc-upload-progress:${percent}%` })
+    )
+  );
+};
+
+const knowledgeUploadProgressNodes = (node = {}) => {
+  const progress = renderKnowledgeUploadProgress(node);
+  return progress ? [progress] : [];
+};
+
+const knowledgeDocumentRecordsForNode = async (node = {}) => {
+  if (!node?.id || !isKnowledgeDocumentStoreNode(node)) {
+    return { documents: [], chunks: [], chunksByDocument: new Map() };
+  }
+  const [documents, chunks] = await Promise.all([
+    readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents")),
+    readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_CHUNKS", "tl_knowledge_chunks")),
+  ]);
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const records = (documents || [])
+    .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
+    .filter((document) => document.metadata?.nodeId === node.id || document.sourceId === `upload_${node.id}` || document.sourceId === `live_${node.id}` || document.sourceId === node.id)
+    .filter((document) => !collectionId || document.metadata?.collectionId === collectionId)
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""));
+  const documentIds = new Set(records.map((document) => document.id));
+  const scopedChunks = (chunks || [])
+    .filter((chunk) => (chunk.workspaceId || "workspace_global") === workspaceId)
+    .filter((chunk) => documentIds.has(chunk.documentId));
+  const chunksByDocument = scopedChunks.reduce((acc, chunk) => {
+    const list = acc.get(chunk.documentId) || [];
+    list.push(chunk);
+    acc.set(chunk.documentId, list);
+    return acc;
+  }, new Map());
+  return { documents: records, chunks: scopedChunks, chunksByDocument };
+};
+
+const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}) => {
+  if (!node?.id || !document?.id) return { document: 0, chunks: 0, embeddings: 0, entities: 0, relations: 0, sources: 0, metrics: 0 };
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const stores = {
+    documents: knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents"),
+    chunks: knowledgeTableName("TL_KNOWLEDGE_CHUNKS", "tl_knowledge_chunks"),
+    embeddings: knowledgeTableName("TL_KNOWLEDGE_EMBEDDINGS", "tl_knowledge_embeddings"),
+    entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    sources: knowledgeTableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+  };
+  const [chunks, embeddings, entities, relations, sources, metrics] = await Promise.all([
+    readKnowledgeInspectorStore(stores.chunks),
+    readKnowledgeInspectorStore(stores.embeddings),
+    readKnowledgeInspectorStore(stores.entities),
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.sources),
+    readKnowledgeInspectorStore(stores.metrics),
+  ]);
+  const documentId = document.id;
+  const chunkIds = new Set((chunks || [])
+    .filter((chunk) => (chunk.workspaceId || "workspace_global") === workspaceId && chunk.documentId === documentId)
+    .map((chunk) => chunk.id));
+  const entityIds = new Set((entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => entity.documentId === documentId || chunkIds.has(entity.chunkId))
+    .map((entity) => entity.id));
+  const staleEmbeddings = (embeddings || [])
+    .filter((embedding) => (embedding.workspaceId || "workspace_global") === workspaceId)
+    .filter((embedding) => embedding.documentId === documentId || chunkIds.has(embedding.chunkId));
+  const staleRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) =>
+      relation.documentId === documentId ||
+      chunkIds.has(relation.chunkId) ||
+      entityIds.has(relation.sourceEntityId) ||
+      entityIds.has(relation.targetEntityId)
+    );
+  const staleSources = (sources || [])
+    .filter((source) => (source.workspaceId || "workspace_global") === workspaceId)
+    .filter((source) => source.documentId === documentId);
+  const staleMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.value?.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, staleRelations.map((relation) => relation.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.entities, [...entityIds]),
+    deleteKnowledgeInspectorStoreRecords(stores.embeddings, staleEmbeddings.map((embedding) => embedding.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.chunks, [...chunkIds]),
+    deleteKnowledgeInspectorStoreRecords(stores.sources, staleSources.map((source) => source.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, staleMetrics.map((metric) => metric.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.documents, [documentId]),
+  ]);
+  await recordFlowAction({
+    workspaceId,
+    nodeId: node.id,
+    message: `Knowledge document deleted: ${document.metadata?.fileName || document.title || document.id}`,
+    context: {
+      action: "knowledge-document-delete",
+      documentId,
+      chunks: chunkIds.size,
+      embeddings: staleEmbeddings.length,
+      entities: entityIds.size,
+      relations: staleRelations.length,
+      sources: staleSources.length,
+      metrics: staleMetrics.length,
+    },
+  });
+  await loadKnowledgeInspectorDocument(node, { force: true });
+  await loadKnowledgeInspectorGraph(node, { force: true });
+  return {
+    document: 1,
+    chunks: chunkIds.size,
+    embeddings: staleEmbeddings.length,
+    entities: entityIds.size,
+    relations: staleRelations.length,
+    sources: staleSources.length,
+    metrics: staleMetrics.length,
+  };
+};
+
+const requestKnowledgeDocumentDelete = ({ node = {}, document = null, onDeleted = null } = {}) => {
+  if (!node?.id || !document?.id) return;
+  const meta = document.metadata || {};
+  const title = meta.fileName || document.title || document.id;
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title: "Delete Knowledge document?",
+    subtitle: title,
+    icon: "delete",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      _.p("Il documento e i record derivati verranno rimossi dagli store Knowledge locali."),
+      _.div(_.span("Document"), _.strong(title)),
+      _.div(_.span("Document ID"), _.strong(document.id || "N/D")),
+      _.div(_.span("Collection"), _.strong(meta.collectionId || "all")),
+      _.div(_.span("MIME"), _.strong(document.mimeType || meta.mimeType || "N/D"))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        class: "is-danger",
+        onclick: async () => {
+          await deleteKnowledgeDocumentRecord({ node, document });
+          close();
+          await onDeleted?.();
+          mount({ preserveScroll: true });
+        },
+      }, icon("delete", "sm"), "Delete")
+    ),
+  });
+  dialog.open();
+};
+
+const knowledgeDocumentPreviewText = (document = {}, limit = 1800) => {
+  const text = String(document?.text || "");
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}\n\n... ${text.length - limit} more chars`;
+};
+
+const openKnowledgeDocumentFullTextDialog = (document = {}) => {
+  if (!document?.id) return;
+  const meta = document.metadata || {};
+  const text = String(document.text || "");
+  const dialog = _.Dialog({
+    class: "tl-kdoc-full-dialog",
+    panelClass: "tl-kdoc-full-panel",
+    size: "lg",
+    title: meta.fileName || document.title || "Knowledge Document",
+    subtitle: `${text.length.toLocaleString()} chars · ${document.mimeType || meta.mimeType || "text/plain"}`,
+    icon: "article",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-kdoc-full-view" },
+      _.pre({ class: "tl-flow-storage-record-preview tl-kdoc-view-full-text" }, text)
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      copyRuntimeButton(document, "Copy document"),
+      btn({ class: "is-primary", onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const loadKnowledgeInspectorDocument = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || !isKnowledgeDocumentStoreNode(node)) return;
+  const cached = state.knowledgeInspectorDocuments[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.knowledgeInspectorDocuments = {
+    ...state.knowledgeInspectorDocuments,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const { documents: records, chunksByDocument } = await knowledgeDocumentRecordsForNode(node);
+    const latest = records[0] || null;
+    const chunkCount = latest ? (chunksByDocument.get(latest.id) || []).length : 0;
+    state.knowledgeInspectorDocuments = {
+      ...state.knowledgeInspectorDocuments,
+      [node.id]: {
+        loading: false,
+        document: latest,
+        documents: records,
+        count: records.length,
+        chunkCount,
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.knowledgeInspectorDocuments = {
+      ...state.knowledgeInspectorDocuments,
+      [node.id]: {
+        loading: false,
+        document: null,
+        documents: [],
+        count: 0,
+        chunkCount: 0,
+        loadedAt: Date.now(),
+        error: error?.message || "Knowledge document read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const openKnowledgeDocumentsDialog = async (node = {}) => {
+  const data = await knowledgeDocumentRecordsForNode(node).catch((error) => {
+    console.warn("Knowledge documents unavailable", error);
+    return { documents: [], chunksByDocument: new Map() };
+  });
+  state.knowledgeInspectorDocuments = {
+    ...state.knowledgeInspectorDocuments,
+    [node.id]: {
+      ...(state.knowledgeInspectorDocuments[node.id] || {}),
+      loading: false,
+      document: data.documents[0] || null,
+      documents: data.documents,
+      count: data.documents.length,
+      chunkCount: data.documents[0] ? (data.chunksByDocument.get(data.documents[0].id) || []).length : 0,
+      loadedAt: Date.now(),
+      error: "",
+    },
+  };
+  const model = {
+    search: "",
+    selectedId: data.documents[0]?.id || "",
+  };
+  let host = null;
+  const rerender = () => {
+    if (!host) return;
+    const query = model.search.trim().toLowerCase();
+    const visible = data.documents.filter((document) => {
+      if (!query) return true;
+      const meta = document.metadata || {};
+      return [document.id, document.title, document.sourceId, document.mimeType, meta.fileName, meta.collectionId, document.text]
+        .some((value) => String(value || "").toLowerCase().includes(query));
+    });
+    const selected = visible.find((document) => document.id === model.selectedId) || visible[0] || data.documents[0] || null;
+    if (selected) model.selectedId = selected.id;
+    const selectedMeta = selected?.metadata || {};
+    const selectedChunks = selected ? (data.chunksByDocument.get(selected.id) || []) : [];
+    host.replaceChildren(
+      _.div(
+        { class: "tl-kdoc-view-toolbar" },
+        _.Input({
+          class: "tl-kdoc-view-search",
+          size: "sm",
+          label: "Search",
+          type: "search",
+          placeholder: "Search documents, file name, collection...",
+          value: model.search,
+          onInput: (event) => {
+            model.search = String(cmsInputValue(event) || "");
+            rerender();
+          },
+        }),
+        btn({
+          class: "is-ghost is-compact",
+          onclick: async () => {
+            const refreshed = await knowledgeDocumentRecordsForNode(node);
+            data.documents = refreshed.documents;
+            data.chunksByDocument = refreshed.chunksByDocument;
+            model.selectedId = data.documents[0]?.id || "";
+            rerender();
+            loadKnowledgeInspectorDocument(node, { force: true });
+          },
+        }, icon("sync", "sm"), "Refresh"),
+        btn({
+          class: "is-ghost is-compact",
+          onclick: () => requestKnowledgeDocumentUpload(node, {
+            onComplete: async () => {
+              const refreshed = await knowledgeDocumentRecordsForNode(node);
+              data.documents = refreshed.documents;
+              data.chunksByDocument = refreshed.chunksByDocument;
+              model.selectedId = data.documents[0]?.id || "";
+              rerender();
+            },
+          }),
+        }, icon("upload_file", "sm"), "Upload")
+      ),
+      ...knowledgeUploadProgressNodes(node),
+      _.div(
+        { class: "tl-kdoc-view-body" },
+        _.section(
+          { class: "tl-kdoc-view-list" },
+          visible.length
+            ? visible.map((document) => {
+              const meta = document.metadata || {};
+              const chunks = data.chunksByDocument.get(document.id) || [];
+              return _.button({
+                type: "button",
+                class: `tl-kdoc-view-item${document.id === selected?.id ? " is-selected" : ""}`,
+                onclick: () => {
+                  model.selectedId = document.id;
+                  rerender();
+                },
+              },
+              _.strong(meta.fileName || document.title || document.id),
+              _.span(document.title || "Untitled document"),
+              _.small(`${chunks.length} chunks · ${meta.collectionId || "all"} · ${document.createdAt ? formatShortDate(document.createdAt) : "N/D"}`));
+            })
+            : [_.div({ class: "tl-kdoc-view-empty" }, icon("folder_open", "lg"), _.strong("No documents"), _.span("Upload a text, markdown, JSON or CSV file."))]
+        ),
+        _.aside(
+          { class: "tl-kdoc-view-detail" },
+          selected
+            ? [
+              _.h3(selectedMeta.fileName || selected.title || "Document"),
+              _.div(_.span("Document ID"), _.strong(selected.id || "N/D")),
+              _.div(_.span("Title"), _.strong(selected.title || "N/D")),
+              _.div(_.span("File"), _.strong(selectedMeta.fileName || "N/D")),
+              _.div(_.span("Size"), _.strong(selectedMeta.fileSize ? `${Math.round(Number(selectedMeta.fileSize) / 1024)} KB` : "N/D")),
+              _.div(_.span("MIME"), _.strong(selected.mimeType || selectedMeta.mimeType || "N/D")),
+              _.div(_.span("Collection"), _.strong(selectedMeta.collectionId || "all")),
+              _.div(_.span("Chunks"), _.strong(String(selectedChunks.length))),
+              _.div(_.span("Text length"), _.strong(`${String(selected.text || "").length.toLocaleString()} chars`)),
+              _.div(
+                { class: "tl-kdoc-view-detail-actions" },
+                btn({
+                  class: "is-ghost is-compact",
+                  onclick: () => copyRuntimeValue(selected),
+                }, icon("content_copy", "sm"), "Copy Document"),
+                selectedChunks.length ? btn({
+                  class: "is-ghost is-compact",
+                  onclick: () => copyRuntimeValue(selectedChunks),
+                }, icon("content_copy", "sm"), "Copy Chunks") : null,
+                String(selected.text || "").length > 1800 ? btn({
+                  class: "is-ghost is-compact",
+                  onclick: () => openKnowledgeDocumentFullTextDialog(selected),
+                }, icon("article", "sm"), "View Full Document") : null,
+                btn({
+                  class: "is-danger is-compact",
+                  onclick: () => requestKnowledgeDocumentDelete({
+                    node,
+                    document: selected,
+                    onDeleted: async () => {
+                      const refreshed = await knowledgeDocumentRecordsForNode(node);
+                      data.documents = refreshed.documents;
+                      data.chunksByDocument = refreshed.chunksByDocument;
+                      model.selectedId = data.documents[0]?.id || "";
+                      rerender();
+                    },
+                  }),
+                }, icon("delete", "sm"), "Delete")
+              ),
+              _.pre({ class: "tl-flow-storage-record-preview" }, knowledgeDocumentPreviewText(selected, 1800)),
+            ]
+            : [_.p({ class: "tl-flow-muted" }, "No document selected.")]
+        )
+      )
+    );
+  };
+  const dialog = _.Dialog({
+    class: "tl-kdoc-view-dialog",
+    panelClass: "tl-kdoc-view-panel",
+    size: "lg",
+    title: node.label || "Knowledge Documents",
+    subtitle: `${data.documents.length} uploaded document${data.documents.length === 1 ? "" : "s"}`,
+    icon: "folder_open",
+    closeButton: true,
+    content: () => {
+      host = _.div({ class: "tl-kdoc-view" });
+      setTimeout(rerender, 0);
+      return host;
+    },
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(data.documents) }, icon("content_copy", "sm"), "Copy List"),
+      btn({ class: "is-primary", onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const renderInspectorKnowledgeDocument = (node = {}) => {
+  if (!isKnowledgeDocumentStoreNode(node)) {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadKnowledgeInspectorDocument(node);
+  const record = state.knowledgeInspectorDocuments[node.id] || { loading: true, document: null, count: 0, chunkCount: 0 };
+  const documentRecord = record.document || null;
+  const meta = documentRecord?.metadata || {};
+  return _.section(
+      { class: "tl-flow-detail-list" },
+      _.h3("Knowledge Document Debug"),
+    ...knowledgeUploadProgressNodes(node),
+    ...[
+      ["Documents", record.loading ? "loading..." : record.count || 0],
+      ["Document ID", documentRecord?.id || "N/D"],
+      ["Title", documentRecord?.title || "N/D"],
+      ["File name", meta.fileName || "N/D"],
+      ["Size", meta.fileSize ? `${Math.round(Number(meta.fileSize) / 1024)} KB` : "N/D"],
+      ["MIME", documentRecord?.mimeType || meta.mimeType || "N/D"],
+      ["Collection", meta.collectionId || "all"],
+      ["Chunks", record.loading ? "loading..." : record.chunkCount || 0],
+      ["Text length", documentRecord?.text ? `${String(documentRecord.text).length.toLocaleString()} chars` : "N/D"],
+      ["Created", documentRecord?.createdAt ? formatShortDate(documentRecord.createdAt) : "N/D"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    record.error ? _.p({ class: "tl-flow-muted" }, record.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        btn({
+          class: "is-ghost is-compact",
+          title: "Upload Document",
+          onclick: () => requestKnowledgeDocumentUpload(node),
+        }, icon("upload_file", "sm"), "Upload Document"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "View uploaded documents",
+          onclick: () => openKnowledgeDocumentsDialog(node),
+        }, icon("folder_open", "sm"), "View Documents"),
+        documentRecord ? copyRuntimeButton(documentRecord, "Copy document record") : null,
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh document",
+          onclick: () => loadKnowledgeInspectorDocument(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    documentRecord?.text
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Preview"),
+        _.div(
+          { class: "tl-kdoc-preview-actions" },
+          String(documentRecord.text || "").length > 1800 ? btn({
+            class: "is-ghost is-compact",
+            onclick: () => openKnowledgeDocumentFullTextDialog(documentRecord),
+          }, icon("article", "sm"), "View Full Document") : null
+        ),
+        _.pre({ class: "tl-flow-storage-record-preview" }, knowledgeDocumentPreviewText(documentRecord, 1800))
+      )
+      : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento documento Knowledge..." : "Nessun documento trovato per questo nodo.")
+  );
+};
+
+const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || nodeCategory(node) !== "knowledge") return;
+  const cached = state.knowledgeInspectorGraph[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.knowledgeInspectorGraph = {
+    ...state.knowledgeInspectorGraph,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const [entities, relations, metrics] = await Promise.all([
+      readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities")),
+      readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations")),
+      readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics")),
+    ]);
+    const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+    const config = nodeRuntimeConfig(node);
+    const collectionId = String(config.collectionId || "").trim();
+    const documentId = String(config.documentId || "").trim();
+    const workspaceEntities = (entities || [])
+      .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+      .filter((entity) => !documentId || entity.documentId === documentId);
+    const entityIds = new Set(workspaceEntities.map((entity) => entity.id));
+    const workspaceRelations = (relations || [])
+      .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+      .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+      .filter((relation) => !documentId || relation.documentId === documentId);
+    const graphMetrics = (metrics || [])
+      .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+      .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+      .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+      .filter((metric) => !documentId || metric.value?.documentId === documentId)
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+    const topEntities = workspaceEntities
+      .map((entity) => ({
+        ...entity,
+        degree: workspaceRelations.filter((relation) =>
+          relation.sourceEntityId === entity.id || relation.targetEntityId === entity.id
+        ).length,
+      }))
+      .sort((a, b) => b.degree - a.degree || String(a.label || "").localeCompare(String(b.label || "")))
+      .slice(0, 10);
+    state.knowledgeInspectorGraph = {
+      ...state.knowledgeInspectorGraph,
+      [node.id]: {
+        loading: false,
+        entities: workspaceEntities,
+        relations: workspaceRelations,
+        metrics: graphMetrics,
+        topEntities,
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.knowledgeInspectorGraph = {
+      ...state.knowledgeInspectorGraph,
+      [node.id]: {
+        loading: false,
+        entities: [],
+        relations: [],
+        metrics: [],
+        topEntities: [],
+        loadedAt: Date.now(),
+        error: error?.message || "Knowledge graph read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const knowledgeGraphTypeColors = {
+  "proper-noun": "#38bdf8",
+  location: "#34d399",
+  object: "#f59e0b",
+  creature: "#f472b6",
+  concept: "#a78bfa",
+  quote: "#facc15",
+  technology: "#22c55e",
+  symbol: "#facc15",
+  url: "#a78bfa",
+  email: "#fb7185",
+  term: "#94a3b8",
+  entity: "#67e8f9",
+};
+
+const knowledgeGraphRelationColors = {
+  appears_in: "#34d399",
+  contains: "#60a5fa",
+  encounters: "#f472b6",
+  interacts_with: "#f59e0b",
+  expresses: "#a78bfa",
+  context_for: "#22d3ee",
+  associated_with: "#facc15",
+  says: "#fb7185",
+  marks: "#818cf8",
+  part_of: "#c084fc",
+  co_occurs: "#94a3b8",
+  relation: "#94a3b8",
+};
+
+const collectKnowledgeGraphData = async (node = {}) => {
+  const [entities, relations, metrics] = await Promise.all([
+    readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities")),
+    readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations")),
+    readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics")),
+  ]);
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  const scopedEntities = (entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+    .filter((entity) => !documentId || entity.documentId === documentId);
+  const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
+    .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+    .filter((relation) => !documentId || relation.documentId === documentId);
+  const graphMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .filter((metric) => !documentId || metric.value?.documentId === documentId)
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  return { entities: scopedEntities, relations: scopedRelations, metrics: graphMetrics, collectionId, documentId, workspaceId };
+};
+
+const knowledgeGraphNodeDegree = (entities = [], relations = []) => {
+  const degree = new Map(entities.map((entity) => [entity.id, 0]));
+  relations.forEach((relation) => {
+    degree.set(relation.sourceEntityId, (degree.get(relation.sourceEntityId) || 0) + 1);
+    degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) || 0) + 1);
+  });
+  return degree;
+};
+
+const visibleKnowledgeGraph = ({ entities = [], relations = [], search = "", type = "all", relationType = "all", limit = 80 } = {}) => {
+  const query = String(search || "").trim().toLowerCase();
+  const scopedRelations = relations.filter((relation) => relationType === "all" || (relation.relationType || "relation") === relationType);
+  const degree = knowledgeGraphNodeDegree(entities, scopedRelations);
+  const filtered = entities
+    .filter((entity) => type === "all" || (entity.entityType || "entity") === type)
+    .filter((entity) => !query || [entity.label, entity.entityType, entity.documentId, entity.chunkId].some((value) =>
+      String(value || "").toLowerCase().includes(query)
+    ))
+    .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0) || String(a.label || "").localeCompare(String(b.label || "")))
+    .slice(0, Math.max(8, Math.min(200, Number(limit) || 80)));
+  const ids = new Set(filtered.map((entity) => entity.id));
+  return {
+    entities: filtered,
+    relations: scopedRelations.filter((relation) => ids.has(relation.sourceEntityId) && ids.has(relation.targetEntityId)),
+    degree,
+  };
+};
+
+const graphPositionForEntity = ({ entity, index, count, degree = 0, typeIndex = 0, typeCount = 1, mode = "force", width = 920, height = 560 } = {}) => {
+  if (mode === "groups") {
+    const columns = Math.max(1, Math.ceil(Math.sqrt(typeCount)));
+    const col = typeIndex % columns;
+    const row = Math.floor(typeIndex / columns);
+    const cellW = width / columns;
+    const cellH = height / Math.max(1, Math.ceil(typeCount / columns));
+    const localAngle = (index / Math.max(1, count)) * Math.PI * 2;
+    const radius = Math.min(cellW, cellH) * 0.28;
+    return {
+      x: col * cellW + cellW / 2 + Math.cos(localAngle) * radius,
+      y: row * cellH + cellH / 2 + Math.sin(localAngle) * radius,
+    };
+  }
+  const angle = (index / Math.max(1, count)) * Math.PI * 2;
+  const ring = 0.32 + (index % 4) * 0.085;
+  const pull = Math.max(0, Math.min(0.12, degree * 0.01));
+  return {
+    x: width / 2 + Math.cos(angle) * width * (ring - pull),
+    y: height / 2 + Math.sin(angle) * height * (ring - pull),
+  };
+};
+
+const knowledgeGraphNodeRadiusForDegree = (entityDegree = 0) => Math.max(18, Math.min(42, 18 + (Number(entityDegree) || 0) * 2.4));
+
+const relaxKnowledgeGraphPositions = ({ entities = [], positions = new Map(), degree = new Map(), fixedIds = new Set(), width = 920, height = 560 } = {}) => {
+  const nodes = entities.map((entity, index) => {
+    const point = positions.get(entity.id) || { x: width / 2, y: height / 2 };
+    const radius = knowledgeGraphNodeRadiusForDegree(degree.get(entity.id) || 0);
+    return {
+      id: entity.id,
+      index,
+      x: Number(point.x) || width / 2,
+      y: Number(point.y) || height / 2,
+      radius,
+      fixed: fixedIds.has(entity.id),
+    };
+  });
+  const padding = 22;
+  const iterations = Math.min(140, Math.max(48, nodes.length * 2.4));
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const a = nodes[i];
+        const b = nodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        if (!distance) {
+          const angle = ((a.index + b.index + 1) / Math.max(1, nodes.length)) * Math.PI * 2;
+          dx = Math.cos(angle) * 0.01;
+          dy = Math.sin(angle) * 0.01;
+          distance = 0.01;
+        }
+        const minDistance = a.radius + b.radius + padding;
+        if (distance >= minDistance) continue;
+        if (a.fixed && b.fixed) continue;
+        const push = (minDistance - distance) / distance;
+        const moveX = dx * push * 0.5;
+        const moveY = dy * push * 0.5;
+        if (a.fixed) {
+          b.x += moveX * 2;
+          b.y += moveY * 2;
+        } else if (b.fixed) {
+          a.x -= moveX * 2;
+          a.y -= moveY * 2;
+        } else {
+          a.x -= moveX;
+          a.y -= moveY;
+          b.x += moveX;
+          b.y += moveY;
+        }
+      }
+    }
+    nodes.forEach((node) => {
+      node.x = Math.max(node.radius + padding, Math.min(width - node.radius - padding, node.x));
+      node.y = Math.max(node.radius + padding, Math.min(height - node.radius - padding, node.y));
+    });
+  }
+  nodes.forEach((node) => {
+    positions.set(node.id, { x: node.x, y: node.y });
+  });
+  return positions;
+};
+
+const buildKnowledgeGraphLayout = ({ entities = [], relations = [], degree = new Map(), mode = "force", selectedId = "", manualPositions = {}, width = 920, height = 560 } = {}) => {
+  const byType = new Map();
+  entities.forEach((entity) => {
+    const type = entity.entityType || "entity";
+    byType.set(type, [...(byType.get(type) || []), entity]);
+  });
+  const typeKeys = [...byType.keys()].sort();
+  const positions = new Map();
+  typeKeys.forEach((type, typeIndex) => {
+    const group = byType.get(type) || [];
+    group.forEach((entity, index) => {
+      positions.set(entity.id, graphPositionForEntity({
+        entity,
+        index,
+        count: group.length,
+        degree: degree.get(entity.id) || 0,
+        typeIndex,
+        typeCount: typeKeys.length,
+        mode,
+        width,
+        height,
+      }));
+    });
+  });
+  const fixedIds = new Set();
+  const selectedRelations = new Set();
+  const connectedEntityIds = new Set(selectedId ? [selectedId] : []);
+  if (selectedId) {
+    relations.forEach((relation) => {
+      if (relation.sourceEntityId === selectedId || relation.targetEntityId === selectedId) {
+        selectedRelations.add(relation.id);
+        connectedEntityIds.add(relation.sourceEntityId);
+        connectedEntityIds.add(relation.targetEntityId);
+      }
+    });
+  }
+  entities.forEach((entity) => {
+    const manual = manualPositions?.[entity.id];
+    if (manual && Number.isFinite(Number(manual.x)) && Number.isFinite(Number(manual.y))) {
+      fixedIds.add(entity.id);
+      positions.set(entity.id, {
+        x: Math.max(0, Math.min(width, Number(manual.x))),
+        y: Math.max(0, Math.min(height, Number(manual.y))),
+      });
+    }
+  });
+  const selectedAnchor = positions.get(selectedId);
+  if (selectedAnchor && connectedEntityIds.size > 1) {
+    connectedEntityIds.forEach((entityId) => {
+      if (entityId === selectedId || fixedIds.has(entityId)) return;
+      const point = positions.get(entityId);
+      if (!point) return;
+      positions.set(entityId, {
+        x: selectedAnchor.x + (point.x - selectedAnchor.x) * 0.84,
+        y: selectedAnchor.y + (point.y - selectedAnchor.y) * 0.84,
+      });
+    });
+  }
+  relaxKnowledgeGraphPositions({ entities, positions, degree, fixedIds, width, height });
+  return { positions, selectedRelations, connectedEntityIds };
+};
+
+const parseKnowledgeGraphTranslate = (value = "") => {
+  const match = String(value || "").match(/translate\(([-\d.]+)[,\s]+([-\d.]+)\)/);
+  return match ? { x: Number(match[1]) || 0, y: Number(match[2]) || 0 } : { x: 0, y: 0 };
+};
+
+const animateKnowledgeGraphSettle = ({ host, entities = [], relations = [], positions = new Map(), duration = 680, onDone = null } = {}) => {
+  const svg = host?.querySelector?.(".tl-kg-view-svg");
+  if (!svg) return false;
+  const nodeFrames = entities.map((entity) => {
+    const element = svg.querySelector(`[data-entity-id="${escapeSelectorValue(entity.id)}"]`);
+    const target = positions.get(entity.id);
+    if (!element || !target) return null;
+    return {
+      id: entity.id,
+      element,
+      from: parseKnowledgeGraphTranslate(element.getAttribute("transform")),
+      to: target,
+    };
+  }).filter(Boolean);
+  const lineFrames = relations.map((relation) => {
+    const line = svg.querySelector(`[data-relation-id="${escapeSelectorValue(relation.id)}"]`);
+    return line ? { relation, line } : null;
+  }).filter(Boolean);
+  if (!nodeFrames.length) return false;
+  const latest = new Map(nodeFrames.map((frame) => [frame.id, { ...frame.from }]));
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const startedAt = performance.now();
+  svg.classList.add("is-settling");
+  const tick = (now) => {
+    const progress = Math.min(1, (now - startedAt) / duration);
+    const eased = ease(progress);
+    nodeFrames.forEach((frame) => {
+      const x = frame.from.x + (frame.to.x - frame.from.x) * eased;
+      const y = frame.from.y + (frame.to.y - frame.from.y) * eased;
+      latest.set(frame.id, { x, y });
+      frame.element.setAttribute("transform", `translate(${x} ${y})`);
+    });
+    lineFrames.forEach(({ relation, line }) => {
+      const source = latest.get(relation.sourceEntityId);
+      const target = latest.get(relation.targetEntityId);
+      if (!source || !target) return;
+      line.setAttribute("x1", String(source.x));
+      line.setAttribute("y1", String(source.y));
+      line.setAttribute("x2", String(target.x));
+      line.setAttribute("y2", String(target.y));
+    });
+    if (progress < 1) {
+      requestAnimationFrame(tick);
+      return;
+    }
+    svg.classList.remove("is-settling");
+    onDone?.();
+  };
+  requestAnimationFrame(tick);
+  return true;
+};
+
+const applyKnowledgeGraphFocusClasses = ({ host, selectedId = "", relations = [] } = {}) => {
+  const svg = host?.querySelector?.(".tl-kg-view-svg");
+  if (!svg || !selectedId) return;
+  const connectedIds = new Set([selectedId]);
+  const connectedRelationIds = new Set();
+  relations.forEach((relation) => {
+    if (relation.sourceEntityId === selectedId || relation.targetEntityId === selectedId) {
+      connectedRelationIds.add(relation.id);
+      connectedIds.add(relation.sourceEntityId);
+      connectedIds.add(relation.targetEntityId);
+    }
+  });
+  svg.querySelectorAll(".tl-kg-view-node").forEach((node) => {
+    const entityId = node.getAttribute("data-entity-id") || "";
+    const isSelected = entityId === selectedId;
+    const isConnected = connectedIds.has(entityId);
+    node.classList.toggle("is-selected", isSelected);
+    node.classList.toggle("is-connected", isConnected && !isSelected);
+    node.classList.toggle("is-floating", isConnected);
+    node.classList.toggle("is-muted", !isConnected);
+  });
+  svg.querySelectorAll(".tl-kg-view-links line").forEach((line) => {
+    const relationId = line.getAttribute("data-relation-id") || "";
+    const isConnected = connectedRelationIds.has(relationId);
+    line.classList.toggle("is-connected", isConnected);
+    line.classList.toggle("is-muted", !isConnected);
+  });
+};
+
+const renderKnowledgeGraphSvg = ({ entities = [], relations = [], degree = new Map(), mode = "force", selectedId = "", zoom = 1, panX = 0, panY = 0, manualPositions = {}, onSelect = null, onMoveNode = null } = {}) => {
+  const width = 920;
+  const height = 560;
+  const { positions, selectedRelations, connectedEntityIds } = buildKnowledgeGraphLayout({
+    entities,
+    relations,
+    degree,
+    mode,
+    selectedId,
+    manualPositions,
+    width,
+    height,
+  });
+  const selectedPosition = positions.get(selectedId);
+  const safeZoom = Math.max(0.75, Math.min(2.2, Number(zoom) || 1));
+  const viewWidth = width / safeZoom;
+  const viewHeight = height / safeZoom;
+  const viewCenterX = (selectedPosition?.x || width / 2) + Number(panX || 0);
+  const viewCenterY = (selectedPosition?.y || height / 2) + Number(panY || 0);
+  const viewX = Math.max(0, Math.min(width - viewWidth, viewCenterX - viewWidth / 2));
+  const viewY = Math.max(0, Math.min(height - viewHeight, viewCenterY - viewHeight / 2));
+  const svgPointFromEvent = (event) => {
+    const svg = event.currentTarget?.ownerSVGElement || event.currentTarget?.closest?.("svg");
+    const rect = svg?.getBoundingClientRect?.();
+    const viewBox = String(svg?.getAttribute?.("viewBox") || `0 0 ${width} ${height}`).split(/\s+/).map(Number);
+    const [boxX = 0, boxY = 0, boxW = width, boxH = height] = viewBox;
+    if (!rect?.width || !rect?.height) return { x: width / 2, y: height / 2 };
+    return {
+      x: Math.max(0, Math.min(width, boxX + ((event.clientX - rect.left) / rect.width) * boxW)),
+      y: Math.max(0, Math.min(height, boxY + ((event.clientY - rect.top) / rect.height) * boxH)),
+    };
+  };
+  return _.svg(
+    { class: "tl-kg-view-svg", viewBox: `${viewX} ${viewY} ${viewWidth} ${viewHeight}`, role: "img", "aria-label": "Knowledge graph view" },
+    _.g(
+      { class: "tl-kg-view-links" },
+      ...relations.map((relation) => {
+        const source = positions.get(relation.sourceEntityId);
+        const target = positions.get(relation.targetEntityId);
+        if (!source || !target) return null;
+        const isConnected = selectedRelations.has(relation.id);
+        return _.line({
+          x1: source.x,
+          y1: source.y,
+          x2: target.x,
+          y2: target.y,
+          class: selectedId ? (isConnected ? "is-connected" : "is-muted") : "",
+          "data-relation-id": relation.id,
+          "data-source-id": relation.sourceEntityId,
+          "data-target-id": relation.targetEntityId,
+          "data-relation-type": relation.relationType || "relation",
+          style: `--kg-relation-color:${knowledgeGraphRelationColors[relation.relationType] || knowledgeGraphRelationColors.relation}`,
+        });
+      })
+    ),
+    _.g(
+      { class: "tl-kg-view-nodes" },
+      ...entities.map((entity) => {
+        const point = positions.get(entity.id) || { x: width / 2, y: height / 2 };
+        const entityDegree = degree.get(entity.id) || 0;
+        const radius = knowledgeGraphNodeRadiusForDegree(entityDegree);
+        const color = knowledgeGraphTypeColors[entity.entityType] || knowledgeGraphTypeColors.entity;
+        const isSelected = entity.id === selectedId;
+        const isConnectedNode = selectedId && connectedEntityIds.has(entity.id) && !isSelected;
+        const isMuted = selectedId && !connectedEntityIds.has(entity.id);
+        const floatSeed = Math.abs(String(entity.id || entity.label || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0));
+        const floatX = 4 + (floatSeed % 5);
+        const floatY = 5 + ((floatSeed * 3) % 6);
+        const floatRotate = 0.16 + ((floatSeed % 5) * 0.045);
+        const floatDurationX = 3000 + ((floatSeed * 37) % 650);
+        const floatDurationY = 3200 + ((floatSeed * 53) % 700);
+        const floatDurationR = 3400 + ((floatSeed * 29) % 600);
+        const floatDelay = isSelected ? 0 : (floatSeed % 9) * 55;
+        const floatDelayY = isSelected ? 40 : ((floatSeed * 5) % 11) * 45;
+        const floatDirection = floatSeed % 2 ? 1 : -1;
+        let dragState = null;
+        return _.g(
+          {
+            class: `tl-kg-view-node${isSelected ? " is-selected" : ""}${isConnectedNode ? " is-connected" : ""}${selectedId && connectedEntityIds.has(entity.id) ? " is-floating" : ""}${isMuted ? " is-muted" : ""}`,
+            transform: `translate(${point.x} ${point.y})`,
+            style: `--kg-float-x:${floatX}px;--kg-float-y:${floatY}px;--kg-float-rotate:${floatRotate}deg;--kg-float-duration-x:${floatDurationX}ms;--kg-float-duration-y:${floatDurationY}ms;--kg-float-duration-r:${floatDurationR}ms;--kg-float-delay:${floatDelay}ms;--kg-float-delay-y:${floatDelayY}ms;--kg-float-direction:${floatDirection};`,
+            "data-entity-id": entity.id,
+            tabindex: 0,
+            role: "button",
+            onpointerdown: (event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const start = svgPointFromEvent(event);
+              dragState = {
+                pointerId: event.pointerId,
+                startX: start.x,
+                startY: start.y,
+                nodeX: point.x,
+                nodeY: point.y,
+                moved: false,
+              };
+              event.currentTarget?.setPointerCapture?.(event.pointerId);
+              event.currentTarget?.classList?.add("is-dragging");
+            },
+            onpointermove: (event) => {
+              if (!dragState || dragState.pointerId !== event.pointerId) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const next = svgPointFromEvent(event);
+              const dx = next.x - dragState.startX;
+              const dy = next.y - dragState.startY;
+              dragState.moved = dragState.moved || Math.abs(dx) + Math.abs(dy) > 3;
+              const minX = radius + 22;
+              const minY = radius + 22;
+              const x = Math.max(minX, Math.min(width - minX, dragState.nodeX + dx));
+              const y = Math.max(minY, Math.min(height - minY, dragState.nodeY + dy));
+              event.currentTarget?.setAttribute?.("transform", `translate(${x} ${y})`);
+              const svg = event.currentTarget?.ownerSVGElement;
+              const escapedEntityId = globalThis.CSS?.escape
+                ? globalThis.CSS.escape(String(entity.id))
+                : String(entity.id).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+              svg?.querySelectorAll?.(`[data-source-id="${escapedEntityId}"]`).forEach((line) => {
+                line.setAttribute("x1", String(x));
+                line.setAttribute("y1", String(y));
+              });
+              svg?.querySelectorAll?.(`[data-target-id="${escapedEntityId}"]`).forEach((line) => {
+                line.setAttribute("x2", String(x));
+                line.setAttribute("y2", String(y));
+              });
+              onMoveNode?.(entity, { x, y }, { preview: true });
+            },
+            onpointerup: (event) => {
+              if (!dragState || dragState.pointerId !== event.pointerId) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const next = svgPointFromEvent(event);
+              const minX = radius + 22;
+              const minY = radius + 22;
+              const x = Math.max(minX, Math.min(width - minX, dragState.nodeX + next.x - dragState.startX));
+              const y = Math.max(minY, Math.min(height - minY, dragState.nodeY + next.y - dragState.startY));
+              const moved = dragState.moved;
+              dragState = null;
+              event.currentTarget?.releasePointerCapture?.(event.pointerId);
+              event.currentTarget?.classList?.remove("is-dragging");
+              if (moved) {
+                onMoveNode?.(entity, { x, y }, { preview: false });
+              } else {
+                onSelect?.(entity);
+              }
+            },
+            onpointercancel: (event) => {
+              if (!dragState || dragState.pointerId !== event.pointerId) return;
+              dragState = null;
+              event.currentTarget?.releasePointerCapture?.(event.pointerId);
+              event.currentTarget?.classList?.remove("is-dragging");
+            },
+            onclick: (event) => {
+              event.stopPropagation();
+            },
+            onkeydown: (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                onSelect?.(entity);
+              }
+            },
+          },
+          _.g(
+            { class: "tl-kg-view-node-body" },
+            _.g(
+              { class: "tl-kg-view-node-float-x" },
+              _.g(
+                { class: "tl-kg-view-node-float-y" },
+                _.g(
+                  { class: "tl-kg-view-node-float-r" },
+                  _.circle({ r: radius, fill: color }),
+                  _.text({ y: -2, "text-anchor": "middle" }, String(entity.label || entity.id).slice(0, 18)),
+                  _.text({ y: 12, "text-anchor": "middle", class: "tl-kg-view-node-type" }, entity.entityType || "entity")
+                )
+              )
+            )
+          )
+        );
+      })
+    )
+  );
+};
+
+const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = new Map(), mode = "force", selectedId = "", zoom = 1, panX = 0, panY = 0, manualPositions = {}, onSelect = null, onMoveNode = null, onViewportChange = null } = {}) => {
+  const width = 920;
+  const height = 560;
+  const canvas = _.canvas({
+    class: "tl-kg-view-canvas-bitmap",
+    role: "img",
+    "aria-label": "Knowledge graph canvas view",
+  });
+  const local = {
+    zoom: Math.max(0.75, Math.min(2.2, Number(zoom) || 1)),
+    panX: Number(panX) || 0,
+    panY: Number(panY) || 0,
+    selectedId,
+    manualPositions: { ...(manualPositions || {}) },
+    drag: null,
+    pan: null,
+    animationStart: performance.now(),
+    smoothPositions: new Map(),
+    raf: 0,
+    framePending: false,
+  };
+  const seedFor = (entity) => Math.abs(String(entity?.id || entity?.label || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0));
+  const colorFor = (value, fallback = "#67e8f9") => value || fallback;
+  const layout = () => buildKnowledgeGraphLayout({
+    entities,
+    relations,
+    degree,
+    mode,
+    selectedId: local.selectedId,
+    manualPositions: local.manualPositions,
+    width,
+    height,
+  });
+  const viewState = (positions) => {
+    const selectedPosition = positions.get(local.selectedId);
+    const safeZoom = Math.max(0.75, Math.min(2.2, Number(local.zoom) || 1));
+    const viewWidth = width / safeZoom;
+    const viewHeight = height / safeZoom;
+    const viewCenterX = (selectedPosition?.x || width / 2) + Number(local.panX || 0);
+    const viewCenterY = (selectedPosition?.y || height / 2) + Number(local.panY || 0);
+    return {
+      x: Math.max(0, Math.min(width - viewWidth, viewCenterX - viewWidth / 2)),
+      y: Math.max(0, Math.min(height - viewHeight, viewCenterY - viewHeight / 2)),
+      w: viewWidth,
+      h: viewHeight,
+      zoom: safeZoom,
+    };
+  };
+  const canvasSize = () => {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cssWidth = Math.max(1, rect.width || canvas.clientWidth || 1);
+    const cssHeight = Math.max(1, rect.height || canvas.clientHeight || 1);
+    const pixelWidth = Math.round(cssWidth * dpr);
+    const pixelHeight = Math.round(cssHeight * dpr);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    return { cssWidth, cssHeight, dpr };
+  };
+  const graphToScreen = (point, view, size) => ({
+    x: ((point.x - view.x) / view.w) * size.cssWidth,
+    y: ((point.y - view.y) / view.h) * size.cssHeight,
+  });
+  const canvasEllipsisText = (ctx, text = "", maxWidth = 0) => {
+    const value = String(text || "").trim();
+    if (!value || maxWidth <= 0) return "";
+    if (ctx.measureText(value).width <= maxWidth) return value;
+    const suffix = "...";
+    let left = 0;
+    let right = value.length;
+    while (left < right) {
+      const mid = Math.ceil((left + right) / 2);
+      const candidate = `${value.slice(0, mid).trimEnd()}${suffix}`;
+      if (ctx.measureText(candidate).width <= maxWidth) {
+        left = mid;
+      } else {
+        right = mid - 1;
+      }
+    }
+    return left > 0 ? `${value.slice(0, left).trimEnd()}${suffix}` : suffix;
+  };
+  const canvasLabelLines = (ctx, text = "", maxWidth = 0, maxLines = 1) => {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    if (!value || maxLines <= 1) return [canvasEllipsisText(ctx, value, maxWidth)].filter(Boolean);
+    const words = value.split(" ");
+    let firstLine = "";
+    let splitIndex = 0;
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index];
+      const next = firstLine ? `${firstLine} ${word}` : word;
+      if (ctx.measureText(next).width > maxWidth) break;
+      firstLine = next;
+      splitIndex = index + 1;
+    }
+    if (!firstLine) {
+      return [canvasEllipsisText(ctx, value, maxWidth)];
+    }
+    const rest = words.slice(splitIndex).join(" ");
+    if (!rest) return [firstLine];
+    if (maxLines === 2) return [firstLine, canvasEllipsisText(ctx, rest, maxWidth)].filter(Boolean);
+    const lines = [firstLine];
+    let current = "";
+    const remainingWords = words.slice(splitIndex);
+    for (const word of remainingWords) {
+      const next = current ? `${current} ${word}` : word;
+      if (ctx.measureText(next).width <= maxWidth) {
+        current = next;
+        continue;
+      }
+      if (current) lines.push(current);
+      current = word;
+      if (lines.length >= maxLines - 1) break;
+    }
+    if (lines.length < maxLines) lines.push(canvasEllipsisText(ctx, current, maxWidth));
+    return lines.slice(0, maxLines).filter(Boolean);
+  };
+  const screenToGraph = (event, view, size) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(width, view.x + ((event.clientX - rect.left) / size.cssWidth) * view.w)),
+      y: Math.max(0, Math.min(height, view.y + ((event.clientY - rect.top) / size.cssHeight) * view.h)),
+    };
+  };
+  const connectedFor = () => {
+    const relationIds = new Set();
+    const entityIds = new Set(local.selectedId ? [local.selectedId] : []);
+    if (local.selectedId) {
+      relations.forEach((relation) => {
+        if (relation.sourceEntityId === local.selectedId || relation.targetEntityId === local.selectedId) {
+          relationIds.add(relation.id);
+          entityIds.add(relation.sourceEntityId);
+          entityIds.add(relation.targetEntityId);
+        }
+      });
+    }
+    return { relationIds, entityIds };
+  };
+  const scheduleDraw = () => {
+    if (local.framePending) return;
+    local.framePending = true;
+    local.raf = requestAnimationFrame(draw);
+  };
+  const draw = () => {
+    local.framePending = false;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const size = canvasSize();
+    ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
+    ctx.clearRect(0, 0, size.cssWidth, size.cssHeight);
+    const { positions, selectedRelations, connectedEntityIds } = layout();
+    let hasMotion = false;
+    entities.forEach((entity) => {
+      const target = positions.get(entity.id);
+      if (!target) return;
+      const current = local.smoothPositions.get(entity.id);
+      if (!current) {
+        local.smoothPositions.set(entity.id, { ...target, vx: 0, vy: 0 });
+        return;
+      }
+      const isDragged = local.drag?.entity?.id === entity.id;
+      if (isDragged) {
+        current.x = target.x;
+        current.y = target.y;
+        current.vx = 0;
+        current.vy = 0;
+        return;
+      }
+      const dx = target.x - current.x;
+      const dy = target.y - current.y;
+      const stiffness = local.drag ? 0.01 : 0.018;
+      const damping = local.drag ? 0.88 : 0.9;
+      const seed = seedFor(entity);
+      const curve = local.drag ? 0.006 : 0.003;
+      current.vx = ((Number(current.vx) || 0) + dx * stiffness + Math.sin(performance.now() / 1100 + seed) * curve) * damping;
+      current.vy = ((Number(current.vy) || 0) + dy * stiffness + Math.cos(performance.now() / 1250 + seed * 0.37) * curve) * damping;
+      current.x += current.vx;
+      current.y += current.vy;
+      const speed = Math.abs(current.vx) + Math.abs(current.vy);
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01 && speed < 0.008) {
+        current.x = target.x;
+        current.y = target.y;
+        current.vx = 0;
+        current.vy = 0;
+      } else {
+        hasMotion = true;
+      }
+    });
+    const view = viewState(positions);
+    const focused = connectedFor();
+    const elapsed = performance.now() - local.animationStart;
+    const floatDuration = 4000;
+    const floatProgress = Math.max(0, Math.min(1, elapsed / floatDuration));
+    const floatFade = 1 - (floatProgress * floatProgress * (3 - 2 * floatProgress));
+    const floatActive = floatFade > 0.004;
+    const displayPositions = new Map();
+    entities.forEach((entity) => {
+      const point = local.smoothPositions.get(entity.id) || positions.get(entity.id) || { x: width / 2, y: height / 2 };
+      const isFloating = floatActive && local.selectedId && entity.id !== local.selectedId && focused.entityIds.has(entity.id);
+      if (!isFloating) {
+        displayPositions.set(entity.id, point);
+        return;
+      }
+      const seed = seedFor(entity);
+      const t = elapsed / 1000;
+      const direction = seed % 2 ? 1 : -1;
+      const ampX = (2.8 + (seed % 4)) * floatFade;
+      const ampY = (3.2 + ((seed * 3) % 4)) * floatFade;
+      displayPositions.set(entity.id, {
+        x: point.x + Math.sin(t * 2.1 + seed) * ampX * direction,
+        y: point.y + Math.sin(t * 1.7 + seed * 0.37) * ampY,
+      });
+    });
+    relations.forEach((relation) => {
+      const source = displayPositions.get(relation.sourceEntityId);
+      const target = displayPositions.get(relation.targetEntityId);
+      if (!source || !target) return;
+      const a = graphToScreen(source, view, size);
+      const b = graphToScreen(target, view, size);
+      const isConnected = local.selectedId ? selectedRelations.has(relation.id) : false;
+      ctx.save();
+      ctx.globalAlpha = local.selectedId ? (isConnected ? 0.86 : 0.1) : 0.42;
+      ctx.strokeStyle = colorFor(knowledgeGraphRelationColors[relation.relationType], "rgba(148, 163, 184, 0.34)");
+      ctx.lineWidth = isConnected ? 2.4 : 1.2;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.restore();
+    });
+    entities.forEach((entity) => {
+      const point = displayPositions.get(entity.id) || positions.get(entity.id);
+      if (!point) return;
+      const screen = graphToScreen(point, view, size);
+      const entityDegree = degree.get(entity.id) || 0;
+      const radius = knowledgeGraphNodeRadiusForDegree(entityDegree) * (size.cssWidth / view.w);
+      const isSelected = entity.id === local.selectedId;
+      const isConnected = local.selectedId && connectedEntityIds.has(entity.id);
+      const muted = local.selectedId && !isConnected;
+      ctx.save();
+      ctx.globalAlpha = muted ? 0.28 : 1;
+      ctx.fillStyle = colorFor(knowledgeGraphTypeColors[entity.entityType], knowledgeGraphTypeColors.entity);
+      ctx.strokeStyle = isSelected ? "#f8fafc" : "rgba(226, 232, 240, 0.9)";
+      ctx.lineWidth = isSelected ? 3 : isConnected ? 2.4 : 1.5;
+      ctx.shadowColor = isSelected ? "rgba(34, 211, 238, 0.5)" : "rgba(0, 0, 0, 0.28)";
+      ctx.shadowBlur = isSelected ? 14 : 10;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#0f172a";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const textMaxWidth = Math.max(16, radius * 1.58);
+      const allowTwoLines = radius >= 30 || isSelected;
+      ctx.font = `${isSelected ? "800 10px" : "800 9px"} system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+      const labelLines = canvasLabelLines(ctx, entity.label || entity.id, textMaxWidth, allowTwoLines ? 2 : 1);
+      const labelStartY = screen.y - (labelLines.length > 1 ? 7 : 3);
+      labelLines.forEach((line, index) => {
+        ctx.fillText(line, screen.x, labelStartY + index * 9);
+      });
+      ctx.font = "700 7px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.globalAlpha = muted ? 0.2 : 0.72;
+      ctx.fillText(canvasEllipsisText(ctx, entity.entityType || "entity", textMaxWidth), screen.x, screen.y + (labelLines.length > 1 ? 14 : 11));
+      ctx.restore();
+    });
+    if ((floatActive && local.selectedId) || local.drag || hasMotion) {
+      scheduleDraw();
+    }
+  };
+  const hitTest = (event) => {
+    const size = canvasSize();
+    const { positions } = layout();
+    const view = viewState(positions);
+    const graph = screenToGraph(event, view, size);
+    const sorted = [...entities].sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
+    for (const entity of sorted) {
+      const point = positions.get(entity.id);
+      if (!point) continue;
+      const radius = knowledgeGraphNodeRadiusForDegree(degree.get(entity.id) || 0) + 5;
+      const dx = graph.x - point.x;
+      const dy = graph.y - point.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= radius) return { entity, point, graph, view, size };
+    }
+    return { entity: null, point: null, graph, view, size };
+  };
+  canvas.onwheel = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const { positions } = layout();
+    const view = viewState(positions);
+    if (event.ctrlKey || event.metaKey) {
+      const direction = event.deltaY > 0 ? -1 : 1;
+      local.zoom = Math.max(0.75, Math.min(2.2, Number((local.zoom + direction * 0.05).toFixed(2))));
+    } else {
+      local.panX += (Number(event.deltaX || 0) * 1.8) / view.zoom;
+      local.panY += (Number(event.deltaY || 0) * 1.8) / view.zoom;
+    }
+    onViewportChange?.({ zoom: local.zoom, panX: local.panX, panY: local.panY });
+    scheduleDraw();
+  };
+  canvas.onpointerdown = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const hit = hitTest(event);
+    canvas.setPointerCapture?.(event.pointerId);
+    if (hit.entity) {
+      local.drag = {
+        pointerId: event.pointerId,
+        entity: hit.entity,
+        start: hit.graph,
+        node: hit.point,
+        moved: false,
+      };
+      return;
+    }
+    local.pan = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startPanX: local.panX,
+      startPanY: local.panY,
+      view: hit.view,
+      size: hit.size,
+      moved: false,
+    };
+    canvas.parentElement?.classList.add("is-panning");
+  };
+  canvas.onpointermove = (event) => {
+    if (local.drag?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      const { positions } = layout();
+      const view = viewState(positions);
+      const size = canvasSize();
+      const graph = screenToGraph(event, view, size);
+      const entity = local.drag.entity;
+      const radius = knowledgeGraphNodeRadiusForDegree(degree.get(entity.id) || 0) + 22;
+      const x = Math.max(radius, Math.min(width - radius, local.drag.node.x + graph.x - local.drag.start.x));
+      const y = Math.max(radius, Math.min(height - radius, local.drag.node.y + graph.y - local.drag.start.y));
+      local.drag.moved = local.drag.moved || Math.abs(graph.x - local.drag.start.x) + Math.abs(graph.y - local.drag.start.y) > 3;
+      local.manualPositions[entity.id] = { x, y };
+      onMoveNode?.(entity, { x, y }, { preview: true });
+      scheduleDraw();
+      return;
+    }
+    if (local.pan?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      const dx = event.clientX - local.pan.startX;
+      const dy = event.clientY - local.pan.startY;
+      local.pan.moved = local.pan.moved || Math.abs(dx) + Math.abs(dy) > 4;
+      local.panX = local.pan.startPanX - (dx * local.pan.view.w) / local.pan.size.cssWidth;
+      local.panY = local.pan.startPanY - (dy * local.pan.view.h) / local.pan.size.cssHeight;
+      onViewportChange?.({ zoom: local.zoom, panX: local.panX, panY: local.panY });
+      scheduleDraw();
+    }
+  };
+  canvas.onpointerup = (event) => {
+    if (local.drag?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      const drag = local.drag;
+      local.drag = null;
+      canvas.releasePointerCapture?.(event.pointerId);
+      if (drag.moved) {
+        const point = local.manualPositions[drag.entity.id] || drag.node;
+        local.manualPositions[drag.entity.id] = point;
+        local.selectedId = drag.entity.id;
+        local.animationStart = performance.now();
+        onMoveNode?.(drag.entity, point, { preview: false });
+      } else {
+        local.manualPositions[drag.entity.id] = drag.node;
+        local.selectedId = drag.entity.id;
+        local.animationStart = performance.now();
+        onSelect?.(drag.entity, { point: drag.node });
+      }
+      scheduleDraw();
+      return;
+    }
+    if (local.pan?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      local.pan = null;
+      canvas.parentElement?.classList.remove("is-panning");
+      canvas.releasePointerCapture?.(event.pointerId);
+    }
+  };
+  canvas.onpointercancel = (event) => {
+    local.drag = null;
+    local.pan = null;
+    canvas.parentElement?.classList.remove("is-panning");
+    canvas.releasePointerCapture?.(event.pointerId);
+  };
+  setTimeout(scheduleDraw, 0);
+  return canvas;
+};
+
+const openKnowledgeGraphViewDialog = async (node = {}) => {
+  const graphData = await collectKnowledgeGraphData(node).catch((error) => {
+    console.warn("Knowledge Graph data unavailable", error);
+    return { entities: [], relations: [], metrics: [], collectionId: "", documentId: "" };
+  });
+  const model = {
+    search: "",
+    type: "all",
+    relationType: "all",
+    mode: "force",
+    limit: 80,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    manualPositions: {},
+    focusPosition: null,
+    drag: null,
+    suppressNextNodeClick: false,
+    selected: null,
+    sideTab: "selection",
+  };
+  const types = ["all", ...new Set((graphData.entities || []).map((entity) => entity.entityType || "entity"))].sort((a, b) =>
+    a === "all" ? -1 : b === "all" ? 1 : a.localeCompare(b)
+  );
+  const relationTypes = ["all", ...new Set((graphData.relations || []).map((relation) => relation.relationType || "relation"))].sort((a, b) =>
+    a === "all" ? -1 : b === "all" ? 1 : a.localeCompare(b)
+  );
+  let host = null;
+  let searchFocus = null;
+  const restoreSearchFocus = () => {
+    if (!host || !searchFocus) return;
+    const nextFocus = searchFocus;
+    searchFocus = null;
+    queueMicrotask(() => {
+      const searchInput = host.querySelector(".tl-kg-view-search input, input.tl-kg-view-search, input[type='search']");
+      if (!searchInput) return;
+      searchInput.focus({ preventScroll: true });
+      if (typeof searchInput.setSelectionRange === "function") {
+        const cursor = Math.max(0, Math.min(nextFocus.cursor, String(searchInput.value || "").length));
+        searchInput.setSelectionRange(cursor, cursor);
+      }
+    });
+  };
+  const rerender = () => {
+    if (!host) return;
+    const visible = visibleKnowledgeGraph({
+      entities: graphData.entities,
+      relations: graphData.relations,
+      search: model.search,
+      type: model.type,
+      relationType: model.relationType,
+      limit: model.limit,
+    });
+    if (model.selected && !visible.entities.some((entity) => entity.id === model.selected.id)) model.selected = null;
+    const selected = model.selected || visible.entities[0] || null;
+    model.selected = selected;
+    const typeCounts = visible.entities.reduce((acc, entity) => {
+      const type = entity.entityType || "entity";
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+    const relationTypeCounts = visible.relations.reduce((acc, relation) => {
+      const type = relation.relationType || "relation";
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+    const renderSelectionContent = (entity) => entity
+      ? [
+        _.div(
+          { class: "tl-kg-view-selection-title" },
+          _.strong(entity.label || entity.id),
+          _.span(entity.entityType || "entity")
+        ),
+        _.div(_.span("Connections"), _.strong(String(visible.degree.get(entity.id) || 0))),
+        _.div(_.span("Confidence"), _.strong(Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence).toFixed(2) : "N/D")),
+        _.div(_.span("Document"), _.strong(entity.documentId || "N/D")),
+        _.div(_.span("Chunk"), _.strong(entity.chunkId || "N/D")),
+        _.div(_.span("Entity ID"), _.strong(entity.id || "N/D")),
+        copyRuntimeButton(entity, "Copy entity"),
+      ]
+      : [_.p({ class: "tl-flow-muted" }, "No entity selected.")];
+    const updateSelectionPane = (entity) => {
+      const selection = host.querySelector(".tl-kg-view-selection");
+      if (!selection) return;
+      selection.replaceChildren(...renderSelectionContent(entity));
+    };
+    const focusGraphEntity = (entity, { resetPan = false, point = null } = {}) => {
+      if (!entity) return;
+      const currentNode = host.querySelector(`.tl-kg-view-node[data-entity-id="${escapeSelectorValue(entity.id)}"]`);
+      const currentPoint = parseKnowledgeGraphTranslate(currentNode?.getAttribute("transform") || "");
+      if (point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))) {
+        model.focusPosition = { id: entity.id, point };
+      } else if (currentNode && Number.isFinite(currentPoint.x) && Number.isFinite(currentPoint.y)) {
+        model.focusPosition = { id: entity.id, point: currentPoint };
+      }
+      model.selected = entity;
+      updateSelectionPane(entity);
+      if (resetPan) {
+        model.panX = 0;
+        model.panY = 0;
+      }
+      model.sideTab = "selection";
+      const focusManualPositions = model.focusPosition?.id === entity.id
+        ? { ...model.manualPositions, [entity.id]: model.focusPosition.point }
+        : model.manualPositions;
+      const nextLayout = buildKnowledgeGraphLayout({
+        entities: visible.entities,
+        relations: visible.relations,
+        degree: visible.degree,
+        mode: model.mode,
+        selectedId: entity.id,
+        manualPositions: focusManualPositions,
+      });
+      applyKnowledgeGraphFocusClasses({
+        host,
+        selectedId: entity.id,
+        relations: visible.relations,
+      });
+      if (host.querySelector(".tl-kg-view-canvas-bitmap")) {
+        return;
+      }
+      const settled = animateKnowledgeGraphSettle({
+        host,
+        entities: visible.entities,
+        relations: visible.relations,
+        positions: nextLayout.positions,
+        duration: 720,
+        onDone: rerender,
+      });
+      if (!settled) rerender();
+    };
+    host.replaceChildren(
+      _.div(
+        { class: "tl-kg-view-toolbar" },
+        _.Input({
+          class: "tl-kg-view-search",
+          size: "sm",
+          label: "Search",
+          type: "search",
+          placeholder: "Search entities, type, document...",
+          value: model.search,
+          onInput: (event) => {
+            const target = event?.target;
+            searchFocus = {
+              cursor: Number.isFinite(Number(target?.selectionStart)) ? Number(target.selectionStart) : String(cmsInputValue(event) || "").length,
+            };
+            model.search = String(cmsInputValue(event) || "");
+            rerender();
+          },
+        }),
+        _.Select({
+          size: "sm",
+          label: "Type",
+          value: model.type,
+          options: types.map((type) => ({ value: type, label: type === "all" ? "All types" : type })),
+          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          onChange: (value) => {
+            model.type = String(cmsInputValue(value) || "all");
+            rerender();
+          },
+        }),
+        _.Select({
+          size: "sm",
+          label: "Relation",
+          value: model.relationType,
+          options: relationTypes.map((type) => ({ value: type, label: type === "all" ? "All relations" : type })),
+          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          onChange: (value) => {
+            model.relationType = String(cmsInputValue(value) || "all");
+            rerender();
+          },
+        }),
+        _.Select({
+          size: "sm",
+          label: "Layout",
+          value: model.mode,
+          options: [{ value: "force", label: "Force" }, { value: "groups", label: "Groups" }],
+          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          onChange: (value) => {
+            model.mode = String(cmsInputValue(value) || "force");
+            rerender();
+          },
+        }),
+        _.Select({
+          size: "sm",
+          label: "Limit",
+          value: String(model.limit),
+          options: [40, 80, 120, 200].map((limit) => ({ value: String(limit), label: `${limit} nodes` })),
+          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          onChange: (value) => {
+            model.limit = Number(cmsInputValue(value)) || 80;
+            rerender();
+          },
+        })
+      ),
+      _.div(
+        { class: "tl-kg-view-body" },
+        _.div(
+          {
+            class: `tl-kg-view-canvas${model.drag ? " is-panning" : ""}`,
+            onwheel: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.ctrlKey || event.metaKey) {
+                const direction = event.deltaY > 0 ? -1 : 1;
+                model.zoom = Math.max(0.75, Math.min(2.2, Number((model.zoom + direction * 0.2).toFixed(2))));
+              } else {
+                const scale = Math.max(0.75, Number(model.zoom) || 1);
+                model.panX += (Number(event.deltaX || 0) * 1.8) / scale;
+                model.panY += (Number(event.deltaY || 0) * 1.8) / scale;
+              }
+              rerender();
+            },
+            onpointerdown: (event) => {
+              if (event.button !== 0 || event.target?.closest?.(".tl-kg-view-canvas-tools")) return;
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget?.setPointerCapture?.(event.pointerId);
+              model.drag = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                startPanX: model.panX,
+                startPanY: model.panY,
+                startViewBox: String(event.currentTarget?.querySelector?.(".tl-kg-view-svg")?.getAttribute("viewBox") || "0 0 920 560").split(/\s+/).map(Number),
+                canvasWidth: Math.max(1, Number(event.currentTarget?.clientWidth) || 1),
+                canvasHeight: Math.max(1, Number(event.currentTarget?.clientHeight) || 1),
+                moved: false,
+              };
+              event.currentTarget?.classList?.add("is-panning");
+            },
+            onpointermove: (event) => {
+              if (!model.drag || model.drag.pointerId !== event.pointerId) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const dx = event.clientX - model.drag.startX;
+              const dy = event.clientY - model.drag.startY;
+              model.drag.moved = model.drag.moved || Math.abs(dx) + Math.abs(dy) > 4;
+              const [startX = 0, startY = 0, viewWidth = 920, viewHeight = 560] = model.drag.startViewBox || [];
+              const deltaX = (dx * viewWidth) / model.drag.canvasWidth;
+              const deltaY = (dy * viewHeight) / model.drag.canvasHeight;
+              const nextViewX = Math.max(0, Math.min(920 - viewWidth, startX - deltaX));
+              const nextViewY = Math.max(0, Math.min(560 - viewHeight, startY - deltaY));
+              model.panX = model.drag.startPanX - deltaX;
+              model.panY = model.drag.startPanY - deltaY;
+              event.currentTarget?.querySelector?.(".tl-kg-view-svg")?.setAttribute("viewBox", `${nextViewX} ${nextViewY} ${viewWidth} ${viewHeight}`);
+            },
+            onpointerup: (event) => {
+              if (!model.drag || model.drag.pointerId !== event.pointerId) return;
+              event.preventDefault();
+              event.stopPropagation();
+              model.suppressNextNodeClick = Boolean(model.drag.moved);
+              model.drag = null;
+              event.currentTarget?.releasePointerCapture?.(event.pointerId);
+              event.currentTarget?.classList?.remove("is-panning");
+            },
+            onpointercancel: (event) => {
+              if (!model.drag || model.drag.pointerId !== event.pointerId) return;
+              model.drag = null;
+              event.currentTarget?.releasePointerCapture?.(event.pointerId);
+              event.currentTarget?.classList?.remove("is-panning");
+            },
+          },
+          _.div(
+            { class: "tl-kg-view-canvas-tools" },
+            _.button({
+              type: "button",
+              title: "Zoom out",
+              "aria-label": "Zoom out",
+              onclick: (event) => {
+                event.stopPropagation();
+                model.zoom = Math.max(0.75, Number((model.zoom - 0.1).toFixed(2)));
+                rerender();
+              },
+            }, icon("zoom_out", "sm")),
+            _.button({
+              type: "button",
+              title: "Fit graph",
+              "aria-label": "Fit graph",
+              onclick: (event) => {
+                event.stopPropagation();
+                model.zoom = 1;
+                model.panX = 0;
+                model.panY = 0;
+                rerender();
+              },
+            }, icon("center_focus_strong", "sm")),
+            _.button({
+              type: "button",
+              title: "Zoom in",
+              "aria-label": "Zoom in",
+              onclick: (event) => {
+                event.stopPropagation();
+                model.zoom = Math.min(2.2, Number((model.zoom + 0.1).toFixed(2)));
+                rerender();
+              },
+            }, icon("zoom_in", "sm")),
+            _.span({ class: "tl-kg-view-zoom-label" }, `${Math.round(model.zoom * 100)}%`)
+          ),
+          visible.entities.length
+            ? renderKnowledgeGraphCanvas({
+              entities: visible.entities,
+              relations: visible.relations,
+              degree: visible.degree,
+              mode: model.mode,
+              selectedId: selected?.id || "",
+              zoom: model.zoom,
+              panX: model.panX,
+              panY: model.panY,
+              manualPositions: model.focusPosition?.id === selected?.id
+                ? { ...model.manualPositions, [selected.id]: model.focusPosition.point }
+                : model.manualPositions,
+              onViewportChange: (viewport) => {
+                model.zoom = viewport.zoom;
+                model.panX = viewport.panX;
+                model.panY = viewport.panY;
+                host.querySelector(".tl-kg-view-zoom-label")?.replaceChildren(`${Math.round(model.zoom * 100)}%`);
+              },
+              onSelect: (entity, context = {}) => {
+                if (model.suppressNextNodeClick) {
+                  model.suppressNextNodeClick = false;
+                  return;
+                }
+                focusGraphEntity(entity, { point: context.point });
+              },
+              onMoveNode: (entity, point, options = {}) => {
+                model.manualPositions[entity.id] = point;
+                model.focusPosition = { id: entity.id, point };
+                if (options.preview) return;
+                focusGraphEntity(entity);
+              },
+            })
+            : _.div({ class: "tl-kg-view-empty" }, icon("account_tree", "lg"), _.strong("No entities"), _.span("Try changing filters or run Entity Extractor."))
+        ),
+        _.aside(
+          { class: "tl-kg-view-side" },
+          _.div(
+            { class: "tl-kg-view-side-tabs" },
+            ["selection", "info"].map((tab) =>
+              _.button({
+                type: "button",
+                class: model.sideTab === tab ? "is-active" : "",
+                onclick: (event) => {
+                  event.stopPropagation();
+                  model.sideTab = tab;
+                  rerender();
+                },
+              }, tab === "selection" ? "Selection" : "Info")
+            )
+          ),
+          model.sideTab === "selection"
+            ? _.div(
+              { class: "tl-kg-view-side-pane" },
+              _.section(
+                _.h3("Selection"),
+                selected
+                  ? _.div(
+                    { class: "tl-kg-view-selection" },
+                    ...renderSelectionContent(selected)
+                  )
+                  : _.p({ class: "tl-flow-muted" }, "No entity selected.")
+              )
+            )
+            : _.div(
+              { class: "tl-kg-view-side-pane" },
+              _.section(
+                _.h3("Index"),
+                _.div(_.span("Entities"), _.strong(String(visible.entities.length))),
+                _.div(_.span("Relations"), _.strong(String(visible.relations.length))),
+                _.div(_.span("Collection"), _.strong(graphData.collectionId || "all")),
+                _.div(_.span("Document"), _.strong(graphData.documentId || "all"))
+              ),
+              _.section(
+                _.h3("Groups"),
+                ...Object.entries(typeCounts).map(([type, count]) =>
+                  _.button({
+                    type: "button",
+                    class: "tl-kg-view-group",
+                    onclick: (event) => {
+                      event.stopPropagation();
+                      model.type = type;
+                      rerender();
+                    },
+                  }, _.i({ style: `--kg-color:${knowledgeGraphTypeColors[type] || knowledgeGraphTypeColors.entity}` }), _.span(type), _.strong(String(count)))
+                )
+              ),
+              _.section(
+                _.h3("Relations"),
+                ...Object.entries(relationTypeCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([type, count]) =>
+                  _.button({
+                    type: "button",
+                    class: "tl-kg-view-group is-relation",
+                    onclick: (event) => {
+                      event.stopPropagation();
+                      model.relationType = type;
+                      rerender();
+                    },
+                  }, _.i({ style: `--kg-color:${knowledgeGraphRelationColors[type] || knowledgeGraphRelationColors.relation}` }), _.span(type), _.strong(String(count)))
+                )
+              )
+            )
+        )
+      )
+    );
+    restoreSearchFocus();
+  };
+  const dialog = _.Dialog({
+    class: "tl-kg-view-dialog",
+    panelClass: "tl-kg-view-panel",
+    size: "xl",
+    title: node.label || "Knowledge Graph",
+    subtitle: `${graphData.entities.length} entities · ${graphData.relations.length} relations`,
+    icon: "account_tree",
+    closeButton: true,
+    closeOnOutside: false,
+    content: () => {
+      host = _.div({
+        class: "tl-kg-view",
+        onclick: (event) => event.stopPropagation(),
+        onpointerdown: (event) => event.stopPropagation(),
+      });
+      setTimeout(rerender, 0);
+      return host;
+    },
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(graphData) }, icon("content_copy", "sm"), "Copy Data"),
+      btn({ class: "is-primary", onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const renderInspectorKnowledgeGraph = (node = {}) => {
+  if (nodeCategory(node) !== "knowledge") {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadKnowledgeInspectorGraph(node);
+  const graph = state.knowledgeInspectorGraph[node.id] || { loading: true, entities: [], relations: [], metrics: [], topEntities: [] };
+  const latestMetric = graph.metrics?.[0] || null;
+  const snapshot = {
+    entityCount: graph.entities?.length || 0,
+    relationCount: graph.relations?.length || 0,
+    topEntities: graph.topEntities || [],
+    latestMetric: latestMetric?.value || null,
+  };
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("Knowledge Graph Debug"),
+    ...[
+      ["Entities", graph.loading ? "loading..." : graph.entities?.length || 0],
+      ["Relations", graph.loading ? "loading..." : graph.relations?.length || 0],
+      ["Snapshots", graph.loading ? "loading..." : graph.metrics?.length || 0],
+      ["Latest snapshot", latestMetric?.createdAt ? formatShortDate(latestMetric.createdAt) : "N/D"],
+      ["Collection", latestMetric?.value?.collectionId || nodeRuntimeConfig(node).collectionId || "all"],
+      ["Document", latestMetric?.value?.documentId || nodeRuntimeConfig(node).documentId || "all"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    graph.error ? _.p({ class: "tl-flow-muted" }, graph.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        copyRuntimeButton(snapshot, "Copy graph snapshot"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "View Knowledge Graph",
+          onclick: () => openKnowledgeGraphViewDialog(node),
+        }, icon("account_tree", "sm"), "View Graph"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh Knowledge graph",
+          onclick: () => loadKnowledgeInspectorGraph(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    graph.topEntities?.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Top entities"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...graph.topEntities.map((entity) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`${entity.label || entity.id} · degree ${entity.degree || 0}`),
+              _.span(`${entity.entityType || "entity"} · confidence ${Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence).toFixed(2) : "N/D"}`),
+              _.p(entity.documentId || entity.chunkId || "")
+            )
+          )
+        )
+      )
+      : _.p({ class: "tl-flow-muted" }, graph.loading ? "Caricamento grafo Knowledge..." : "Nessuna entità trovata per questo scope."),
+    graph.relations?.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Recent relations"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...graph.relations.slice(0, 8).map((relation) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`${relation.sourceLabel || relation.sourceEntityId} -> ${relation.targetLabel || relation.targetEntityId}`),
+              _.span(`${relation.relationType || "relation"} · confidence ${Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence).toFixed(2) : "N/D"}`),
+              _.p(relation.documentId || relation.chunkId || "")
+            )
+          )
+        )
+      )
+      : null
+  );
+};
+
 const renderInspectorMetrics = (node, dependencies, events, channelRecords, flowLogs = []) => {
   const live = recentActivity(graphModel()).nodeActivity?.get(node.id);
   const perf = nodePerformance(node);
@@ -2837,6 +5296,15 @@ const renderInspector = () => {
     { id: "runtime", title: "Runtime", content: renderInspectorRuntime(node, events) },
     ...(node.type === "storage" || nodeCategory(node) === "storage"
       ? [{ id: "storage-record", title: "Last Stored Record", content: renderInspectorStorageRecord(node) }]
+      : []),
+    ...(nodeCategory(node) === "ai-agents"
+      ? [{ id: "ai-rag-debug", title: "AI RAG Debug", content: renderInspectorAiRag(node) }]
+      : []),
+    ...(nodeCategory(node) === "knowledge"
+      ? [{ id: "knowledge-graph-debug", title: "Knowledge Graph Debug", content: renderInspectorKnowledgeGraph(node) }]
+      : []),
+    ...(isKnowledgeDocumentStoreNode(node)
+      ? [{ id: "knowledge-document-debug", title: "Knowledge Document Debug", content: renderInspectorKnowledgeDocument(node) }]
       : []),
     { id: "logs", title: "Logs", content: renderInspectorLogs(events, flowLogs) },
     { id: "metrics", title: "Metrics", content: renderInspectorMetrics(node, dependencies, events, channelRecords, flowLogs) },

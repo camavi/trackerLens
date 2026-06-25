@@ -27,7 +27,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const nowIso = () => new Date().toISOString();
   const safeId = (value = "knowledge") =>
-    String(value || "knowledge").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80) || "knowledge";
+    String(value || "knowledge")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9_-]/g, "_")
+      .slice(0, 80) || "knowledge";
   const uniqueId = (prefix = "knowledge") => {
     if (window.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -171,6 +175,29 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return { chunks: staleChunks.length, embeddings: staleEmbeddings.length };
   };
 
+  const deleteEntitiesAndRelations = async ({ workspaceId, chunkIds = [], documentId = "" } = {}) => {
+    const safeChunkIds = new Set((chunkIds || []).filter(Boolean).map(String));
+    const [entities, relations] = await Promise.all([
+      listStore(STORES.entities),
+      listStore(STORES.relations),
+    ]);
+    const staleEntities = byWorkspace(entities, workspaceId).filter((entity) =>
+      (documentId && entity.documentId === documentId) || safeChunkIds.has(entity.chunkId || "")
+    );
+    const staleEntityIds = new Set(staleEntities.map((entity) => entity.id));
+    const staleRelations = byWorkspace(relations, workspaceId).filter((relation) =>
+      staleEntityIds.has(relation.sourceEntityId) ||
+      staleEntityIds.has(relation.targetEntityId) ||
+      (documentId && relation.documentId === documentId) ||
+      safeChunkIds.has(relation.chunkId || "")
+    );
+    await Promise.all([
+      deleteRecords(STORES.relations, staleRelations.map((relation) => relation.id)),
+      deleteRecords(STORES.entities, staleEntities.map((entity) => entity.id)),
+    ]);
+    return { entities: staleEntities.length, relations: staleRelations.length };
+  };
+
   const normalizeKnowledgeText = (text = "") =>
     String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -197,6 +224,51 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (typeof payload === "string") return payload;
     return textOf(payload?.text || payload?.content || payload?.body || payload?.markdown || payload?.document || payload);
   };
+
+  const splitConfigList = (value = "") =>
+    Array.isArray(value)
+      ? value.filter(Boolean).map((item) => String(item).trim()).filter(Boolean)
+      : String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+
+  const entityStopWords = new Set([
+    "a", "al", "all", "alla", "alle", "anche", "and", "are", "as", "at", "avec", "but", "by",
+    "che", "con", "da", "de", "del", "della", "des", "di", "do", "du", "e", "el", "en", "et",
+    "for", "from", "gli", "ha", "has", "have", "i", "il", "in", "is", "it", "la", "las", "le",
+    "le", "les", "lo", "los", "ma", "mas", "many", "me", "mi", "mis", "more", "much", "muchas", "muchos",
+    "muy", "nel", "no", "non", "of", "on", "or", "para", "per", "por", "que", "se", "si", "sin", "son", "su", "sus", "the",
+    "to", "tra", "un", "una", "uno", "y", "ahora", "aunque", "como", "cuando", "era",
+    "estuve", "hola", "pero", "pues", "realmente", "avec", "dans", "pour", "sur"
+  ]);
+
+  const normalizeEntityToken = (value = "") =>
+    normalizeKnowledgeText(String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, ""));
+
+  const isEntityStopWord = (label = "", config = {}) => {
+    const words = normalizeEntityToken(label).split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    const customStopWords = new Set(splitConfigList(config.stopWords || config.entityStopWords).map(normalizeEntityToken));
+    if (words.every((word) => entityStopWords.has(word) || customStopWords.has(word))) return true;
+    if (words.length === 1 && words[0].length <= 2) return true;
+    return false;
+  };
+
+  const cleanEntityPhrase = (value = "", config = {}) => {
+    const customStopWords = new Set(splitConfigList(config.stopWords || config.entityStopWords).map(normalizeEntityToken));
+    const isStop = (word = "") => {
+      const normalized = normalizeEntityToken(word);
+      return entityStopWords.has(normalized) || customStopWords.has(normalized);
+    };
+    const words = String(value || "").replace(/\s+/g, " ").trim().split(/\s+/).filter(Boolean);
+    while (words.length > 1 && isStop(words[0])) words.shift();
+    while (words.length > 1 && isStop(words[words.length - 1])) words.pop();
+    return words.join(" ").trim();
+  };
+
+  const keywordBlockedTail = "a\\b|al\\b|ante\\b|comenz[oó]\\b|con\\b|corr[ií]eron\\b|de\\b|del\\b|el\\b|en\\b|encontraron\\b|era\\b|estaba\\b|hacia\\b|la\\b|las\\b|le\\b|les\\b|lo\\b|los\\b|para\\b|por\\b|que\\b|resplandec[ií]a\\b|se\\b|ten[ií]a\\b|tenia\\b|un\\b|una\\b|uno\\b|y\\b|como\\b|cuando\\b|donde\\b|llamada\\b|llamado\\b|joven\\b|persona\\b|viv[ií]a\\b|vivia\\b|lleno\\b|llena\\b|muy\\b";
+  const keywordTail = `(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,2}`;
+  const keywordConnectorTail = `(?:\\s+(?:de|del|de la|de los|of|the|di|della|du|des|la|las|los)\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,1})?`;
 
   const splitText = (text = "", { chunkSize = 900, overlap = 120 } = {}) => {
     const clean = String(text || "").replace(/\r\n/g, "\n").trim();
@@ -478,20 +550,29 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const now = nowIso();
     const text = extractInputText(payload, config);
     if (!text.trim()) throw new Error("Knowledge document vuoto");
+    const payloadSourceType = String(payload?.sourceType || "").trim();
+    const eventOrigin = String(event?.meta?.origin || "").trim();
+    const isUploadedDocument = payloadSourceType === "upload" || eventOrigin === "knowledge-upload";
+    const isLiveReplayDocument = payloadSourceType === "live-test-replay" || event?.eventType === "flow_live_knowledge_document";
+    const preferPayloadScope = isUploadedDocument || isLiveReplayDocument;
     const document = {
-      id: config.documentId || uniqueId("kdoc"),
+      id: preferPayloadScope
+        ? (payload?.documentId || payload?.id || uniqueId("kdoc"))
+        : (config.documentId || payload?.documentId || payload?.id || uniqueId("kdoc")),
       workspaceId,
       sourceId: config.sourceId || event?.sourceNodeId || node?.id || "",
-      sourceType: config.sourceType || "runtime-channel",
-      title: config.title || payload?.title || node?.label || "Knowledge Document",
-      mimeType: config.mimeType || payload?.mimeType || "text/plain",
-      language: config.language || payload?.language || "",
+      sourceType: preferPayloadScope ? (payloadSourceType || config.sourceType || "runtime-channel") : (config.sourceType || payloadSourceType || "runtime-channel"),
+      title: preferPayloadScope ? (payload?.title || config.title || node?.label || "Knowledge Document") : (config.title || payload?.title || node?.label || "Knowledge Document"),
+      mimeType: preferPayloadScope ? (payload?.mimeType || config.mimeType || "text/plain") : (config.mimeType || payload?.mimeType || "text/plain"),
+      language: preferPayloadScope ? (payload?.language || config.language || "") : (config.language || payload?.language || ""),
       text,
       metadata: {
         ...(payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
         inputChannel: event?.channel || "",
         nodeId: node?.id || "",
-        collectionId: config.collectionId || payload?.collectionId || payload?.metadata?.collectionId || "",
+        collectionId: preferPayloadScope
+          ? (payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "")
+          : (config.collectionId || payload?.collectionId || payload?.metadata?.collectionId || ""),
       },
       status: "ready",
       createdAt: now,
@@ -546,7 +627,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           title: document.title || "",
           inputChannel: event?.channel || "",
           nodeId: node?.id || "",
-          collectionId: config.collectionId || document.metadata?.collectionId || "",
+          collectionId: document.metadata?.collectionId || config.collectionId || "",
         },
         createdAt: now,
       };
@@ -581,7 +662,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           inputChannel: event?.channel || "",
           nodeId: node?.id || "",
           sourceChunkNodeId: chunk.metadata?.nodeId || "",
-          collectionId: config.collectionId || chunk.metadata?.collectionId || "",
+          collectionId: chunk.metadata?.collectionId || config.collectionId || "",
           providerType: embedding.providerType || "",
           fallbackReason: embedding.fallbackReason || "",
           requestedProvider: embedding.requestedProvider || "",
@@ -596,6 +677,390 @@ window.TrackerLensKnowledgeRuntime = (() => {
       provider: records[0]?.provider || "local-hash",
       model: records[0]?.model || "tl-local-hash-v1",
     };
+  };
+
+  const inferEntityType = (value = "", source = "") => {
+    const clean = String(value || "").trim();
+    if (/^https?:\/\//i.test(clean)) return "url";
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return "email";
+    if (source === "declared-name") return "proper-noun";
+    if (/^[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*(?:\s+[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*)+$/.test(clean) && /[A-ZÀ-Ý]/.test(clean)) return "quote";
+    if (/^[A-Z0-9]{2,8}$/.test(clean) && /[A-Z]/.test(clean)) return "symbol";
+    if (/\b(api|runtime|indexeddb|ollama|studio|openai|rag|json|php|javascript)\b/i.test(clean)) return "technology";
+    if (/^[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}$/.test(clean)) return "proper-noun";
+    return "term";
+  };
+
+  const escapedRegExp = (value = "") =>
+    String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const inferRelationType = (source = {}, target = {}, fallback = "co_occurs") => {
+    const types = new Set([source.entityType || "term", target.entityType || "term"]);
+    if (types.has("proper-noun") && types.has("quote")) return "says";
+    if (types.has("proper-noun") && types.has("creature")) return "encounters";
+    if (types.has("proper-noun") && types.has("object")) return "interacts_with";
+    if (types.has("proper-noun") && types.has("location")) return "appears_in";
+    if (types.has("proper-noun") && types.has("concept")) return "expresses";
+    if (types.has("location") && types.has("creature")) return "contains";
+    if (types.has("location") && types.has("object")) return "contains";
+    if (types.has("location") && types.has("concept")) return "context_for";
+    if (types.has("object") && types.has("concept")) return "associated_with";
+    if (types.has("symbol") && types.has("location")) return "marks";
+    if (types.has("symbol") && types.has("quote")) return "part_of";
+    return fallback || "co_occurs";
+  };
+
+  const orientRelationPair = (left = {}, right = {}, relationType = "co_occurs") => {
+    const withType = (type = "") => [left, right].find((entity) => entity.entityType === type) || null;
+    const sourceFor = (sourceType = "", targetType = "") => {
+      const source = withType(sourceType);
+      const target = withType(targetType);
+      return source && target ? { source, target } : { source: left, target: right };
+    };
+    if (["appears_in", "interacts_with", "expresses", "encounters", "says"].includes(relationType)) {
+      const targetType = {
+        appears_in: "location",
+        interacts_with: "object",
+        expresses: "concept",
+        encounters: "creature",
+        says: "quote",
+      }[relationType];
+      return sourceFor("proper-noun", targetType);
+    }
+    if (["contains", "context_for"].includes(relationType)) {
+      const targetType = relationType === "context_for"
+        ? "concept"
+        : (withType("creature") ? "creature" : "object");
+      return sourceFor("location", targetType);
+    }
+    if (relationType === "associated_with") return sourceFor("object", "concept");
+    if (relationType === "marks") return sourceFor("symbol", "location");
+    if (relationType === "part_of") return sourceFor("symbol", "quote");
+    return { source: left, target: right };
+  };
+
+  const entityLabelPositions = (text = "", label = "") => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return [];
+    const escaped = escapedRegExp(cleanLabel);
+    const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escaped})(?=$|[^\\p{L}\\p{N}_])`, "giu");
+    const positions = [];
+    for (const match of String(text || "").matchAll(regex)) {
+      positions.push((match.index || 0) + String(match[1] || "").length);
+    }
+    return positions;
+  };
+
+  const entityRelationDistance = (text = "", left = {}, right = {}) => {
+    const leftPositions = entityLabelPositions(text, left.label);
+    const rightPositions = entityLabelPositions(text, right.label);
+    if (!leftPositions.length || !rightPositions.length) return Number.POSITIVE_INFINITY;
+    let best = Number.POSITIVE_INFINITY;
+    leftPositions.forEach((leftPosition) => {
+      rightPositions.forEach((rightPosition) => {
+        best = Math.min(best, Math.abs(leftPosition - rightPosition));
+      });
+    });
+    return best;
+  };
+
+  const entityOccurrenceCount = (text = "", label = "") => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return 0;
+    const escaped = escapedRegExp(cleanLabel);
+    const matches = String(text || "").match(new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{N}_])`, "giu"));
+    return matches?.length || 0;
+  };
+
+  const entityExtractionMode = (config = {}) => {
+    const mode = String(config.extractionMode || config.mode || "strict").trim().toLowerCase();
+    return ["strict", "balanced", "wide"].includes(mode) ? mode : "strict";
+  };
+
+  const isEntityAllowedByMode = (candidate = {}, text = "", config = {}) => {
+    if (["seed", "declared-name"].includes(candidate.source) || String(candidate.source || "").startsWith("keyword-")) return true;
+    if (["url", "email", "symbol", "quote", "technology", "location", "object", "creature", "concept"].includes(candidate.entityType)) return true;
+    const mode = entityExtractionMode(config);
+    if (mode === "wide") return true;
+    const label = String(candidate.label || "").trim();
+    const words = label.split(/\s+/).filter(Boolean);
+    const occurrences = entityOccurrenceCount(text, label);
+    if (mode === "strict") {
+      if (words.length >= 2) return candidate.confidence >= 0.78;
+      return occurrences >= 2;
+    }
+    if (words.length >= 2) return true;
+    return occurrences >= 2 || candidate.confidence >= 0.78;
+  };
+
+  const entityCandidatesFromText = (text = "", config = {}) => {
+    const clean = String(text || "");
+    const candidates = [];
+    const push = (value = "", source = "pattern", confidence = 0.72, entityType = "") => {
+      const rawLabel = String(value || "").replace(/\s+/g, " ").trim();
+      const label = source === "seed" ? rawLabel : cleanEntityPhrase(rawLabel, config);
+      if (label.length < 2 || label.length > 96) return;
+      if (source !== "seed" && isEntityStopWord(label, config)) return;
+      candidates.push({ label, source, confidence, entityType: entityType || inferEntityType(label, source) });
+    };
+    const pushKeywordMatches = ({ pattern, source, entityType, confidence = 0.76 } = {}) => {
+      if (!pattern) return;
+      [...clean.matchAll(pattern)].forEach((match) => push(match[1] || match[0], source, confidence, entityType));
+    };
+    (clean.match(/https?:\/\/[^\s)'"<>]+/gi) || []).forEach((value) => push(value, "url", 0.95));
+    (clean.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).forEach((value) => push(value, "email", 0.95));
+    (clean.match(/\b[A-Z][A-Z0-9_-]{1,12}\b/g) || []).forEach((value) => push(value, "symbol", 0.68));
+    (clean.match(/\b[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*(?:\s+[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*){1,5}\b/g) || [])
+      .forEach((value) => push(value, "quote", 0.78, "quote"));
+    [
+      /\b(?:mi\s+nombre\s+es|me\s+llamo|llamada|llamado|llaman)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
+      /\b(?:called|named|my\s+name\s+is)\s+([A-Z][A-Za-z'’-]{2,}(?:\s+[A-Z][A-Za-z'’-]{2,}){0,2})/giu,
+      /\b(?:chiamata|chiamato|mi\s+chiamo|il\s+mio\s+nome\s+e)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
+      /\b(?:appelee|appele|je\s+m'appelle|mon\s+nom\s+est)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
+    ].forEach((pattern) => {
+      [...clean.matchAll(pattern)].forEach((match) => push(match[1], "declared-name", 0.88, "proper-noun"));
+    });
+    [
+      {
+        entityType: "location",
+        source: "keyword-location",
+        pattern: new RegExp(`\\b((?:bosque|forest|foresta|foret|forêt|castillo|castle|chateau|château|montaña|mountain|montagne|caverna|cave|grotta|reino|kingdom|regno|pueblo|village|rio|río|river|fiume|camino|sendero|path|trail)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
+      },
+      {
+        entityType: "object",
+        source: "keyword-object",
+        pattern: new RegExp(`\\b((?:flor|flower|fiore|fleur|fuente|source|spring|fontana|manantial|agua|water|acqua|eau|té|te|tea|taza|cup|antorcha|torch|torcia|palo|stick|bastone)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
+      },
+      {
+        entityType: "creature",
+        source: "keyword-creature",
+        pattern: /\b(troll|monstruo|monster|mostro|creature|criatura|cervatillo|fawn|cerbiatto|bestias salvajes|wild beasts|bêtes sauvages)\b/giu,
+      },
+      {
+        entityType: "concept",
+        source: "keyword-concept",
+        pattern: /\b(autocontrol|self-control|resiliencia|resilience|disciplina|discipline|optimismo|optimism|determinación|determinacion|determination|miedo|fear|paura|esperanza|hope|espoir|amistad|friendship|amitié|coraje|courage|compasión|compasion|compassion)\b/giu,
+      },
+    ].forEach(pushKeywordMatches);
+    (clean.match(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}\b/g) || [])
+      .forEach((value) => push(value, "proper-noun", value.includes(" ") ? 0.82 : 0.64));
+    splitConfigList(config.seedTerms || config.terms).forEach((value) => {
+      if (value && clean.toLowerCase().includes(value.toLowerCase())) push(value, "seed", 0.9);
+    });
+    const allowedTypes = splitConfigList(config.entityTypes).map((value) => value.toLowerCase());
+    const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.6)));
+    const seen = new Map();
+    candidates
+      .filter((candidate) => candidate.confidence >= threshold)
+      .filter((candidate) => candidate.source === "seed" || !isEntityStopWord(candidate.label, config))
+      .filter((candidate) => isEntityAllowedByMode(candidate, clean, config))
+      .filter((candidate) => !allowedTypes.length || allowedTypes.includes(candidate.entityType.toLowerCase()))
+      .forEach((candidate) => {
+        const key = normalizeKnowledgeText(candidate.label);
+        const previous = seen.get(key);
+        if (!previous || candidate.confidence > previous.confidence) seen.set(key, candidate);
+      });
+    const deduped = [...seen.values()].filter((candidate) => {
+      const key = normalizeKnowledgeText(candidate.label);
+      if (key.length <= 3) {
+        return ![...seen.keys()].some((otherKey) => otherKey !== key && otherKey.includes(key) && otherKey.length > key.length + 2);
+      }
+      return true;
+    });
+    return deduped.slice(0, Math.max(1, Math.min(80, Number(config.maxEntities || 24))));
+  };
+
+  const createEntitiesAndRelations = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
+    const inputChannel = String(event?.channel || "").trim();
+    const allowDocumentInput = config.allowDocumentInput === true || String(config.allowDocumentInput || "").toLowerCase() === "true";
+    const canReadDocumentChunks = inputChannel === "knowledge.chunk.created" || allowDocumentInput;
+    const canReadInlineText = allowDocumentInput;
+    const chunks = Array.isArray(payload?.chunks)
+      ? payload.chunks
+      : payload?.chunkId
+        ? [await getRecord(STORES.chunks, payload.chunkId)]
+        : payload?.documentId && canReadDocumentChunks
+          ? byWorkspace(await listStore(STORES.chunks), workspaceId).filter((chunk) => chunk.documentId === payload.documentId)
+          : (payload?.text || payload?.content) && canReadInlineText
+            ? [{
+              id: payload.chunkId || uniqueId("kchunk_inline"),
+              workspaceId,
+              documentId: payload.documentId || "",
+              text: extractInputText(payload, {}),
+              metadata: payload.metadata || {},
+            }]
+            : [];
+    const validChunks = chunks.filter(Boolean).filter((chunk) => !looksLikeKnowledgeEnvelope(chunk.text || ""));
+    if (!validChunks.length) throw new Error("Chunk Knowledge non trovato per entity extraction");
+    if (config.replaceExisting !== false) {
+      await deleteEntitiesAndRelations({
+        workspaceId,
+        chunkIds: validChunks.map((chunk) => chunk.id),
+        documentId: payload?.documentId || "",
+      });
+    }
+    const now = nowIso();
+    const entities = [];
+    const relations = [];
+    const maxRelations = Math.max(0, Math.min(240, Number(config.maxRelations || 120)));
+    const maxRelationsPerChunk = Math.max(0, Math.min(40, Number(config.maxRelationsPerChunk || 12)));
+    const maxRelationsPerEntityPerChunk = Math.max(1, Math.min(12, Number(config.maxRelationsPerEntityPerChunk || 3)));
+    const maxRelationDistance = Math.max(120, Math.min(1200, Number(config.maxRelationDistance || 520)));
+    for (const chunk of validChunks) {
+      const candidates = entityCandidatesFromText(chunk.text || "", config);
+      const chunkEntities = [];
+      for (const candidate of candidates) {
+        const entityId = `kentity_${safeId(workspaceId)}_${safeId(chunk.documentId || "doc")}_${safeId(candidate.label.toLowerCase())}`;
+        const record = {
+          id: entityId,
+          workspaceId,
+          documentId: chunk.documentId || "",
+          chunkId: chunk.id || "",
+          label: candidate.label,
+          normalized: normalizeKnowledgeText(candidate.label),
+          entityType: candidate.entityType,
+          confidence: candidate.confidence,
+          source: candidate.source,
+          metadata: {
+            ...(chunk.metadata || {}),
+            inputChannel: event?.channel || "",
+            nodeId: node?.id || "",
+            collectionId: chunk.metadata?.collectionId || config.collectionId || "",
+          },
+          createdAt: now,
+          updatedAt: now,
+        };
+        entities.push(await putRecord(STORES.entities, record));
+        chunkEntities.push(record);
+      }
+      const relationCandidates = [];
+      for (let left = 0; left < chunkEntities.length; left += 1) {
+        for (let right = left + 1; right < chunkEntities.length; right += 1) {
+          const source = chunkEntities[left];
+          const target = chunkEntities[right];
+          const sourceKey = normalizeEntityToken(source.label);
+          const targetKey = normalizeEntityToken(target.label);
+          const nestedSameType = source.entityType === target.entityType &&
+            sourceKey !== targetKey &&
+            (sourceKey.includes(targetKey) || targetKey.includes(sourceKey));
+          if (nestedSameType) continue;
+          const types = new Set([source.entityType, target.entityType]);
+          const hasPerson = types.has("proper-noun");
+          const hasNarrative = ["location", "object", "creature", "concept", "quote", "symbol"].some((type) => types.has(type));
+          const confidence = Math.min(source.confidence || 0.6, target.confidence || 0.6);
+          const distance = entityRelationDistance(chunk.text || "", source, target);
+          if (distance > maxRelationDistance) continue;
+          const proximityScore = Number.isFinite(distance) ? Math.max(0, 0.18 - (distance / maxRelationDistance) * 0.18) : 0;
+          const score = confidence +
+            proximityScore +
+            (hasPerson && hasNarrative ? 0.22 : 0) +
+            (hasPerson ? 0.1 : 0) +
+            (types.has("quote") ? 0.08 : 0) +
+            (types.has("creature") || types.has("object") ? 0.06 : 0) -
+            (source.entityType === target.entityType ? 0.08 : 0);
+          relationCandidates.push({ source, target, confidence, score });
+        }
+      }
+      const selectedRelationCandidates = relationCandidates
+        .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
+      const chunkEntityRelationCounts = new Map();
+      let chunkRelationCount = 0;
+      for (const { source, target, confidence } of selectedRelationCandidates) {
+        if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) break;
+        const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
+        const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
+        if (sourceLocalCount >= maxRelationsPerEntityPerChunk || targetLocalCount >= maxRelationsPerEntityPerChunk) continue;
+        const relationType = config.relationType || inferRelationType(source, target);
+        const oriented = orientRelationPair(source, target, relationType);
+        const relationSource = oriented.source || source;
+        const relationTarget = oriented.target || target;
+        const relationId = `krelation_${safeId(chunk.id || "chunk")}_${safeId(relationSource.normalized || relationSource.label)}_${safeId(relationTarget.normalized || relationTarget.label)}`;
+        const relation = {
+          id: relationId,
+          workspaceId,
+          documentId: chunk.documentId || "",
+          chunkId: chunk.id || "",
+          sourceEntityId: relationSource.id,
+          targetEntityId: relationTarget.id,
+          sourceLabel: relationSource.label,
+          targetLabel: relationTarget.label,
+          relationType,
+          confidence,
+          metadata: {
+            inputChannel: event?.channel || "",
+            nodeId: node?.id || "",
+            collectionId: chunk.metadata?.collectionId || config.collectionId || "",
+          },
+          createdAt: now,
+          updatedAt: now,
+        };
+        relations.push(await putRecord(STORES.relations, relation));
+        chunkRelationCount += 1;
+        chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
+        chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
+      }
+    }
+    return {
+      documentId: validChunks[0]?.documentId || payload?.documentId || "",
+      collectionId: validChunks[0]?.metadata?.collectionId || payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "",
+      entities,
+      relations,
+      entityCount: entities.length,
+      relationCount: relations.length,
+    };
+  };
+
+  const buildKnowledgeGraphSnapshot = async ({ workspaceId, payload = {}, config = {} } = {}) => {
+    const [entities, relations] = await Promise.all([
+      listStore(STORES.entities),
+      listStore(STORES.relations),
+    ]);
+    const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
+    const documentId = String(payload?.documentId || config.documentId || "").trim();
+    const scopedEntities = byWorkspace(entities, workspaceId)
+      .filter((entity) => !documentId || entity.documentId === documentId)
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId);
+    const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+    const scopedRelations = byWorkspace(relations, workspaceId)
+      .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId);
+    const topEntities = scopedEntities
+      .map((entity) => ({
+        id: entity.id,
+        label: entity.label,
+        entityType: entity.entityType,
+        degree: scopedRelations.filter((relation) =>
+          relation.sourceEntityId === entity.id || relation.targetEntityId === entity.id
+        ).length,
+        confidence: entity.confidence,
+      }))
+      .sort((a, b) => b.degree - a.degree || String(a.label).localeCompare(String(b.label)))
+      .slice(0, Math.max(1, Math.min(50, Number(config.topEntities || 12))));
+    const snapshot = {
+      id: uniqueId("kgraph"),
+      workspaceId,
+      collectionId,
+      documentId,
+      entityCount: scopedEntities.length,
+      relationCount: scopedRelations.length,
+      topEntities,
+      relations: scopedRelations.slice(0, Math.max(1, Math.min(240, Number(config.maxRelations || 120)))),
+      status: "ready",
+      createdAt: nowIso(),
+    };
+    await putRecord(STORES.metrics, {
+      id: snapshot.id,
+      workspaceId,
+      metric: "knowledge.graph.snapshot",
+      value: {
+        entityCount: snapshot.entityCount,
+        relationCount: snapshot.relationCount,
+        collectionId,
+        documentId,
+      },
+      createdAt: snapshot.createdAt,
+    });
+    return snapshot;
   };
 
   const search = async ({ workspaceId, query = "", config = {}, allowedEmbeddingNodeIds = [] } = {}) => {
@@ -779,6 +1244,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
         } else if (subtype === "embedding-generator" || subtype === "vector-memory") {
           result = await createEmbeddings({ workspaceId: this.workspaceId, node, payload, event, config });
           outputChannel = nodeOutput(node, config, "knowledge.embedding.created");
+        } else if (subtype === "entity-extractor") {
+          result = await createEntitiesAndRelations({ workspaceId: this.workspaceId, node, payload, event, config });
+          if (result.relations?.length) {
+            await this.bus.emit("knowledge.relation.created", {
+              documentId: result.documentId,
+              relations: result.relations,
+              relationCount: result.relationCount,
+            }, {
+              workspaceId: this.workspaceId,
+              eventType: "knowledge_relation_created",
+              sourceNodeId: node.id,
+              meta: {
+                knowledgeRuntime: node.id,
+                inputEventId: event?.id || "",
+                inputChannel: event?.channel || "",
+                runId,
+                subtype,
+              },
+            });
+          }
+          outputChannel = nodeOutput(node, config, "knowledge.entity.created");
+        } else if (subtype === "knowledge-graph") {
+          result = await buildKnowledgeGraphSnapshot({ workspaceId: this.workspaceId, payload, config });
+          outputChannel = nodeOutput(node, config, "knowledge.graph.updated");
         } else if (subtype === "rag-search") {
           const query = payload?.query || payload?.text || payload?.question || config.query || "";
           if (!String(query || "").trim()) {

@@ -9,7 +9,7 @@ Last updated: 2026-06-23.
 
 ### TASK-027: Knowledge Runtime
 
-Status: Step 4 local Knowledge/RAG baseline implemented; Step 5 AI Agent RAG consumption next.
+Status: Step 8 Document Store upload UX implemented; browser verification pending.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -19,9 +19,10 @@ Current sub-steps:
 - Step 2 Document Store + Chunk Processor: base runtime handlers implemented; topbar Knowledge Test sample added and user-verified.
 - Step 3 Embedding Generator + cosine similarity: local deterministic vectors implemented and provider-backed embeddings wired through existing AI provider profiles with local fallback.
 - Step 4 RAG Search node: base local search implemented and user-verified with clean single-result sample context.
-- Step 5 AI Agent consumes RAG context: next after runtime verification.
-- Step 6 Knowledge Graph base: palette/store placeholders present, extraction/graph execution pending.
-- Step 7 Knowledge inspector and analytics: pending.
+- Step 5 AI Agent consumes RAG context: first-class `knowledge.rag.context` prompt/job/result metadata implemented; Flow Map AI RAG Debug inspector panel added; browser verification pending.
+- Step 6 Knowledge Graph base: local Entity Extractor persists entities/relations, emits entity/relation channels, and Knowledge Graph emits local snapshots; inspector/analytics pending.
+- Step 7 Knowledge inspector and analytics: Flow Map `Knowledge Graph Debug` inspector panel and `View Graph` dialog added for local entity/relation/snapshot inspection; broader analytics pending.
+- Step 8 Document upload/import UX: Document Store/Text Knowledge/Memory nodes expose `Upload Document`, upload progress, document-count `Documents` dialog and `Knowledge Document Debug`; `.txt`, `.md`, `.json` and `.csv` uploads emit local EventBus document payloads, surface uploaded document/chunk metadata in inspector, support confirmed document/delete-derived-record cleanup, and preserve upload/replay scope through graph snapshots; browser verification pending.
 
 Main files:
 

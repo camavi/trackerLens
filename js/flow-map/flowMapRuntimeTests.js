@@ -31,8 +31,13 @@ const isManualInputSource = (node = {}) => {
   return nodeCategory(node) === "sources" && ["task", "manual-json", "text-input", "manual-input", "image-source", "audio-source", "file-source", "files-source"].includes(subtype);
 };
 
+const isKnowledgeDocumentStarterNode = (node = {}) => {
+  const subtype = String(nodeSubtype(node) || "").toLowerCase();
+  return nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype);
+};
+
 const isLiveTestableStarterNode = (node = {}) =>
-  isDirectAiTestNode(node) || isManualInputSource(node) || isCustomRuntimeNode(node) || (isTestableStarterNode(node) && Boolean(nodeEndpoint(node)));
+  isDirectAiTestNode(node) || isManualInputSource(node) || isKnowledgeDocumentStarterNode(node) || isCustomRuntimeNode(node) || (isTestableStarterNode(node) && Boolean(nodeEndpoint(node)));
 
 const runtimeRuleGraph = () =>
   graphModelApi().build({
@@ -393,6 +398,116 @@ const executeManualInputNode = async ({ node, workspaceId, runId, graph } = {}) 
     context: { action: "flow-map-manual-input", runId, channels: outputChannels, payloadPreview: compactPayloadPreview(payload, 220) },
   });
   return { channels: outputChannels, payload };
+};
+
+const knowledgeDocumentInputChannel = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  return config.inputChannel || config.input || node.inputs?.[0] || nodeChannels(node)[0] || "document";
+};
+
+const knowledgeDocumentOutputChannel = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  return config.outputChannel || config.output || node.outputs?.[0] || "knowledge.document.created";
+};
+
+const knowledgeDocumentPayloadFromConfig = (node = {}, runId = "") => {
+  const config = nodeRuntimeConfig(node);
+  const parsed = parseManualJsonPayload(config.json || config.testPayload || config.payload || config.manualJson) || {};
+  const documentText = String(
+    parsed.document || parsed.text || parsed.content || parsed.body ||
+    config.document || config.text || config.content || config.body || ""
+  ).trim();
+  return {
+    ...parsed,
+    title: parsed.title || config.title || node.label || "Knowledge Document",
+    document: documentText,
+    text: documentText,
+    mimeType: parsed.mimeType || config.mimeType || "text/plain",
+    sourceType: parsed.sourceType || config.sourceType || "live-test",
+    collectionId: parsed.collectionId || config.collectionId || "",
+    metadata: {
+      ...(parsed.metadata && typeof parsed.metadata === "object" ? parsed.metadata : {}),
+      ...(config.metadata && typeof config.metadata === "object" ? config.metadata : {}),
+      nodeId: node.id || "",
+      liveTestRunId: runId,
+    },
+    __test: true,
+    runId,
+    emittedAt: new Date().toISOString(),
+  };
+};
+
+const latestKnowledgeDocumentForNode = async ({ node = {}, workspaceId = "" } = {}) => {
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  const storeName = knowledge?.STORES?.documents || "tl_knowledge_documents";
+  const records = knowledge?.listStore
+    ? await knowledge.listStore(storeName).catch(() => [])
+    : await readKnowledgeRuntimeRecords(storeName);
+  return (records || [])
+    .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
+    .filter((document) => document.metadata?.nodeId === node.id || document.sourceId === `upload_${node.id}` || document.sourceId === `live_${node.id}` || document.sourceId === node.id)
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+};
+
+const executeKnowledgeDocumentNode = async ({ node, workspaceId, runId } = {}) => {
+  const latest = await latestKnowledgeDocumentForNode({ node, workspaceId });
+  const hasStoredDocument = Boolean(latest?.id && latest?.text);
+  const payload = hasStoredDocument
+    ? {
+      document: latest,
+      documentId: latest.id,
+      title: latest.title || node.label || "Knowledge Document",
+      text: latest.text,
+      mimeType: latest.mimeType || latest.metadata?.mimeType || "text/plain",
+      sourceType: "live-test-replay",
+      collectionId: latest.metadata?.collectionId || nodeRuntimeConfig(node).collectionId || "",
+      metadata: {
+        ...(latest.metadata && typeof latest.metadata === "object" ? latest.metadata : {}),
+        replayedFromDocumentId: latest.id || "",
+        liveTestRunId: runId,
+      },
+      __test: true,
+      runId,
+      emittedAt: new Date().toISOString(),
+    }
+    : knowledgeDocumentPayloadFromConfig(node, runId);
+  if (!String(payload.documentId || payload.text || payload.document || "").trim()) {
+    throw new Error(`${node.label || node.id} non ha un documento da rilanciare. Usa Upload Document o inserisci document/text nel Config.`);
+  }
+  const channel = hasStoredDocument ? knowledgeDocumentOutputChannel(node) : knowledgeDocumentInputChannel(node);
+  const eventType = hasStoredDocument ? "flow_live_knowledge_document_replay" : "flow_live_knowledge_document";
+  const sourceNodeId = hasStoredDocument ? node.id : `live_${node.id}`;
+  const bus = workspaceEventBus(workspaceId);
+  const event = bus?.emit
+    ? await bus.emit(channel, payload, {
+      workspaceId,
+      flowId: flowIdForWorkspace(workspaceId),
+      eventType,
+      sourceNodeId,
+      targetNodeId: hasStoredDocument ? "" : node.id,
+      status: "ok",
+      latencyMs: 1,
+      meta: { live: true, runId, origin: "live-test", rootNodeId: node.id },
+    })
+    : await mergeTestEvent({
+      workspaceId,
+      channel,
+      eventType,
+      sourceNodeId,
+      targetNodeId: hasStoredDocument ? "" : node.id,
+      payload,
+      status: "ok",
+      latencyMs: 1,
+      meta: { live: true, runId, origin: "live-test", rootNodeId: node.id },
+    });
+  mergeRuntimeEvent(event);
+  await recordFlowAction({
+    workspaceId,
+    nodeId: node.id,
+    message: `Knowledge document live test: ${node.label || node.id}`,
+    context: { action: "flow-map-knowledge-document-live-test", runId, channel, replayedDocumentId: latest?.id || "", payloadPreview: compactPayloadPreview(payload, 220) },
+  });
+  return { channels: [channel], payload };
 };
 
 const executeCustomFormNode = async ({ node, workspaceId, runId, graph } = {}) => {
@@ -1209,6 +1324,9 @@ const executeLiveWebSocketNode = ({ node, workspaceId, runId, graph, signal = nu
 const executeLiveNode = async ({ node, workspaceId, runId, graph, signal = null } = {}) => {
   if (isManualInputSource(node)) {
     return executeManualInputNode({ node, workspaceId, runId, graph, signal });
+  }
+  if (isKnowledgeDocumentStarterNode(node)) {
+    return executeKnowledgeDocumentNode({ node, workspaceId, runId, graph, signal });
   }
   if (isCustomFormSourceNode(node)) {
     return executeCustomFormNode({ node, workspaceId, runId, graph, signal });

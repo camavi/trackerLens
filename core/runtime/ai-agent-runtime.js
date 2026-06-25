@@ -140,6 +140,50 @@ window.TrackerLensAiAgentRuntime = (() => {
     return text.length > max ? `${text.slice(0, max)}\n...` : text;
   };
 
+  const isRagContextEvent = ({ payload = {}, event = {} } = {}) =>
+    event?.channel === "knowledge.rag.context" ||
+    (event?.eventType === "knowledge_emit" && event?.meta?.subtype === "rag-search" && payload?.context !== undefined) ||
+    (payload?.queryId && Array.isArray(payload?.results) && payload?.context !== undefined);
+
+  const normalizeRagContext = ({ payload = {}, event = {} } = {}) => {
+    if (!isRagContextEvent({ payload, event })) return null;
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    const sources = results.map((result, index) => ({
+      index: index + 1,
+      chunkId: result.chunkId || "",
+      documentId: result.documentId || "",
+      score: Number.isFinite(Number(result.score)) ? Number(result.score) : null,
+      text: String(result.text || "").slice(0, 1200),
+      metadata: result.metadata || {},
+    }));
+    return {
+      query: String(payload.query || payload.question || "").trim(),
+      queryId: payload.queryId || payload.id || "",
+      context: String(payload.context || "").trim(),
+      resultCount: Number(payload.resultCount ?? results.length) || 0,
+      sources,
+      scope: payload.scope || {},
+      inputChannel: event?.channel || "",
+      inputEventId: event?.id || "",
+    };
+  };
+
+  const renderRagPromptBlock = (ragContext = null) => {
+    if (!ragContext) return "";
+    const sourceLines = (ragContext.sources || []).map((source) => {
+      const score = Number.isFinite(source.score) ? ` score=${source.score.toFixed(3)}` : "";
+      const document = source.documentId ? ` document=${source.documentId}` : "";
+      return `[${source.index}]${score}${document}\n${source.text}`;
+    }).join("\n\n");
+    return [
+      "Knowledge RAG context:",
+      ragContext.query ? `Query: ${ragContext.query}` : "",
+      ragContext.context ? `Context:\n${ragContext.context}` : "",
+      sourceLines ? `Sources:\n${sourceLines}` : "",
+      "Use the Knowledge RAG context as the primary factual source. If the context is insufficient, say what is missing instead of inventing facts.",
+    ].filter(Boolean).join("\n\n");
+  };
+
   const renderPromptTemplate = (template = "", context = {}) =>
     String(template || "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token) => {
       const key = String(token || "").trim();
@@ -153,10 +197,14 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const buildPrompt = ({ node, payload, event, memory = "", config = nodeConfig(node) }) => {
     const subtype = nodeSubtype(node);
+    const ragContext = config.ragContext || normalizeRagContext({ payload, event });
+    const ragPromptBlock = renderRagPromptBlock(ragContext);
     const systemPrompt = String(config.systemPrompt || "").trim() ||
       `You are a Trackers Lens ${subtype || "AI"} runtime node.`;
     const template = String(config.promptTemplate || config.prompt || config.instruction || "").trim() ||
-      "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}";
+      (ragContext
+        ? "Answer the Knowledge query using the provided RAG context.\n\nQuery: {{ragContext.query}}\n\nContext:\n{{ragContext.context}}\n\nPayload: {{payload}}\nMemory: {{memory}}"
+        : "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}");
     const outputInstructions = String(config.outputInstructions || "").trim() ||
       "Return structured runtime output ready for channel emission.";
     const context = {
@@ -172,12 +220,14 @@ window.TrackerLensAiAgentRuntime = (() => {
         role: config.agentType || subtype || "agent",
       },
       inputDataContext: config.inputDataContext || null,
+      ragContext,
     };
     return [
       systemPrompt,
       `\nNode: ${node.label || node.id}`,
       `Role: ${config.agentType || subtype || "agent"}`,
       config.inputDataContext ? `Input data context:\n${compactJson(config.inputDataContext)}` : "",
+      ragPromptBlock ? `\n${ragPromptBlock}` : "",
       `\nTask:\n${renderPromptTemplate(template, context)}`,
       `\nOutput instructions:\n${outputInstructions}`,
     ].filter(Boolean).join("\n");
@@ -219,7 +269,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     return byChannel;
   };
 
-  const fallbackResponse = ({ node, payload, event, reason = "" }) => {
+  const fallbackResponse = ({ node, payload, event, reason = "", ragContext = null }) => {
     const subtype = nodeSubtype(node);
     const keys = payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload).slice(0, 12) : [];
     return {
@@ -231,6 +281,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       confidence: reason ? 0.42 : 0.58,
       inputChannel: event.channel || "",
       reason,
+      ragContext,
       payloadPreview: keys.length ? Object.fromEntries(keys.slice(0, 6).map((key) => [key, payload[key]])) : clonePayload(payload),
     };
   };
@@ -543,7 +594,12 @@ window.TrackerLensAiAgentRuntime = (() => {
     async performExecution({ node, payload, event }) {
       const config = await resolveNodeConfig(node);
       const inputDataContext = await collectInputDataContext({ node, event, workspaceId: this.workspaceId, config, runtime: this.runtime });
-      const promptConfig = inputDataContext ? { ...config, inputDataContext } : config;
+      const ragContext = normalizeRagContext({ payload, event });
+      const promptConfig = {
+        ...config,
+        ...(inputDataContext ? { inputDataContext } : {}),
+        ...(ragContext ? { ragContext } : {}),
+      };
       const provider = await pickProvider(config);
       const model = String(config.model || provider?.model || "local-model");
       const memoryDisabled = ["off", "none", "disabled"].includes(String(config.memoryMode || "").toLowerCase());
@@ -566,6 +622,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         prompt,
         memoryContext: memory,
         inputDataContext,
+        ragContext,
         status: "running",
         provider: provider?.name || provider?.provider || "fallback",
         model,
@@ -597,6 +654,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           prompt,
           memoryContext: memory,
           inputDataContext,
+          ragContext,
         };
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
@@ -614,13 +672,14 @@ window.TrackerLensAiAgentRuntime = (() => {
           prompt,
           memoryContext: memory,
           inputDataContext,
+          ragContext,
           result,
           updatedAt: new Date().toISOString(),
         });
         return result;
       } catch (error) {
         const latencyMs = Math.round(performance.now() - startedAt);
-        const result = fallbackResponse({ node, payload, event, reason: error?.message || String(error) });
+        const result = fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext });
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -636,6 +695,8 @@ window.TrackerLensAiAgentRuntime = (() => {
           cost: estimateCost({ usage: {}, provider, config }),
           prompt,
           memoryContext: memory,
+          inputDataContext,
+          ragContext,
           result,
           error: error?.message || String(error),
           updatedAt: new Date().toISOString(),
@@ -692,6 +753,8 @@ window.TrackerLensAiAgentRuntime = (() => {
             runId,
             provider: result.provider || "",
             model: result.model || "",
+            ragQueryId: result.ragContext?.queryId || "",
+            ragResultCount: result.ragContext?.resultCount ?? null,
           },
         });
         await this.log({

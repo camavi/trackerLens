@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.0";
+const RUNTIME_WORKER_VERSION = "0.1.45-kg-graph-dialog-size-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -29,7 +29,7 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js",
+    "knowledge-runtime.js?v=kg-20260625-graph-dialog-size-1",
     "ai-agent-runtime.js",
     "orchestrator-agent-runtime.js"
   );

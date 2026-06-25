@@ -3,19 +3,22 @@
 Purpose: minimal entrypoint for AI agents working on Trackers Lens.
 Read when: always, before touching code.
 Do not read when: never; this file is intentionally short.
-Last updated: 2026-06-11.
+Last updated: 2026-06-23.
 
 ## Read Order
 
 1. Read this file.
 2. Read `docs/ai/current-focus.md`.
-3. Read only the module file that matches the work area.
-4. Read `docs/ai/task-registry.md` only when changing task status.
-5. Read archive files only when history is explicitly needed.
+3. For substantial tasks, read `docs/ai/project-state.md`.
+4. Read `docs/ai/file-map.md` when deciding which implementation files to inspect.
+5. Read only the module file that matches the work area.
+6. Read `docs/ai/task-registry.md` only when changing task status.
+7. Read archive files only when history is explicitly needed.
 
 ## Module Map
 
 - Project state: `docs/ai/project-state.md`
+- Documentation router: `docs/ai/index.md`
 - Current active work: `docs/ai/current-focus.md`
 - Architecture rules: `docs/ai/architecture.md`
 - File ownership map: `docs/ai/file-map.md`
@@ -29,7 +32,10 @@ Last updated: 2026-06-11.
 - Runtime graph: `docs/ai/flow-map/runtime-graph.md`
 - Runtime stores/channels/dependencies: `docs/ai/runtime/`
 - Runtime contract: `docs/ai/runtime/contract.md`
+- AI memory runtime: `docs/ai/runtime/ai-memory.md`
+- Knowledge runtime: `core/runtime/knowledge-runtime.js`, plus `docs/ai/current-focus.md` and `docs/ai/task-registry.md`
 - API/backend integration: `docs/ai/api-backend.md`
+- Archive summaries: `docs/ai/archive/`
 
 ## Non-Negotiable Rules
 

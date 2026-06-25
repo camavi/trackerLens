@@ -154,7 +154,7 @@ Verification notes:
 - `node --check js/profileView.js` passes.
 - Local authenticated dashboard HTTP flow verified against `127.0.0.1:8000`: register `201`, summary `200`, activity `200`, system-status `200`, logout `204`.
 
-Knowledge Runtime Step 1 base is in progress:
+Knowledge Runtime document upload/import UX is in progress:
 
 - Knowledge requirements audited after API/backend Step 4 was verified by the user;
 - existing AI memory, runtime storage and provider registry were audited before adding new stores;
@@ -180,18 +180,38 @@ Knowledge Runtime Step 1 base is in progress:
 - Knowledge Test now connects RAG Context -> AI Answer node -> AI Answer Preview, with a prompt that answers from `payload.query` and `payload.context`.
 - Knowledge sample AI Answer now disables automatic input history and memory context (`inputDataMode=off`, `memoryMode=none`) so unrelated workspace events such as old BTC tasks are not injected into the RAG answer prompt.
 - Test run completion now forces canvas/topbar refresh and Knowledge runtime propagates `runId` to downstream events, preventing node play buttons from staying disabled after Knowledge/AI child execution completes.
+- AI Agent runtime now treats `knowledge.rag.context` as first-class RAG input: it normalizes query/context/sources, injects a Knowledge RAG prompt block, exposes `ragContext` to templates and persists RAG metadata in AI jobs/results/events.
+- Flow Map node inspector now shows an `AI RAG Debug` panel for AI Agent nodes, reading the latest `tl_ai_jobs` record and surfacing provider/model/fallback status, RAG query metadata, copied context and top RAG sources with scores.
+- Knowledge Graph Step 6 base is implemented locally: `Entity Extractor` now extracts deterministic entities from chunks/manual text, persists `tl_knowledge_entities`, creates `co_occurs` relations in `tl_knowledge_relations`, emits `knowledge.entity.created` and `knowledge.relation.created`, and `Knowledge Graph` emits a `knowledge.graph.updated` snapshot with entity/relation counts and top entities.
+- First manual Knowledge Graph test produced a valid snapshot; follow-up fixes now propagate `collectionId` from Entity Extractor to graph snapshots, classify single proper nouns such as `Adam` as `proper-noun`, suppress short duplicate entities such as `LM` when `LM Studio` exists, and generate clearer relation ids from normalized labels.
+- Knowledge Graph inspector base is implemented: Knowledge nodes now show a `Knowledge Graph Debug` panel that reads local entity/relation/metric stores, shows counts, latest snapshot scope, top entities, recent relations, refresh and copy actions.
+- Knowledge Graph visualizer dialog base is implemented: Knowledge Graph nodes expose `View Graph` from the node body and inspector; the dialog includes search, type filter, layout mode, node limit, grouped legend/index, selection details and a local SVG graph view colored by entity type and sized by degree.
+- Document Store upload UX is implemented: Document Store/Text Knowledge/Memory nodes expose `Upload Document` and document-count `Documents` actions from the node body plus `Knowledge Document Debug` in inspector; uploads accept `.txt`, `.md`, `.json` and `.csv`, emit a runtime EventBus document payload, and the documents dialog lists uploaded files with search, chunk counts, preview, copy and refresh actions.
+- Knowledge document dialog now supports CMSwift search/select controls and confirmed document deletion, removing the selected document plus derived chunks, embeddings, entities, relations, sources and graph metrics.
+- Knowledge upload now uses a DOM-attached file input and FileReader progress state, with visible selected/reading/processing/complete/error progress bars on the node, inspector and documents dialog; the dialog refreshes its document list after a successful upload.
+- Knowledge upload now persists the selected file directly through `TrackerLensKnowledgeRuntime.createDocument` before emitting `knowledge.document.created` downstream, so upload no longer depends on the Document Store event listener being active.
+- Knowledge document panels now show a compact preview plus text length metadata; longer documents expose a CMSwift `View Full Document` dialog for the complete stored text, and empty upload-progress placeholders no longer render as `null`.
+- Uploaded/replayed documents now keep their payload scope ahead of stale node config: document title, source type, mime type, collection id and document id from uploads propagate through chunks, embeddings, entities and graph snapshots so old sample scopes such as Adam/`knowledge_test` do not override the current file.
+- Entity extraction now filters common function words across Spanish/Italian/English/French and normalizes accents in generated ids, reducing noisy graph entities such as `Con`, `Para`, `Sin`, `Los`, `Muchas`, `Ahora` and preserving cleaner ids like `busqueda`.
+- Entity Extractor now supports `extractionMode` (`strict`, `balanced`, `wide`) and custom `stopWords`; default `strict` keeps seeds, URLs/emails/symbols/technology, multi-word entities and repeated single proper nouns, reducing narrative one-off words in user-facing graphs.
+- Entity Extractor now ignores direct `knowledge.document.created` input by default and processes chunk payloads only; `allowDocumentInput` can be enabled explicitly for direct document extraction, preventing duplicate entity/relation runs when both document and chunk events are connected.
+- Entity phrase cleanup now strips narrative stopword prefixes/suffixes before candidate persistence, so phrases like `Cuando Juliette`, `Pero Juliette`, `Aunque Juliette`, `Era Liber` collapse toward the meaningful entity token instead of becoming separate graph nodes.
+- Flow Map and runtime worker script URLs now include a Knowledge entity-cleanup cache-buster so browser/worker caches do not keep running an older `knowledge-runtime.js` after extraction changes.
+- Document Store Play now replays an existing stored document by emitting `knowledge.document.created` downstream instead of sending the text back into the Document Store input, preventing infinite duplicate document creation on every Play.
 
 ## Next Logical Step
 
-Knowledge Runtime Step 5: connect RAG context into AI Agent execution and expose provider/fallback metadata in inspector/debug panels.
+Knowledge Runtime browser verification for Document Upload, Knowledge Document Debug, Knowledge Graph Debug and View Graph dialog.
 
 Target behavior:
 
 - `Knowledge Test` creates the full sample graph without manual wiring;
 - manual/channel text becomes a workspace-scoped Knowledge document;
+- uploaded text/markdown/json/csv files become workspace-scoped Knowledge documents;
 - chunks and local embeddings persist in IndexedDB;
 - provider-backed embeddings persist when an AI provider profile is configured, with local fallback metadata when unavailable;
 - RAG Search emits `knowledge.rag.context` for Preview and AI Agents;
+- Entity Extractor persists entities/relations and Knowledge Graph emits a local graph snapshot;
 - deleting nodes must not delete stored knowledge without explicit confirmation.
 
 ## Required Updates When Work Changes

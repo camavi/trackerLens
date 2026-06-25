@@ -36,6 +36,7 @@ Knowledge channels:
 - `knowledge.search.results`
 - `knowledge.entity.created`
 - `knowledge.relation.created`
+- `knowledge.graph.updated`
 - `knowledge.rag.context`
 
 ## Main Modules
