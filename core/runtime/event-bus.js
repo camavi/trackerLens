@@ -175,6 +175,7 @@ window.TrackerLensEventBus = (() => {
     receiveBroadcast(message = {}) {
       if (message.type !== "tl-runtime-event" || message.originId === this.instanceId || !message.event) return;
       const event = message.event;
+      if ((event.workspaceId || "global") !== (this.workspaceId || "global")) return;
       this.remember(event);
       this.deliver(event);
     }

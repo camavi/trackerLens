@@ -1494,6 +1494,43 @@ const waitForKnowledgeEmbeddingRecord = async ({ workspaceId = "", title = "Know
   return null;
 };
 
+const waitForKnowledgeAiRagJob = async ({ workspaceId = "", runId = "", agentId = "", query = "", timeoutMs = 8000 } = {}) => {
+  const started = Date.now();
+  const expectedQuery = String(query || "").trim().toLowerCase();
+  while (Date.now() - started < timeoutMs) {
+    const data = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => ({ jobs: [] }));
+    const job = (data?.jobs || [])
+      .filter((item) =>
+        (!workspaceId || item.workspaceId === workspaceId) &&
+        (!runId || item.runId === runId || item.result?.runId === runId) &&
+        (!agentId || item.agentId === agentId)
+      )
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0];
+    const ragContext = job?.ragContext || job?.result?.ragContext || null;
+    const hasMatchingQuery = !expectedQuery || String(ragContext?.query || "").trim().toLowerCase() === expectedQuery;
+    if (job && ragContext?.context && hasMatchingQuery) return { job, ragContext };
+    await wait(180);
+  }
+  return { job: null, ragContext: null };
+};
+
+const waitForKnowledgeGraphSnapshot = async ({ workspaceId = "", collectionId = "", documentId = "", timeoutMs = 6000 } = {}) => {
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  const stores = knowledge?.STORES || {};
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const metrics = await knowledge?.listStore?.(stores.metrics || "tl_knowledge_metrics").catch(() => []);
+    const snapshot = (metrics || [])
+      .filter((item) => (!workspaceId || item.workspaceId === workspaceId) && item.metric === "knowledge.graph.snapshot")
+      .filter((item) => !collectionId || item.value?.collectionId === collectionId)
+      .filter((item) => !documentId || item.value?.documentId === documentId)
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))[0];
+    if (snapshot?.value?.entityCount > 0 && snapshot?.value?.relationCount > 0) return snapshot;
+    await wait(180);
+  }
+  return null;
+};
+
 const runtimeKindForNode = (node = {}) => {
   if (isOrchestratorAgentNode(node)) return "orchestrator";
   if (node.type === "aiAgent") return "ai";
@@ -2256,9 +2293,28 @@ const runMappingStorageTest = async () => {
 };
 
 const runKnowledgeSampleTest = async () => {
-  if (state.testRun.running) return;
+  if (state.testRun.running) {
+    const ageMs = Date.now() - Date.parse(state.testRun.startedAt || "");
+    if (Number.isFinite(ageMs) && ageMs > AI_DIRECT_TEST_TIMEOUT_MS) {
+      finishFlowMapTestRun({ runId: state.testRun.runId, summary: "Previous Knowledge sample test released after timeout" });
+    } else {
+      state.error = "Un test Flow Map è già in corso. Premi Stop o attendi la fine prima di lanciare Knowledge Test.";
+      mount({ preserveScroll: true });
+      return;
+    }
+  }
   if (!window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode || !window.TrackerLensKnowledgeRuntime?.get) {
     state.error = "Knowledge sample non disponibile: Runtime Graph Store o Knowledge Runtime non pronto.";
+    await recordFlowAction({
+      workspaceId: state.filters.workspaceId || "workspace_global",
+      level: "error",
+      message: state.error,
+      context: {
+        action: "flow-map-knowledge-sample-not-ready",
+        hasRuntimeGraphStore: Boolean(window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode),
+        hasKnowledgeRuntime: Boolean(window.TrackerLensKnowledgeRuntime?.get),
+      },
+    });
     mount({ preserveScroll: true });
     return;
   }
@@ -2714,6 +2770,7 @@ const runKnowledgeSampleTest = async () => {
     verification: null,
   };
   state.error = "";
+  startTestRunTimeout(runId, AI_DIRECT_TEST_TIMEOUT_MS);
   setFiltersState({ ...state.filters, runId });
   syncFilterQuery();
   mount({ preserveScroll: true });
@@ -2800,17 +2857,20 @@ const runKnowledgeSampleTest = async () => {
     });
     if (queryEvent) mergeRuntimeEvent(queryEvent);
     const queryRecord = await waitForKnowledgeQueryRecord({ workspaceId, query: queryText, timeoutMs: 5000 });
-    const ok = Boolean(queryRecord?.context && queryRecord.resultCount > 0);
+    const aiRag = await waitForKnowledgeAiRagJob({ workspaceId, runId, agentId: aiDebugger.id, query: queryText, timeoutMs: 10000 });
+    const ragOk = Boolean(queryRecord?.context && queryRecord.resultCount > 0);
+    const aiRagOk = Boolean(aiRag?.job && aiRag?.ragContext?.context);
+    const ok = ragOk && aiRagOk;
     finishFlowMapTestRun({
       runId,
-      summary: ok ? "Knowledge sample completed: RAG context generated" : "Knowledge sample created with warnings",
-      error: ok ? "" : "Knowledge sample non ha generato risultati RAG",
+      summary: ok ? "Knowledge sample completed: RAG context generated and consumed by AI Agent" : "Knowledge sample created with warnings",
+      error: ok ? "" : (ragOk ? "AI Agent non ha consumato il contesto RAG" : "Knowledge sample non ha generato risultati RAG"),
     });
     await recordFlowAction({
       workspaceId,
       nodeId: rag.id,
       level: ok ? "info" : "warning",
-      message: ok ? "Knowledge sample test completed" : "Knowledge sample test completed without RAG results",
+      message: ok ? "Knowledge sample test completed with AI RAG verification" : "Knowledge sample test completed with verification warnings",
       context: {
         action: "flow-map-knowledge-sample-test",
         runId,
@@ -2819,12 +2879,17 @@ const runKnowledgeSampleTest = async () => {
         embeddingDimensions: embeddingRecord?.dimensions || 0,
         resultCount: queryRecord?.resultCount || 0,
         contextPreview: String(queryRecord?.context || "").slice(0, 500),
+        aiAgentId: aiDebugger.id,
+        aiJobId: aiRag?.job?.id || "",
+        aiJobStatus: aiRag?.job?.status || "",
+        aiRagContext: Boolean(aiRag?.ragContext?.context),
         cleanup: knowledgeCleanup,
       },
     });
     await loadRuntime({ force: true, silent: true });
-    setFocusState({ mode: "nodes", nodeId: rag.id, nodeType: "knowledge", channel: "knowledge.rag.context", connectionId: "" });
-    centerViewportOnNode?.(nodeById(rag.id) || rag, (state.runtime.nodes || []).findIndex((node) => node.id === rag.id), { select: true });
+    const focusNode = aiRagOk ? aiDebugger : rag;
+    setFocusState({ mode: "nodes", nodeId: focusNode.id, nodeType: focusNode.type, channel: aiRagOk ? "knowledge.rag.context" : "knowledge.rag.context", connectionId: "" });
+    centerViewportOnNode?.(nodeById(focusNode.id) || focusNode, (state.runtime.nodes || []).findIndex((node) => node.id === focusNode.id), { select: true });
   } catch (error) {
     console.error("Flow Map knowledge sample test error:", error);
     state.error = error?.message || "Errore Knowledge sample Flow Map";
@@ -2834,6 +2899,462 @@ const runKnowledgeSampleTest = async () => {
       level: "error",
       message: state.error,
       context: { action: "flow-map-knowledge-sample-test-error", runId, error: error.message || String(error) },
+    });
+    mount({ preserveScroll: true });
+  }
+};
+
+const runKnowledgeGraphSampleTest = async () => {
+  if (state.testRun.running) {
+    const ageMs = Date.now() - Date.parse(state.testRun.startedAt || "");
+    if (Number.isFinite(ageMs) && ageMs > TEST_RUN_TIMEOUT_MS) {
+      finishFlowMapTestRun({ runId: state.testRun.runId, summary: "Previous Knowledge Graph sample test released after timeout" });
+    } else {
+      state.error = "Un test Flow Map è già in corso. Premi Stop o attendi la fine prima di lanciare Knowledge Graph Test.";
+      mount({ preserveScroll: true });
+      return;
+    }
+  }
+  if (!window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode || !window.TrackerLensKnowledgeRuntime?.get) {
+    state.error = "Knowledge Graph sample non disponibile: Runtime Graph Store o Knowledge Runtime non pronto.";
+    await recordFlowAction({
+      workspaceId: state.filters.workspaceId || "workspace_global",
+      level: "error",
+      message: state.error,
+      context: {
+        action: "flow-map-knowledge-graph-sample-not-ready",
+        hasRuntimeGraphStore: Boolean(window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode),
+        hasKnowledgeRuntime: Boolean(window.TrackerLensKnowledgeRuntime?.get),
+      },
+    });
+    mount({ preserveScroll: true });
+    return;
+  }
+  const workspaceId = state.filters.workspaceId || "workspace_global";
+  const runId = testRunId().replace("flow_test", "flow_knowledge_graph_sample");
+  const now = Date.now();
+  const id = (name) => `knowledge_graph_sample_${name}_${now}`;
+  const collectionId = "knowledge_graph_sample_current";
+  const documentId = `knowledge_graph_sample_document_${safeRuntimeId(workspaceId)}`;
+  const documentPayload = {
+    documentId,
+    collectionId,
+    title: "Knowledge Graph Sample Story",
+    text: [
+      "Juliette and Liber entered the dry forest to find a magic flower and a spring of water.",
+      "A troll attacked Juliette, and Liber used a wooden stick to confront the troll.",
+      "Juliette helped Liber prepare a red tea from the flower and water.",
+      "Liber drank the red tea and shouted: I WANT TO SPEAK.",
+      "Liber and Juliette returned to the castle with hope, courage and friendship.",
+    ].join(" "),
+    metadata: {
+      source: "Flow Map Knowledge Graph Test",
+      category: "sample",
+      collectionId,
+    },
+  };
+  const layout = (() => {
+    const left = 5;
+    const step = 25;
+    const top = 12;
+    return {
+      docSource: { x: left, y: top },
+      documentStore: { x: left + step, y: top },
+      chunker: { x: left + step * 2, y: top },
+      extractor: { x: left + step * 3, y: top },
+      graph: { x: left + step * 4, y: top },
+      preview: { x: left + step * 5, y: top },
+    };
+  })();
+  const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge Graph sample" }) => ({
+    id: id(name),
+    workspaceId,
+    type,
+    label,
+    sourceRef: id(name),
+    assetId: id(name),
+    inputs,
+    outputs,
+    channels: uniqueStrings([...inputs, ...outputs]),
+    status: "active",
+    flowPosition: { x, y },
+    metadata: {
+      configured: true,
+      draft: false,
+      paletteLabel,
+      paletteAction,
+      tone,
+      icon: iconName,
+      runtimeType: type,
+      subtype,
+      category,
+      settingsSchema,
+      config,
+    },
+  });
+  const docSource = nodeBase({
+    name: "document_source",
+    type: "source",
+    label: "Knowledge Graph Doc Source",
+    outputs: ["document"],
+    ...layout.docSource,
+    tone: "green",
+    icon: "data_object",
+    subtype: "manual-json",
+    category: "sources",
+    settingsSchema: { json: "object" },
+    paletteLabel: "Manual JSON",
+    paletteAction: "Source: Manual JSON",
+    config: {
+      emitChannel: "document",
+      json: prettyRuntimeValue(documentPayload),
+    },
+  });
+  const documentStore = nodeBase({
+    name: "document_store",
+    type: "knowledge",
+    label: "Graph Document Store",
+    inputs: ["document"],
+    outputs: ["knowledge.document.created"],
+    ...layout.documentStore,
+    tone: "cyan",
+    icon: "menu_book",
+    subtype: "document-store",
+    category: "knowledge",
+    settingsSchema: { title: "string", sourceType: "manual|channel|json|markdown", language: "string", outputChannel: "string" },
+    paletteLabel: "Document Store",
+    config: {
+      documentId,
+      title: documentPayload.title,
+      sourceType: "manual",
+      language: "en",
+      collectionId,
+      outputChannel: "knowledge.document.created",
+    },
+  });
+  const chunker = nodeBase({
+    name: "chunker",
+    type: "knowledge",
+    label: "Graph Chunk Processor",
+    inputs: ["knowledge.document.created"],
+    outputs: ["knowledge.chunk.created"],
+    ...layout.chunker,
+    tone: "cyan",
+    icon: "segment",
+    subtype: "chunk-processor",
+    category: "knowledge",
+    settingsSchema: { chunkSize: "number", chunkOverlap: "number", strategy: "fixed|paragraph|markdown", outputChannel: "string" },
+    paletteLabel: "Chunk Processor",
+    config: {
+      chunkSize: 520,
+      chunkOverlap: 60,
+      strategy: "paragraph",
+      collectionId,
+      replaceExisting: true,
+      outputChannel: "knowledge.chunk.created",
+    },
+  });
+  const extractor = nodeBase({
+    name: "entity_extractor",
+    type: "knowledge",
+    label: "Graph Entity Extractor",
+    inputs: ["knowledge.chunk.created"],
+    outputs: ["knowledge.entity.created", "knowledge.relation.created"],
+    ...layout.extractor,
+    tone: "green",
+    icon: "account_tree",
+    subtype: "entity-extractor",
+    category: "knowledge",
+    settingsSchema: { extractionMode: "strict|balanced|wide", seedTerms: "string", confidenceThreshold: "number", maxEntities: "number", maxRelations: "number", collectionId: "string", outputChannel: "string" },
+    paletteLabel: "Entity Extractor",
+    config: {
+      extractionMode: "balanced",
+      seedTerms: "Juliette,Liber,troll,forest,flower,water,tea,castle,hope,courage,friendship",
+      confidenceThreshold: 0.45,
+      maxEntities: 80,
+      maxRelations: 160,
+      collectionId,
+      outputChannel: "knowledge.entity.created",
+    },
+  });
+  const graph = nodeBase({
+    name: "knowledge_graph",
+    type: "knowledge",
+    label: "Knowledge Graph Sample",
+    inputs: ["knowledge.entity.created", "knowledge.relation.created"],
+    outputs: ["knowledge.graph.updated"],
+    ...layout.graph,
+    tone: "cyan",
+    icon: "hub",
+    subtype: "knowledge-graph",
+    category: "knowledge",
+    settingsSchema: { graphScope: "workspace|document", outputChannel: "string" },
+    paletteLabel: "Knowledge Graph",
+    config: {
+      graphScope: "document",
+      documentId,
+      collectionId,
+      maxRelations: 160,
+      outputChannel: "knowledge.graph.updated",
+    },
+  });
+  const preview = nodeBase({
+    name: "graph_preview",
+    type: "devPreview",
+    label: "Graph Snapshot Preview",
+    inputs: ["raw"],
+    outputs: ["output"],
+    ...layout.preview,
+    tone: "blue",
+    icon: "visibility",
+    subtype: "preview",
+    category: "dev",
+    settingsSchema: { mode: "raw|json" },
+    paletteLabel: "Preview",
+    config: { previewMode: "json", maxChars: 6000 },
+  });
+  const nodes = [docSource, documentStore, chunker, extractor, graph, preview];
+  const links = [
+    [docSource, documentStore, "document", "document"],
+    [documentStore, chunker, "knowledge.document.created", "knowledge.document.created"],
+    [chunker, extractor, "knowledge.chunk.created", "knowledge.chunk.created"],
+    [extractor, graph, "knowledge.relation.created", "knowledge.relation.created"],
+    [graph, preview, "knowledge.graph.updated", "raw"],
+  ];
+  const createKnowledgeGraphSampleRuntimeLink = async ({ source, target, sourcePort, targetPort, index = 0 } = {}) => {
+    const createdAt = new Date().toISOString();
+    const channel = sourcePort;
+    const connectionId = `knowledge_graph_sample_conn_${now}_${index}`;
+    const mapping = {
+      mode: "pass-through",
+      sourcePort,
+      targetPort,
+      channel,
+      linkType: "data",
+      note: "Knowledge Graph sample auto-link",
+    };
+    const dependency = {
+      id: `dep_${workspaceId}_${connectionId}`.replace(/[^A-Za-z0-9_-]/g, "_"),
+      workspaceId,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      sourceType: source.type || "node",
+      targetType: target.type || "node",
+      channel,
+      connectionId,
+      status: "active",
+      metadata: { source: "flow-map-knowledge-graph-sample", ...mapping },
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const connection = {
+      id: connectionId,
+      name: `${source.label || source.id} -> ${target.label || target.id}`,
+      type: `${source.type || "node"} -> ${target.type || "node"}`,
+      from: source.label || source.id,
+      fromKind: source.type || "node",
+      to: target.label || target.id,
+      targetMeta: target.sourceRef || target.assetId || target.id,
+      status: "active",
+      lastTest: "Mai",
+      result: "Creato da Knowledge Graph Test",
+      method: "EVENT",
+      frequency: channel,
+      timeout: "10 secondi",
+      retries: 0,
+      createdAt,
+      updatedAt: createdAt,
+      endpoint: `flowmap://${workspaceId}/${connectionId}`,
+      workspaceId,
+      workspaceName: workspaceId,
+      fromBoxId: source.id,
+      toBoxId: target.id,
+      sourceNodeId: source.id,
+      targetNodeId: target.id,
+      sourceName: source.label || source.id,
+      targetName: target.label || target.id,
+      channel,
+      mapping,
+    };
+    await window.TrackerLensConnectionsStore?.upsert?.(connection);
+    await window.TrackerLensRuntimeGraphStore?.upsertDependency?.({ dependency });
+    return dependency;
+  };
+  const cleanupKnowledgeGraphSampleRecords = async () => {
+    const knowledge = window.TrackerLensKnowledgeRuntime;
+    if (!knowledge?.listStore || !knowledge?.deleteRecords) return { documents: 0, chunks: 0, entities: 0, relations: 0, metrics: 0 };
+    const stores = knowledge.STORES || {};
+    const [documents, chunks, entities, relations, metrics] = await Promise.all([
+      knowledge.listStore(stores.documents),
+      knowledge.listStore(stores.chunks),
+      knowledge.listStore(stores.entities),
+      knowledge.listStore(stores.relations),
+      knowledge.listStore(stores.metrics),
+    ]);
+    const sampleDocuments = (documents || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) =>
+        item.id === documentId ||
+        item.title === documentPayload.title ||
+        item.metadata?.collectionId === collectionId ||
+        item.metadata?.source === "Flow Map Knowledge Graph Test");
+    const documentIds = new Set(sampleDocuments.map((item) => item.id));
+    const sampleChunks = (chunks || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) => documentIds.has(item.documentId) || item.metadata?.collectionId === collectionId || item.metadata?.title === documentPayload.title);
+    const chunkIds = new Set(sampleChunks.map((item) => item.id));
+    const sampleEntities = (entities || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) => documentIds.has(item.documentId) || chunkIds.has(item.chunkId) || item.metadata?.collectionId === collectionId);
+    const entityIds = new Set(sampleEntities.map((item) => item.id));
+    const sampleRelations = (relations || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) =>
+        documentIds.has(item.documentId) ||
+        item.metadata?.collectionId === collectionId ||
+        entityIds.has(item.sourceEntityId) ||
+        entityIds.has(item.targetEntityId));
+    const sampleMetrics = (metrics || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) => item.value?.collectionId === collectionId || item.value?.documentId === documentId);
+    await Promise.all([
+      knowledge.deleteRecords(stores.relations, sampleRelations.map((item) => item.id)),
+      knowledge.deleteRecords(stores.entities, sampleEntities.map((item) => item.id)),
+      knowledge.deleteRecords(stores.chunks, sampleChunks.map((item) => item.id)),
+      knowledge.deleteRecords(stores.metrics, sampleMetrics.map((item) => item.id)),
+      knowledge.deleteRecords(stores.documents, sampleDocuments.map((item) => item.id)),
+    ]);
+    return {
+      documents: sampleDocuments.length,
+      chunks: sampleChunks.length,
+      entities: sampleEntities.length,
+      relations: sampleRelations.length,
+      metrics: sampleMetrics.length,
+    };
+  };
+
+  state.testRun = {
+    running: true,
+    runId,
+    nodeIds: nodes.map((node) => node.id),
+    edgeIds: [],
+    activeNodeIds: nodes.map((node) => node.id),
+    activeEdgeIds: [],
+    startedAt: new Date().toISOString(),
+    completedAt: "",
+    summary: "Running Knowledge Graph sample test",
+    timeoutId: 0,
+    abortController: null,
+    liveSockets: [],
+    keepOpen: false,
+    cancelRequested: false,
+    verification: null,
+  };
+  state.error = "";
+  startTestRunTimeout(runId, TEST_RUN_TIMEOUT_MS);
+  setFiltersState({ ...state.filters, runId });
+  syncFilterQuery();
+  mount({ preserveScroll: true });
+
+  try {
+    const staleSampleNodes = (state.runtime.nodes || [])
+      .filter((node) => node.workspaceId === workspaceId)
+      .filter((node) =>
+        String(node.id || "").startsWith("knowledge_graph_sample_") ||
+        String(node.label || "").toLowerCase().includes("knowledge graph sample") ||
+        String(node.metadata?.paletteAction || "").toLowerCase().includes("knowledge graph sample"));
+    const staleIds = new Set(staleSampleNodes.map((node) => node.id));
+    const staleConnections = (await Promise.resolve(window.TrackerLensConnectionsStore?.list?.() || []).catch(() => []))
+      .filter((connection) => connection.workspaceId === workspaceId)
+      .filter((connection) =>
+        String(connection.id || "").startsWith("knowledge_graph_sample_conn_") ||
+        staleIds.has(connection.sourceNodeId || connection.fromBoxId) ||
+        staleIds.has(connection.targetNodeId || connection.toBoxId));
+    const runtimeDependencyStore = runtimeStoreName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies");
+    const staleRuntimeDependencies = (await window.TrackerLensRuntimeGraphStore?.readAll?.(runtimeDependencyStore).catch(() => []))
+      .filter((dependency) => dependency.workspaceId === workspaceId)
+      .filter((dependency) =>
+        String(dependency.id || "").startsWith("knowledge_graph_sample_conn_") ||
+        String(dependency.metadata?.source || "") === "flow-map-knowledge-graph-sample" ||
+        staleIds.has(dependency.sourceNodeId) ||
+        staleIds.has(dependency.targetNodeId));
+    await window.TrackerLensConnectionsStore?.removeMany?.(staleConnections.map((connection) => connection.id));
+    await window.TrackerLensRuntimeGraphStore?.deleteRecords?.(runtimeDependencyStore, staleRuntimeDependencies.map((dependency) => dependency.id));
+    for (const node of staleSampleNodes) {
+      await window.TrackerLensRuntimeGraphStore.deleteRuntimeNodeReferences?.({ nodeId: node.id, workspaceId });
+    }
+    const knowledgeCleanup = await cleanupKnowledgeGraphSampleRecords();
+    if (staleSampleNodes.length || staleConnections.length || staleRuntimeDependencies.length) await loadRuntime({ force: true, silent: true });
+    for (const node of nodes) {
+      await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node });
+    }
+    await loadRuntime({ force: true, silent: true });
+    const edgeIds = [];
+    for (const [index, link] of links.entries()) {
+      const [source, target, sourcePort, targetPort] = link;
+      const savedSource = nodeById(source.id) || source;
+      const savedTarget = nodeById(target.id) || target;
+      const dependency = await createKnowledgeGraphSampleRuntimeLink({ source: savedSource, target: savedTarget, sourcePort, targetPort, index });
+      if (!dependency?.id) throw new Error(`Knowledge Graph sample link non creato: ${source.label} (${sourcePort}) -> ${target.label} (${targetPort})`);
+      edgeIds.push(dependency.id);
+    }
+    await loadRuntime({ force: true, silent: true });
+    syncPageRuntimes(workspaceId);
+    state.testRun = {
+      ...state.testRun,
+      edgeIds,
+      activeEdgeIds: edgeIds,
+    };
+    const bus = workspaceEventBus(workspaceId);
+    const docEvent = await bus.emit("document", {
+      ...documentPayload,
+      __test: true,
+      runId,
+      sourceNodeId: docSource.id,
+      emittedAt: new Date().toISOString(),
+    }, {
+      workspaceId,
+      flowId: flowIdForWorkspace(workspaceId),
+      eventType: "flow_knowledge_graph_sample_document",
+      sourceNodeId: docSource.id,
+      meta: { test: true, runId, origin: "knowledge-graph-sample-test", rootNodeId: docSource.id },
+    });
+    if (docEvent) mergeRuntimeEvent(docEvent);
+    const snapshot = await waitForKnowledgeGraphSnapshot({ workspaceId, collectionId, documentId, timeoutMs: 8000 });
+    const ok = Boolean(snapshot?.value?.entityCount > 0 && snapshot?.value?.relationCount > 0);
+    finishFlowMapTestRun({
+      runId,
+      summary: ok ? "Knowledge Graph sample completed: graph snapshot generated" : "Knowledge Graph sample created with warnings",
+      error: ok ? "" : "Knowledge Graph sample non ha generato uno snapshot valido",
+    });
+    await recordFlowAction({
+      workspaceId,
+      nodeId: graph.id,
+      level: ok ? "info" : "warning",
+      message: ok ? "Knowledge Graph sample test completed" : "Knowledge Graph sample test completed without valid graph snapshot",
+      context: {
+        action: "flow-map-knowledge-graph-sample-test",
+        runId,
+        snapshotId: snapshot?.id || "",
+        entityCount: snapshot?.value?.entityCount || 0,
+        relationCount: snapshot?.value?.relationCount || 0,
+        collectionId,
+        documentId,
+        cleanup: knowledgeCleanup,
+      },
+    });
+    await loadRuntime({ force: true, silent: true });
+    setFocusState({ mode: "nodes", nodeId: graph.id, nodeType: "knowledge", channel: "knowledge.graph.updated", connectionId: "" });
+    centerViewportOnNode?.(nodeById(graph.id) || graph, (state.runtime.nodes || []).findIndex((node) => node.id === graph.id), { select: true });
+  } catch (error) {
+    console.error("Flow Map Knowledge Graph sample test error:", error);
+    state.error = error?.message || "Errore Knowledge Graph sample Flow Map";
+    finishFlowMapTestRun({ runId, summary: `Knowledge Graph sample error: ${error.message || error}`, error: state.error });
+    await recordFlowAction({
+      workspaceId,
+      level: "error",
+      message: state.error,
+      context: { action: "flow-map-knowledge-graph-sample-test-error", runId, error: error.message || String(error) },
     });
     mount({ preserveScroll: true });
   }
@@ -3437,6 +3958,13 @@ const renderSampleTestMenu = () =>
         meta: "Document -> chunks -> embeddings -> RAG",
         disabled: state.testRun.running,
         onclick: () => runKnowledgeSampleTest(),
+      }),
+      renderFileMenuItem({
+        iconName: "hub",
+        label: "Knowledge Graph Test",
+        meta: "Document -> chunks -> entities -> graph",
+        disabled: state.testRun.running,
+        onclick: () => runKnowledgeGraphSampleTest(),
       })
     )
   );

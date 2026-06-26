@@ -53,13 +53,13 @@ window.TrackerLensRuntimeWorker = (() => {
     if (port) return true;
     try {
       if ("SharedWorker" in window) {
-        worker = new SharedWorker("core/runtime/runtime-worker.js?v=kg-20260625-kg-quality-18");
+        worker = new SharedWorker("core/runtime/runtime-worker.js?v=kg-20260626-it-relations-13");
         port = worker.port;
         lastStatus.mode = "shared-worker";
         port.onmessage = (event) => handleMessage(event.data || {});
         port.start?.();
       } else if ("Worker" in window) {
-        worker = new Worker("core/runtime/runtime-worker.js?v=kg-20260625-kg-quality-18");
+        worker = new Worker("core/runtime/runtime-worker.js?v=kg-20260626-it-relations-13");
         port = worker;
         lastStatus.mode = "worker";
         port.onmessage = (event) => handleMessage(event.data || {});

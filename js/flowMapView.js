@@ -21,6 +21,7 @@ const refreshPortUiDom = () => {
     replaceRenderedNode(".tl-flow-inspector-overlay", _.div({ class: "tl-flow-inspector-overlay" }, renderInspector()));
   }
   restorePanelScroll(scrollPositions);
+  if (isFlowMapRecoveryMode()) return;
   requestAnimationFrame(() => {
     renderFlowEdges();
     updateFlowMinimapDom?.();
@@ -39,6 +40,7 @@ const mount = (options = {}) => {
   root.replaceChildren(renderShell());
   state.mounted = true;
   if (scrollPositions) restorePanelScroll(scrollPositions);
+  if (isFlowMapRecoveryMode()) return;
   requestAnimationFrame(() => {
     renderFlowEdges();
     updateFlowMinimapDom?.();
@@ -66,10 +68,17 @@ window.TrackerLensRuntimeWorker?.subscribe?.((status = {}) => {
 });
 
 mount();
-loadRuntime();
+runFlowMapStartupRepair().then((repairResult) => {
+  if (repairResult?.skipInitialLoad) {
+    mount();
+    return;
+  }
+  loadRuntime();
+});
 connectLiveEventBus();
 window.setInterval(() => {
-  if (state.loading) return;
+  if (isFlowMapRecoveryMode()) return;
+  if (state.loading || state.runtimeLoadInFlight) return;
   if (state.interaction || Date.now() - state.lastInteractionAt < 750) {
     state.pendingRuntimeRefresh = true;
     return;
@@ -87,4 +96,7 @@ window.addEventListener("keydown", (event) => {
   }
   if (state.inspectorOpen) closeInspector();
 });
-window.addEventListener("resize", () => requestAnimationFrame(renderFlowEdges));
+window.addEventListener("resize", () => {
+  if (isFlowMapRecoveryMode()) return;
+  requestAnimationFrame(renderFlowEdges);
+});

@@ -3206,23 +3206,29 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
     const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
     const config = nodeRuntimeConfig(node);
     const collectionId = String(config.collectionId || "").trim();
-    const documentId = String(config.documentId || "").trim();
+    const configuredDocumentId = String(config.documentId || "").trim();
+    const graphMetrics = (metrics || [])
+      .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+      .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+      .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+    const documentsWithSnapshots = new Set(graphMetrics.map((metric) => metric.value?.documentId).filter(Boolean));
+    const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
+      ? configuredDocumentId
+      : graphMetrics[0]?.value?.documentId || configuredDocumentId;
     const workspaceEntities = (entities || [])
       .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
-      .filter((entity) => !documentId || entity.documentId === documentId);
+      .filter((entity) => !documentId || entity.documentId === documentId)
+      .filter((entity) => !isWeakKnowledgeInspectorEntity(entity));
     const entityIds = new Set(workspaceEntities.map((entity) => entity.id));
     const workspaceRelations = (relations || [])
       .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
       .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
       .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
       .filter((relation) => !documentId || relation.documentId === documentId);
-    const graphMetrics = (metrics || [])
-      .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
-      .filter((metric) => metric.metric === "knowledge.graph.snapshot")
-      .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
-      .filter((metric) => !documentId || metric.value?.documentId === documentId)
-      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+    const filteredGraphMetrics = graphMetrics
+      .filter((metric) => !documentId || metric.value?.documentId === documentId);
     const topEntities = workspaceEntities
       .map((entity) => ({
         ...entity,
@@ -3238,8 +3244,14 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
         loading: false,
         entities: workspaceEntities,
         relations: workspaceRelations,
-        metrics: graphMetrics,
+        metrics: filteredGraphMetrics,
         topEntities,
+        configuredDocumentId,
+        effectiveDocumentId: documentId,
+        latestSnapshotDocumentId: graphMetrics[0]?.value?.documentId || "",
+        documentMismatch: Boolean(configuredDocumentId && documentId && configuredDocumentId !== documentId),
+        collectionId,
+        workspaceId,
         loadedAt: Date.now(),
         error: "",
       },
@@ -3298,6 +3310,43 @@ const knowledgeGraphRelationColors = {
   relation: "#94a3b8",
 };
 
+const normalizeKnowledgeInspectorToken = (value = "") =>
+  String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const inspectorEntityStopWords = new Set([
+  "abita", "aveva", "avevano", "compiuto", "comprese", "dopo", "doveva", "dovevano", "eravamo", "eppure",
+  "giorno", "mai", "mediante", "molto", "ogni", "ora", "presto", "primo", "qualcosa", "seguente",
+  "semplice", "siamo", "soltanto", "sono", "stato", "uscita", "vecchio", "veniva", "venivano", "viene",
+  "vengono", "via"
+]);
+
+const inspectorKnownAcronyms = new Set(["ai", "aids", "api", "cpu", "css", "db", "gpu", "hiv", "html", "json", "llm", "rag", "sql", "ui", "url"]);
+
+const isWeakKnowledgeInspectorEntity = (entity = {}) => {
+  if (entity.source === "seed") return false;
+  const label = String(entity.label || "").trim();
+  const normalized = normalizeKnowledgeInspectorToken(label);
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  if (words.every((word) => inspectorEntityStopWords.has(word))) return true;
+  if (/\d/.test(normalized) && !/[a-z]/i.test(normalized)) return true;
+  if (entity.source === "symbol" || entity.entityType === "symbol") {
+    const hasTechnicalMarker = /[\d_-]/.test(label);
+    if (!hasTechnicalMarker && !inspectorKnownAcronyms.has(normalized)) return true;
+  }
+  if (entity.source === "quote" || entity.entityType === "quote") {
+    const lexicalWords = words.filter((word) => /[a-z]/i.test(word) && word.length >= 2);
+    const digitHeavy = words.some((word) => /\d/.test(word));
+    if (lexicalWords.length < 2 || digitHeavy) return true;
+  }
+  return false;
+};
+
 const collectKnowledgeGraphData = async (node = {}) => {
   const [entities, relations, metrics] = await Promise.all([
     readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities")),
@@ -3307,24 +3356,60 @@ const collectKnowledgeGraphData = async (node = {}) => {
   const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
   const config = nodeRuntimeConfig(node);
   const collectionId = String(config.collectionId || "").trim();
-  const documentId = String(config.documentId || "").trim();
+  const configuredDocumentId = String(config.documentId || "").trim();
+  const allGraphMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  const documentsWithSnapshots = new Set(allGraphMetrics.map((metric) => metric.value?.documentId).filter(Boolean));
+  const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
+    ? configuredDocumentId
+    : allGraphMetrics[0]?.value?.documentId || configuredDocumentId;
   const scopedEntities = (entities || [])
     .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
     .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
-    .filter((entity) => !documentId || entity.documentId === documentId);
+    .filter((entity) => !documentId || entity.documentId === documentId)
+    .filter((entity) => !isWeakKnowledgeInspectorEntity(entity));
   const entityIds = new Set(scopedEntities.map((entity) => entity.id));
   const scopedRelations = (relations || [])
     .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
     .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
     .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
     .filter((relation) => !documentId || relation.documentId === documentId);
-  const graphMetrics = (metrics || [])
-    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
-    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
-    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
-    .filter((metric) => !documentId || metric.value?.documentId === documentId)
-    .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
-  return { entities: scopedEntities, relations: scopedRelations, metrics: graphMetrics, collectionId, documentId, workspaceId };
+  const graphMetrics = allGraphMetrics
+    .filter((metric) => !documentId || metric.value?.documentId === documentId);
+  return {
+    entities: scopedEntities,
+    relations: scopedRelations,
+    metrics: graphMetrics,
+    collectionId,
+    documentId,
+    configuredDocumentId,
+    latestSnapshotDocumentId: allGraphMetrics[0]?.value?.documentId || "",
+    documentMismatch: Boolean(configuredDocumentId && documentId && configuredDocumentId !== documentId),
+    workspaceId,
+  };
+};
+
+const knowledgeGraphExportData = (graphData = {}, { includeIsolated = false } = {}) => {
+  const relations = graphData.relations || [];
+  const connectedIds = new Set();
+  relations.forEach((relation) => {
+    if (relation.sourceEntityId) connectedIds.add(relation.sourceEntityId);
+    if (relation.targetEntityId) connectedIds.add(relation.targetEntityId);
+  });
+  const entities = includeIsolated
+    ? (graphData.entities || [])
+    : (graphData.entities || []).filter((entity) => connectedIds.has(entity.id));
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  return {
+    ...graphData,
+    exportMode: includeIsolated ? "with-isolated" : "connected",
+    includeIsolatedEntities: Boolean(includeIsolated),
+    entities,
+    relations: relations.filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId)),
+  };
 };
 
 const knowledgeGraphNodeDegree = (entities = [], relations = []) => {
@@ -3792,6 +3877,7 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
     smoothPositions: new Map(),
     raf: 0,
     framePending: false,
+    disposed: false,
   };
   const seedFor = (entity) => Math.abs(String(entity?.id || entity?.label || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0));
   const colorFor = (value, fallback = "#67e8f9") => value || fallback;
@@ -3912,11 +3998,13 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
     return { relationIds, entityIds };
   };
   const scheduleDraw = () => {
+    if (local.disposed) return;
     if (local.framePending) return;
     local.framePending = true;
     local.raf = requestAnimationFrame(draw);
   };
   const draw = () => {
+    if (local.disposed) return;
     local.framePending = false;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -3994,7 +4082,7 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
       const b = graphToScreen(target, view, size);
       const isConnected = local.selectedId ? selectedRelations.has(relation.id) : false;
       ctx.save();
-      ctx.globalAlpha = local.selectedId ? (isConnected ? 0.86 : 0.1) : 0.42;
+      ctx.globalAlpha = local.selectedId ? (isConnected ? 0.86 : 0.18) : 0.42;
       ctx.strokeStyle = colorFor(knowledgeGraphRelationColors[relation.relationType], "rgba(148, 163, 184, 0.34)");
       ctx.lineWidth = isConnected ? 2.4 : 1.2;
       ctx.beginPath();
@@ -4013,7 +4101,7 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
       const isConnected = local.selectedId && connectedEntityIds.has(entity.id);
       const muted = local.selectedId && !isConnected;
       ctx.save();
-      ctx.globalAlpha = muted ? 0.28 : 1;
+      ctx.globalAlpha = muted ? 0.52 : 1;
       ctx.fillStyle = colorFor(knowledgeGraphTypeColors[entity.entityType], knowledgeGraphTypeColors.entity);
       ctx.strokeStyle = isSelected ? "#f8fafc" : "rgba(226, 232, 240, 0.9)";
       ctx.lineWidth = isSelected ? 3 : isConnected ? 2.4 : 1.5;
@@ -4036,11 +4124,11 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
         ctx.fillText(line, screen.x, labelStartY + index * 9);
       });
       ctx.font = "700 7px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
-      ctx.globalAlpha = muted ? 0.2 : 0.72;
+      ctx.globalAlpha = muted ? 0.42 : 0.72;
       ctx.fillText(canvasEllipsisText(ctx, entity.entityType || "entity", textMaxWidth), screen.x, screen.y + (labelLines.length > 1 ? 14 : 11));
       ctx.restore();
     });
-    if ((floatActive && local.selectedId) || local.drag || hasMotion) {
+    if (!local.disposed && ((floatActive && local.selectedId) || local.drag || hasMotion)) {
       scheduleDraw();
     }
   };
@@ -4158,9 +4246,16 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
     if (local.pan?.pointerId === event.pointerId) {
       event.preventDefault();
       event.stopPropagation();
+      const pan = local.pan;
       local.pan = null;
       canvas.parentElement?.classList.remove("is-panning");
       canvas.releasePointerCapture?.(event.pointerId);
+      if (!pan.moved && local.selectedId) {
+        local.selectedId = "";
+        local.animationStart = performance.now();
+        onSelect?.(null, { background: true });
+        scheduleDraw();
+      }
     }
   };
   canvas.onpointercancel = (event) => {
@@ -4169,8 +4264,27 @@ const renderKnowledgeGraphCanvas = ({ entities = [], relations = [], degree = ne
     canvas.parentElement?.classList.remove("is-panning");
     canvas.releasePointerCapture?.(event.pointerId);
   };
+  canvas.__tlKnowledgeGraphDestroy = () => {
+    local.disposed = true;
+    local.framePending = false;
+    if (local.raf) cancelAnimationFrame(local.raf);
+    local.raf = 0;
+    local.drag = null;
+    local.pan = null;
+    canvas.onwheel = null;
+    canvas.onpointerdown = null;
+    canvas.onpointermove = null;
+    canvas.onpointerup = null;
+    canvas.onpointercancel = null;
+  };
   setTimeout(scheduleDraw, 0);
   return canvas;
+};
+
+const destroyKnowledgeGraphCanvases = (root = null) => {
+  root?.querySelectorAll?.(".tl-kg-view-canvas-bitmap")?.forEach((canvas) => {
+    canvas.__tlKnowledgeGraphDestroy?.();
+  });
 };
 
 const openKnowledgeGraphViewDialog = async (node = {}) => {
@@ -4184,7 +4298,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
     relationType: "all",
     mode: "force",
     limit: 80,
-    zoom: 1,
+    zoom: 0.85,
     panX: 0,
     panY: 0,
     manualPositions: {},
@@ -4192,7 +4306,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
     drag: null,
     suppressNextNodeClick: false,
     selected: null,
-    sideTab: "selection",
+    sideTab: "info",
   };
   const types = ["all", ...new Set((graphData.entities || []).map((entity) => entity.entityType || "entity"))].sort((a, b) =>
     a === "all" ? -1 : b === "all" ? 1 : a.localeCompare(b)
@@ -4227,7 +4341,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
       limit: model.limit,
     });
     if (model.selected && !visible.entities.some((entity) => entity.id === model.selected.id)) model.selected = null;
-    const selected = model.selected || visible.entities[0] || null;
+    const selected = model.selected || null;
     model.selected = selected;
     const typeCounts = visible.entities.reduce((acc, entity) => {
       const type = entity.entityType || "entity";
@@ -4363,6 +4477,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
       });
       if (!settled) rerender();
     };
+    destroyKnowledgeGraphCanvases(host);
     host.replaceChildren(
       _.div(
         { class: "tl-kg-view-toolbar" },
@@ -4541,7 +4656,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
               zoom: model.zoom,
               panX: model.panX,
               panY: model.panY,
-              manualPositions: model.focusPosition?.id === selected?.id
+              manualPositions: selected?.id && model.focusPosition?.id === selected.id
                 ? { ...model.manualPositions, [selected.id]: model.focusPosition.point }
                 : model.manualPositions,
               onViewportChange: (viewport) => {
@@ -4553,6 +4668,13 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
               onSelect: (entity, context = {}) => {
                 if (model.suppressNextNodeClick) {
                   model.suppressNextNodeClick = false;
+                  return;
+                }
+                if (!entity && context?.background) {
+                  model.selected = null;
+                  model.focusPosition = null;
+                  model.sideTab = "info";
+                  rerender();
                   return;
                 }
                 focusGraphEntity(entity, { point: context.point });
@@ -4607,7 +4729,10 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 _.div(_.span("Isolated"), _.strong(String(analytics.isolated))),
                 _.div(_.span("Repeated evidence"), _.strong(String(analytics.repeatedEvidenceCount))),
                 _.div(_.span("Collection"), _.strong(graphData.collectionId || "all")),
-                _.div(_.span("Document"), _.strong(graphData.documentId || "all"))
+                _.div(_.span("Configured document"), _.strong(graphData.configuredDocumentId || "all")),
+                _.div(_.span("Latest snapshot document"), _.strong(graphData.latestSnapshotDocumentId || "N/D")),
+                _.div(_.span("Viewing document"), _.strong(graphData.documentId || "all")),
+                _.div(_.span("Document status"), _.strong(graphData.configuredDocumentId && graphData.documentId && graphData.configuredDocumentId !== graphData.documentId ? "using latest snapshot" : "configured"))
               ),
               analytics.repeatedEvidence.length
                 ? _.section(
@@ -4677,6 +4802,10 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
     icon: "account_tree",
     closeButton: true,
     closeOnOutside: false,
+    onClose: () => {
+      destroyKnowledgeGraphCanvases(host);
+      host = null;
+    },
     content: () => {
       host = _.div({
         class: "tl-kg-view",
@@ -4688,7 +4817,8 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
     },
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(graphData) }, icon("content_copy", "sm"), "Copy Data"),
+      btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: false })) }, icon("account_tree", "sm"), "Copy Graph"),
+      btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: true })) }, icon("content_copy", "sm"), "Copy With Isolated"),
       btn({ class: "is-primary", onclick: close }, "Close")
     ),
   });
@@ -4702,11 +4832,20 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
   loadKnowledgeInspectorGraph(node);
   const graph = state.knowledgeInspectorGraph[node.id] || { loading: true, entities: [], relations: [], metrics: [], topEntities: [] };
   const latestMetric = graph.metrics?.[0] || null;
+  const config = nodeRuntimeConfig(node);
+  const configuredDocumentId = graph.configuredDocumentId || String(config.documentId || "").trim();
+  const effectiveDocumentId = graph.effectiveDocumentId || latestMetric?.value?.documentId || configuredDocumentId || "";
+  const latestSnapshotDocumentId = graph.latestSnapshotDocumentId || latestMetric?.value?.documentId || "";
+  const documentMismatch = Boolean(graph.documentMismatch || (configuredDocumentId && effectiveDocumentId && configuredDocumentId !== effectiveDocumentId));
   const snapshot = {
     entityCount: graph.entities?.length || 0,
     relationCount: graph.relations?.length || 0,
     topEntities: graph.topEntities || [],
     latestMetric: latestMetric?.value || null,
+    configuredDocumentId,
+    effectiveDocumentId,
+    latestSnapshotDocumentId,
+    documentMismatch,
   };
   return _.section(
     { class: "tl-flow-detail-list" },
@@ -4716,8 +4855,11 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
       ["Relations", graph.loading ? "loading..." : graph.relations?.length || 0],
       ["Snapshots", graph.loading ? "loading..." : graph.metrics?.length || 0],
       ["Latest snapshot", latestMetric?.createdAt ? formatShortDate(latestMetric.createdAt) : "N/D"],
-      ["Collection", latestMetric?.value?.collectionId || nodeRuntimeConfig(node).collectionId || "all"],
-      ["Document", latestMetric?.value?.documentId || nodeRuntimeConfig(node).documentId || "all"],
+      ["Collection", latestMetric?.value?.collectionId || config.collectionId || "all"],
+      ["Configured document", configuredDocumentId || "all"],
+      ["Latest snapshot document", latestSnapshotDocumentId || "N/D"],
+      ["Viewing document", effectiveDocumentId || "all"],
+      ["Document status", documentMismatch ? "using latest snapshot" : "configured"],
     ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
     graph.error ? _.p({ class: "tl-flow-muted" }, graph.error) : null,
     _.div(

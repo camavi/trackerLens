@@ -5,6 +5,14 @@ const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...child
 const dot = (className = "") => _.span({ class: `tl-flow-dot${className ? ` ${className}` : ""}` });
 const params = new URLSearchParams(window.location.search);
 const defaultViewport = () => ({ zoom: 1, panX: 0, panY: 0 });
+const RUNTIME_EVENT_UI_LIMIT = 220;
+const RUNTIME_LOG_UI_LIMIT = 220;
+const RUNTIME_PAYLOAD_UI_BYTES = 24000;
+const flowMapRepairMode = () => String(params.get("repair") || "").trim().toLowerCase();
+const isFlowMapRecoveryMode = () => {
+  const repair = flowMapRepairMode();
+  return Boolean(params.get("safe") || ["knowledge-graph", "kg", "runtime", "hard", "workspace-hard", "clear-workspace"].includes(repair));
+};
 const viewportWorkspaceId = (workspaceId = "") => {
   const candidate = String(workspaceId || params.get("workspaceId") || state.filters.workspaceId || "workspace_global").trim();
   return candidate && candidate !== "all" ? candidate : "workspace_global";
@@ -124,6 +132,7 @@ const state = {
   linkValidation: null,
   optimisticDependencies: [],
   pendingRuntimeRefresh: false,
+  runtimeLoadInFlight: false,
   liveBusUnsubscribe: null,
   liveRenderFrame: 0,
   liveActivityClearTimer: 0,
@@ -181,6 +190,47 @@ const state = {
   },
   mounted: false,
 };
+
+const stringifyRuntimeValue = (value = {}) => {
+  try {
+    return typeof value === "string" ? value : JSON.stringify(value);
+  } catch (_) {
+    return String(value || "");
+  }
+};
+
+const summarizeRuntimePayloadForUi = (payload) => {
+  const text = stringifyRuntimeValue(payload);
+  if (text.length <= RUNTIME_PAYLOAD_UI_BYTES) return payload;
+  const summary = {
+    __truncatedForUi: true,
+    originalType: Array.isArray(payload) ? "array" : typeof payload,
+    originalBytes: text.length,
+    preview: text.slice(0, RUNTIME_PAYLOAD_UI_BYTES),
+  };
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    ["id", "documentId", "collectionId", "queryId", "title", "channel", "runId"].forEach((key) => {
+      if (payload[key] !== undefined) summary[key] = payload[key];
+    });
+  }
+  return summary;
+};
+
+const sanitizeRuntimeEventForUi = (event = {}) => ({
+  ...event,
+  payload: summarizeRuntimePayloadForUi(event.payload),
+  payloadPreview: event.payloadPreview || stringifyRuntimeValue(event.payload).slice(0, 480),
+});
+
+const sanitizeFlowLogForUi = (log = {}) => ({
+  ...log,
+  context: summarizeRuntimePayloadForUi(log.context || {}),
+});
+
+const recentRuntimeRecords = (records = [], limit = 200) =>
+  [...(records || [])]
+    .sort((a, b) => Date.parse(b.createdAt || b.updatedAt || "") - Date.parse(a.createdAt || a.updatedAt || ""))
+    .slice(0, limit);
 
 state.viewport = params.get("workspaceId") ? loadStoredViewport(params.get("workspaceId")) || state.viewport : state.viewport;
 
@@ -334,7 +384,35 @@ const syncOrchestratorAgentRuntime = (workspaceId = state.filters.workspaceId) =
 const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId) => {
   if (!window.TrackerLensRuntimeWorker?.start) return false;
   const id = workspaceId || "workspace_global";
+  if (isFlowMapRecoveryMode()) {
+    state.runtimeWorker = {
+      ...state.runtimeWorker,
+      available: true,
+      connected: false,
+      mode: "recovery",
+      status: "paused",
+      workspaceId: id,
+      error: "",
+    };
+    return true;
+  }
   const status = window.TrackerLensRuntimeWorker.status?.() || {};
+  const active = (status.workspaces || []).find((workspace) => workspace.workspaceId === id);
+  if (state.runtimeWorker.connected && state.runtimeWorker.workspaceId === id && active?.status === "running") {
+    state.runtimeWorker = {
+      ...state.runtimeWorker,
+      available: true,
+      connected: true,
+      mode: status.mode || state.runtimeWorker.mode || "worker",
+      status: active.status,
+      workspaceId: id,
+      nodes: active.nodes || state.runtimeWorker.nodes || 0,
+      dependencies: active.dependencies || state.runtimeWorker.dependencies || 0,
+      lastRefreshAt: active.lastRefreshAt || state.runtimeWorker.lastRefreshAt || "",
+      error: active.error || "",
+    };
+    return true;
+  }
   const started = window.TrackerLensRuntimeWorker.start({ workspaceId: id, refreshMs: 5000 });
   state.runtimeWorker = {
     ...state.runtimeWorker,
@@ -349,6 +427,7 @@ const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId) => {
 };
 
 const syncPageRuntimes = (workspaceId = state.filters.workspaceId) => {
+  if (isFlowMapRecoveryMode()) return;
   syncProcessorRuntime(workspaceId);
   syncActionRuntime(workspaceId);
   syncStorageRuntime(workspaceId);
@@ -501,6 +580,190 @@ const deleteWorkspaceScopedRecords = async (storeName, workspaceId = "") => {
     };
     request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
   });
+};
+
+const deleteRuntimeRecordsWhere = async (storeName, predicate = () => false) => {
+  const records = await readRuntimeStore(storeName).catch(() => []);
+  const ids = records.filter(predicate).map((record) => record.id).filter(Boolean);
+  if (!ids.length) return [];
+  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
+    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(tlConfig.DB_NAME);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve([]);
+        return;
+      }
+      const transaction = db.transaction(storeName, "readwrite");
+      const store = transaction.objectStore(storeName);
+      ids.forEach((id) => store.delete(id));
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(ids);
+      };
+      transaction.onerror = (deleteEvent) => {
+        db.close();
+        reject(deleteEvent.target.error || new Error(`Errore cleanup ${storeName}`));
+      };
+    };
+    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
+  });
+};
+
+const isKnowledgeGraphSampleRecord = (record = {}) => {
+  const text = [
+    record.id,
+    record.sourceNodeId,
+    record.targetNodeId,
+    record.connectionId,
+    record.channel,
+    record.eventType,
+    record.message,
+    record.metadata?.source,
+    record.context?.action,
+    record.meta?.origin,
+    record.payload?.runId,
+  ].map((value) => String(value || "").toLowerCase()).join(" ");
+  return text.includes("knowledge_graph_sample") ||
+    text.includes("knowledge-graph-sample") ||
+    text.includes("flow-map-knowledge-graph-sample") ||
+    text.includes("knowledge graph sample");
+};
+
+const isOversizedRuntimeRecord = (record = {}) => {
+  const payloadText = stringifyRuntimeValue(record.payload || record.context || record.value || {});
+  return payloadText.length > 160000;
+};
+
+const cleanupKnowledgeGraphWorkspaceData = async (workspaceId = "") => {
+  const id = normalizeRuntimeWorkspaceId(workspaceId || await resolveInitialWorkspaceId());
+  const scoped = (record = {}) => (record.workspaceId || "workspace_global") === id;
+  const nodeStore = runtimeStoreName("TL_RUNTIME_NODES", "tl_runtime_nodes");
+  const dependencyStore = runtimeStoreName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies");
+  const eventStore = runtimeStoreName("TL_EVENTS", "tl_events");
+  const logStore = runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs");
+  const connectionStore = runtimeStoreName("TL_CONNECTIONS", "tl_connections");
+  const channelStore = runtimeStoreName("TL_CHANNELS", "tl_channels");
+  const sampleNodeIds = new Set((await readRuntimeStore(nodeStore).catch(() => []))
+    .filter(scoped)
+    .filter(isKnowledgeGraphSampleRecord)
+    .map((record) => record.id)
+    .filter(Boolean));
+  const touchesSampleNode = (record = {}) =>
+    sampleNodeIds.has(record.id) ||
+    sampleNodeIds.has(record.sourceNodeId || record.fromBoxId) ||
+    sampleNodeIds.has(record.targetNodeId || record.toBoxId);
+  const result = {
+    workspaceId: id,
+    nodes: await deleteRuntimeRecordsWhere(nodeStore, (record) => scoped(record) && (isKnowledgeGraphSampleRecord(record) || touchesSampleNode(record))),
+    dependencies: await deleteRuntimeRecordsWhere(dependencyStore, (record) => scoped(record) && (isKnowledgeGraphSampleRecord(record) || touchesSampleNode(record))),
+    connections: await deleteRuntimeRecordsWhere(connectionStore, (record) => scoped(record) && (isKnowledgeGraphSampleRecord(record) || touchesSampleNode(record))),
+    channels: await deleteRuntimeRecordsWhere(channelStore, (record) => scoped(record) && isKnowledgeGraphSampleRecord(record)),
+    events: await deleteRuntimeRecordsWhere(eventStore, (record) => scoped(record)),
+    flowLogs: await deleteRuntimeRecordsWhere(logStore, (record) => scoped(record)),
+  };
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  const stores = knowledge?.STORES || {};
+  if (knowledge?.listStore && knowledge?.deleteRecords) {
+    const collectionId = "knowledge_graph_sample_current";
+    const cleanupKnowledgeStore = async (storeName, predicate) => {
+      if (!storeName) return [];
+      const records = await knowledge.listStore(storeName).catch(() => []);
+      const ids = records.filter((record) => scoped(record) && predicate(record)).map((record) => record.id).filter(Boolean);
+      if (ids.length) await knowledge.deleteRecords(storeName, ids);
+      return ids;
+    };
+    result.knowledgeDocuments = await cleanupKnowledgeStore(stores.documents, (record) =>
+      record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record) || isOversizedRuntimeRecord(record));
+    result.knowledgeChunks = await cleanupKnowledgeStore(stores.chunks, (record) =>
+      record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeEntities = await cleanupKnowledgeStore(stores.entities, (record) =>
+      record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeRelations = await cleanupKnowledgeStore(stores.relations, (record) =>
+      record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeMetrics = await cleanupKnowledgeStore(stores.metrics, (record) =>
+      record.value?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+  }
+  console.info("[FlowMap repair] Knowledge Graph workspace cleanup", result);
+  return result;
+};
+
+const cleanupWorkspaceRuntimeData = async (workspaceId = "") => {
+  const id = normalizeRuntimeWorkspaceId(workspaceId || await resolveInitialWorkspaceId());
+  const scoped = (record = {}) => record.workspaceId === id || record.id === id;
+  const result = {
+    workspaceId: id,
+    flows: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_FLOWS", "tl_flows"), scoped),
+    nodes: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_RUNTIME_NODES", "tl_runtime_nodes"), scoped),
+    dependencies: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies"), scoped),
+    connections: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_CONNECTIONS", "tl_connections"), scoped),
+    channels: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_CHANNELS", "tl_channels"), scoped),
+    events: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_EVENTS", "tl_events"), scoped),
+    flowLogs: await deleteRuntimeRecordsWhere(runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs"), scoped),
+  };
+  state.runtime = {
+    channels: [],
+    flows: [],
+    events: [],
+    flowLogs: [],
+    nodes: [],
+    dependencies: [],
+  };
+  state.connections = [];
+  state.previewPayloads = {};
+  state.previewClearedAt = {};
+  state.knowledgeInspectorGraph = {};
+  state.knowledgeInspectorDocuments = {};
+  state.edgeRender = { graph: { nodes: [], dependencies: [] }, activity: { edgeActivity: new Map() } };
+  setRuntimeSignal(state.runtime);
+  console.info("[FlowMap repair] Workspace runtime cleanup", result);
+  return result;
+};
+
+const runFlowMapStartupRepair = async () => {
+  const repair = flowMapRepairMode();
+  if (!repair || repair === "0" || repair === "false") return null;
+  const workspaceId = normalizeRuntimeWorkspaceId(params.get("workspaceId") || state.filters.workspaceId || await resolveInitialWorkspaceId());
+  if (repair === "knowledge-graph" || repair === "kg" || repair === "runtime" || repair === "hard" || repair === "workspace-hard" || repair === "clear-workspace") {
+    state.loading = true;
+    setLoadingSignal(true);
+    try {
+      const hardRepair = repair === "hard" || repair === "workspace-hard" || repair === "clear-workspace";
+      const result = hardRepair
+        ? await cleanupWorkspaceRuntimeData(workspaceId)
+        : await cleanupKnowledgeGraphWorkspaceData(workspaceId);
+      state.error = "";
+      setErrorSignal("");
+      try {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("repair");
+        nextUrl.searchParams.delete("safe");
+        window.history.replaceState({}, "", nextUrl.toString());
+      } catch (_) {
+        // URL cleanup is best-effort in extension contexts.
+      }
+      return { ...result, skipInitialLoad: hardRepair };
+    } catch (error) {
+      state.error = `Repair Flow Map fallito: ${error.message || error}`;
+      setErrorSignal(state.error);
+      console.error("[FlowMap repair] cleanup failed", error);
+      return null;
+    } finally {
+      state.loading = false;
+      setLoadingSignal(false);
+    }
+  }
+  return null;
+};
+
+window.TrackerLensFlowMapRepair = {
+  cleanupKnowledgeGraphWorkspaceData,
+  cleanupWorkspaceRuntimeData,
 };
 
 const resolveInitialWorkspaceId = async () => {
@@ -791,8 +1054,14 @@ const loadRuntime = async (options = {}) => {
   const silent = Boolean(options.silent);
   const force = Boolean(options.force);
   const previousGraphSignature = runtimeGraphSignature();
+  if (state.runtimeLoadInFlight && !force) {
+    state.pendingRuntimeRefresh = true;
+    return;
+  }
+  state.runtimeLoadInFlight = true;
   if (state.interaction && !force) {
     state.pendingRuntimeRefresh = true;
+    state.runtimeLoadInFlight = false;
     return;
   }
   state.loading = !silent;
@@ -854,7 +1123,14 @@ const loadRuntime = async (options = {}) => {
       connections
     );
     const repairedConnections = await repairMissingDependencyConnections(nodes, mergedDependencies, connections);
-    setRuntimeState({ channels, flows, events, flowLogs, nodes, dependencies: mergedDependencies });
+    setRuntimeState({
+      channels,
+      flows,
+      events: recentRuntimeRecords(events, RUNTIME_EVENT_UI_LIMIT).map(sanitizeRuntimeEventForUi),
+      flowLogs: recentRuntimeRecords(flowLogs, RUNTIME_LOG_UI_LIMIT).map(sanitizeFlowLogForUi),
+      nodes,
+      dependencies: mergedDependencies,
+    });
     state.previewClearedAt = loadStoredPreviewClears(workspaceId);
     rebuildPreviewPayloadsFromEvents();
     if (!syncBackgroundRuntime(workspaceId)) {
@@ -874,6 +1150,7 @@ const loadRuntime = async (options = {}) => {
     state.error = error?.message || "Errore caricamento Flow Map";
     setErrorSignal(state.error);
   } finally {
+    state.runtimeLoadInFlight = false;
     state.loading = false;
     setLoadingSignal(state.loading);
     if (!state.interaction) {
@@ -932,12 +1209,13 @@ const filteredRuntimeEvents = () =>
 const mergeRuntimeEvent = (event = {}) => {
   if (!event.id) return false;
   if (state.runtime.events.some((item) => item.id === event.id)) return false;
-  state.runtime.events = [event, ...state.runtime.events].slice(0, 500);
-  updateAiProcessingFromEvent(event);
-  updatePreviewPayloads(event);
+  const safeEvent = sanitizeRuntimeEventForUi(event);
+  state.runtime.events = [safeEvent, ...state.runtime.events].slice(0, RUNTIME_EVENT_UI_LIMIT);
+  updateAiProcessingFromEvent(safeEvent);
+  updatePreviewPayloads(safeEvent);
   state.runtime.channels = state.runtime.channels.map((channel) =>
-    channel.workspaceId === event.workspaceId && channel.name === event.channel
-      ? { ...channel, lastValue: event.payload, lastEmittedAt: event.createdAt, updatedAt: event.createdAt }
+    channel.workspaceId === safeEvent.workspaceId && channel.name === safeEvent.channel
+      ? { ...channel, lastValue: safeEvent.payload, lastEmittedAt: safeEvent.createdAt, updatedAt: safeEvent.createdAt }
       : channel
   );
   setRuntimeSignal(state.runtime);
@@ -946,6 +1224,7 @@ const mergeRuntimeEvent = (event = {}) => {
 };
 
 const scheduleRuntimeDomRefresh = ({ preserveScroll = true } = {}) => {
+  if (isFlowMapRecoveryMode()) return;
   requestAnimationFrame(() => {
     if (!state.mounted || state.interaction) return;
     const baseGraph = graphModel();
@@ -1096,12 +1375,13 @@ const rebuildPreviewPayloadsFromEvents = () => {
 const mergeFlowLog = (log = {}) => {
   if (!log.id) return false;
   if ((state.runtime.flowLogs || []).some((item) => item.id === log.id)) return false;
-  state.runtime.flowLogs = [log, ...(state.runtime.flowLogs || [])].slice(0, 500);
+  state.runtime.flowLogs = [sanitizeFlowLogForUi(log), ...(state.runtime.flowLogs || [])].slice(0, RUNTIME_LOG_UI_LIMIT);
   setRuntimeSignal(state.runtime);
   return true;
 };
 
 const scheduleLiveRender = () => {
+  if (isFlowMapRecoveryMode()) return;
   if (state.liveRenderFrame) return;
   state.liveRenderFrame = requestAnimationFrame(() => {
     state.liveRenderFrame = 0;
@@ -1198,6 +1478,11 @@ const refreshLiveGraphState = () => {
 
 const connectLiveEventBus = () => {
   state.liveBus.available = Boolean(window.TrackerLensEventBus?.get);
+  if (isFlowMapRecoveryMode()) {
+    state.liveBus.connected = false;
+    state.liveBus.lastChannel = "recovery";
+    return;
+  }
   if (state.liveBusUnsubscribe) return;
   const bus = runtimeEventBus();
   if (!bus?.on) {

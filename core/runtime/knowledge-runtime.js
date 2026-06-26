@@ -231,19 +231,85 @@ window.TrackerLensKnowledgeRuntime = (() => {
       : String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 
   const entityStopWords = new Set([
-    "a", "al", "all", "alla", "alle", "anche", "and", "are", "as", "at", "avec", "but", "by",
-    "che", "con", "da", "de", "del", "della", "des", "di", "do", "du", "e", "el", "en", "et",
-    "for", "from", "gli", "ha", "has", "have", "i", "il", "in", "is", "it", "la", "las", "le",
-    "le", "les", "lo", "los", "ma", "mas", "many", "me", "mi", "mis", "more", "much", "muchas", "muchos",
-    "muy", "nel", "no", "non", "of", "on", "or", "para", "per", "por", "que", "se", "si", "sin", "son", "su", "sus", "the",
-    "to", "tra", "un", "una", "uno", "y", "ahora", "aunque", "como", "cuando", "era",
+    "a", "al", "all", "alla", "alle", "allo", "agli", "allora", "anche", "ancora", "and", "andiamo", "ando", "andò", "are", "as", "at", "avec", "but", "by",
+    "aveva", "avevano", "che", "chi", "chiese", "ci", "come", "con", "cosa", "cosi", "così", "cosí", "cui", "da", "dai", "dagli", "dalla", "dalle", "de", "del", "della", "delle", "degli", "dei", "dello", "des", "di", "disse", "do", "dove", "dunque", "du", "e", "ecco", "egli", "ella", "el", "en", "et",
+    "dopo", "eravamo", "esclamo", "esclamò", "for", "fra", "from", "gli", "grido", "gridò", "ha", "has", "have", "i", "il", "in", "io", "is", "it", "la", "las", "le",
+    "lei", "les", "li", "lo", "loro", "los", "lui", "ma", "mas", "many", "me", "mentre", "mi", "mie", "miei", "mio", "mia", "mis", "more", "much", "muchas", "muchos",
+    "muy", "ne", "nei", "nel", "nella", "nelle", "negli", "nello", "no", "noi", "non", "nostra", "nostre", "nostri", "nostro", "of", "on", "or", "o", "oppure", "para", "parlo", "parlò", "per", "perche", "perché", "poiche", "poiché", "poi", "por", "qua", "quale", "quali", "quando", "quanto", "quella", "quelle", "quelli", "quello", "questa", "queste", "questi", "questo", "que", "qui", "rispose", "se", "si", "sin", "sommo", "son", "sussurro", "sussurrò", "su", "sua", "sue", "sugli", "sui", "sul", "sulla", "sulle", "sullo", "suo", "suoi", "sus", "the",
+    "colei", "colui", "coloro", "costei", "costui", "devo", "deve", "devono", "doveva", "dovevano", "ogni", "ora", "presto", "qualcosa", "semplice", "siamo", "sono", "ti", "to", "tra", "tu", "tua", "tue", "tuo", "tuoi", "tutti", "tutto", "tutte", "tutta", "un", "una", "uno", "uscita", "vecchio", "veniva", "venivano", "venne", "vennero", "viene", "vengono", "vi", "via", "vide", "voi", "vostra", "vostre", "vostri", "vostro", "y", "ahora", "aunque", "como", "cuando", "era",
     "estuve", "hola", "pero", "pues", "realmente", "avec", "dans", "pour", "sur"
   ]);
+
+  const weakSentenceStartEntityTokens = new Set([
+    "aiuto", "allora", "andiamo", "ando", "andò", "aveva", "avevano", "chiedilo", "chiese", "come", "cosi", "così", "cosí", "disse", "dove", "dunque", "ecco", "egli", "ella", "essa", "essi", "esso", "esse",
+    "dopo", "eravamo", "esclamo", "esclamò", "grido", "gridò",
+    "mentre", "perche", "perché", "poiche", "poiché", "poi", "quale", "quali", "quando", "quanto", "quella", "quelle", "quelli", "quello",
+    "colei", "colui", "coloro", "costei", "costui", "devo", "deve", "devono", "doveva", "dovevano", "ogni", "ora", "presto", "qualcosa", "questa", "queste", "questi", "questo", "rispose", "semplice", "siamo", "sommo", "sono", "sua", "sue", "suo", "suoi", "sussurro", "sussurrò", "tutti", "tutto", "tutte", "tutta", "uscita", "vecchio", "veniva", "venivano", "venne", "vennero", "viene", "vengono", "via", "vide"
+  ]);
+
+  const biblicalSourceEntityTokens = new Set([
+    "antico testamento", "apocalisse", "atti", "bibbia", "corinzi", "deuteronomio", "esodo", "genesi", "giovanni",
+    "levi", "levitico", "lucas", "luca", "marco", "matteo", "nuovo testamento", "romani", "scrittura",
+    "scritture", "vecchio testamento"
+  ]);
+
+  const broadBiblicalSourceTokens = new Set([
+    "antico testamento", "bibbia", "nuovo testamento", "scrittura", "scritture", "vecchio testamento"
+  ]);
+
+  const semanticLocationEntityTokens = new Set([
+    "canaan", "egitto", "gerusalemme", "giordano", "israele", "roma", "sinai"
+  ]);
+
+  const semanticConceptEntityTokens = new Set([
+    "alleanza", "amore", "assoluzione", "benedizione", "fede", "grazia", "giustizia", "gloria", "legge", "luce", "morte",
+    "ombra", "pace", "parola", "peccato", "preghiera", "promessa", "redenzione", "salvezza", "santita", "santità",
+    "scrittura", "verita", "verità", "vita"
+  ]);
+
+  const semanticObjectEntityTokens = new Set([
+    "agnello", "arca", "calice", "croce", "pane", "sangue", "tempio"
+  ]);
+
+  const knownAcronymEntityTokens = new Set([
+    "ai", "aids", "api", "cpu", "css", "db", "gpu", "hiv", "html", "json", "llm", "rag", "sql", "ui", "url"
+  ]);
+
+  const isBiblicalSourceEntity = (entity = {}) =>
+    biblicalSourceEntityTokens.has(normalizeEntityToken(entity.label || entity));
+
+  const isBroadBiblicalSourceEntity = (entity = {}) =>
+    broadBiblicalSourceTokens.has(normalizeEntityToken(entity.label || entity));
 
   const normalizeEntityToken = (value = "") =>
     normalizeKnowledgeText(String(value || "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, ""));
+
+  const isNumericOnlyEntity = (label = "") => {
+    const normalized = normalizeEntityToken(label);
+    return /\d/.test(normalized) && !/[a-z]/i.test(normalized);
+  };
+
+  const isWeakEntityLabel = (label = "", source = "") => {
+    if (source === "seed" || source === "declared-name") return false;
+    const words = normalizeEntityToken(label).split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    if (isNumericOnlyEntity(label)) return true;
+    if (source === "symbol") {
+      const normalized = normalizeEntityToken(label);
+      const hasTechnicalMarker = /[\d_-]/.test(label);
+      if (!hasTechnicalMarker && !knownAcronymEntityTokens.has(normalized)) return true;
+    }
+    if (source === "quote") {
+      const lexicalWords = words.filter((word) => /[a-z]/i.test(word) && word.length >= 2);
+      const digitHeavy = words.some((word) => /\d/.test(word));
+      if (lexicalWords.length < 2 || digitHeavy) return true;
+    }
+    if (words.length === 1 && weakSentenceStartEntityTokens.has(words[0])) return true;
+    if (source === "proper-noun" && words.every((word) => entityStopWords.has(word) || weakSentenceStartEntityTokens.has(word))) return true;
+    return false;
+  };
 
   const isEntityStopWord = (label = "", config = {}) => {
     const words = normalizeEntityToken(label).split(/\s+/).filter(Boolean);
@@ -681,12 +747,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const inferEntityType = (value = "", source = "") => {
     const clean = String(value || "").trim();
+    const normalized = normalizeEntityToken(clean);
     if (/^https?:\/\//i.test(clean)) return "url";
     if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return "email";
     if (source === "declared-name") return "proper-noun";
     if (/^[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*(?:\s+[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9'’_-]*)+$/.test(clean) && /[A-ZÀ-Ý]/.test(clean)) return "quote";
     if (/^[A-Z0-9]{2,8}$/.test(clean) && /[A-Z]/.test(clean)) return "symbol";
     if (/\b(api|runtime|indexeddb|ollama|studio|openai|rag|json|php|javascript)\b/i.test(clean)) return "technology";
+    if (semanticLocationEntityTokens.has(normalized)) return "location";
+    if (semanticConceptEntityTokens.has(normalized)) return "concept";
+    if (semanticObjectEntityTokens.has(normalized)) return "object";
     if (/^[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}$/.test(clean)) return "proper-noun";
     return "term";
   };
@@ -768,6 +838,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const hasCreature = types.has("creature");
     const hasQuote = types.has("quote");
     const hasAny = (patterns = []) => patterns.some((pattern) => pattern.test(context));
+    const sourceIsBiblicalSource = isBiblicalSourceEntity(source);
+    const targetIsBiblicalSource = isBiblicalSourceEntity(target);
+    if (sourceIsBiblicalSource && targetIsBiblicalSource && source.id !== target.id) return "references";
+    if (sourceIsBiblicalSource !== targetIsBiblicalSource) return "mentions";
     if (hasPerson && hasQuote) {
       const person = [source, target].find((entity) => entity.entityType === "proper-noun");
       const quote = [source, target].find((entity) => entity.entityType === "quote");
@@ -794,6 +868,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
     if (hasPerson && hasCreature && hasAny([/\b(?:golpe[oó]|ataco|atac[oó]|arremetio|arremeti[oó]|defend|attack|hit|struck|colp)\b/])) return "confronts";
     if (hasPerson && [source, target].every((entity) => entity.entityType === "proper-noun") && hasAny([/\b(?:ayud[oó]|ayudar|llevo|llev[oó]|tom[oó] su mano|amigo|amigos|helped|helps|took|friend|aiut|aide)\b/])) return "helps";
+    if (hasAny([/\b(?:adempie|adempiuto|compie|compiuto|realizza|realizzato|porta a compimento|fulfill|fulfilled)\b/])) return "fulfills";
+    if (hasAny([/\b(?:prefigura|prefigurato|figura|anticipa|anticipato|annuncia|annunciato|tipo|foreshadow|prefigure)\b/, /\bombra\s+(?:di|del|della|dei|delle)\b/])) return "foreshadows";
+    if (hasAny([/\b(?:alleanza|patto|promessa|promette|promise|covenant)\b/]) && (hasPerson || hasConcept)) return "establishes";
+    if (hasAny([/\b(?:insegna|insegnamento|dottrina|spiega|mostra|dimostra|teach|teaches|shows)\b/]) && (hasPerson || hasConcept)) return "teaches";
+    if (hasAny([/\b(?:sacrificio|offerta|agnello|sangue|pane|calice|croce|rappresenta|simbolo|significa|represent|symbolizes)\b/]) && (hasObject || hasConcept)) return "represents";
+    if (hasAny([/\b(?:peccato|morte|nemico|condanna|contro|oppone|opposto|sconfigge|vince|opposes|defeats)\b/]) && (hasPerson || hasConcept)) return "opposes";
     if (hasPerson && hasLocation && !hasAny([/\b(?:aparecio|apareci[oó]|pregunto|pregunt[oó]|indico|indic[oó]|camino hacia|camino a)\b/]) && hasAny([/\b(?:emprendieron|llegaron|entraron|subieron|descendieron|regresar|regresaron|caminaron|viaje|travel|arrived|entered|returned|salir|partir)\b/])) return "travels_to";
     if (hasPerson && hasConcept && hasAny([/\b(?:record[oó]|demostraba|mostrando|llena de|lleno de|con\s+(?:determinacion|esperanza|coraje|compasion|autocontrol)|showed|remembered|felt)\b/])) return "expresses";
     if (hasObject && hasObject && source.id !== target.id && source.label !== target.label && hasAny([/\b(?:transform[oó]|transformandose|hervir|hervia|sumerg|became|turned|boil)\b/])) return "transforms";
@@ -809,7 +889,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const target = withType(targetType);
       return source && target ? { source, target } : { source: left, target: right };
     };
-    if (["appears_in", "interacts_with", "expresses", "encounters", "says", "uses", "heals", "confronts", "helps", "travels_to", "reveals"].includes(relationType)) {
+    if (relationType === "references") {
+      const broadSource = [left, right].find((entity) => isBroadBiblicalSourceEntity(entity));
+      const target = [left, right].find((entity) => entity.id !== broadSource?.id);
+      return broadSource && target ? { source: broadSource, target } : { source: left, target: right };
+    }
+    if (relationType === "mentions") {
+      const source = [left, right].find((entity) => isBiblicalSourceEntity(entity));
+      const target = [left, right].find((entity) => !isBiblicalSourceEntity(entity));
+      return source && target ? { source, target } : { source: left, target: right };
+    }
+    if (["appears_in", "interacts_with", "expresses", "encounters", "says", "uses", "heals", "confronts", "helps", "travels_to", "reveals", "fulfills", "foreshadows", "establishes", "teaches", "opposes"].includes(relationType)) {
       const targetType = {
         appears_in: "location",
         interacts_with: "object",
@@ -822,6 +912,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         helps: "proper-noun",
         travels_to: "location",
         reveals: withType("concept") ? "concept" : "quote",
+        fulfills: withType("concept") ? "concept" : "proper-noun",
+        foreshadows: withType("concept") ? "concept" : "proper-noun",
+        establishes: withType("concept") ? "concept" : "proper-noun",
+        teaches: withType("concept") ? "concept" : "proper-noun",
+        opposes: withType("concept") ? "concept" : "proper-noun",
       }[relationType];
       if (relationType === "helps") {
         const [first, second] = [left, right].filter((entity) => entity.entityType === "proper-noun");
@@ -837,10 +932,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return sourceFor("location", targetType);
     }
     if (relationType === "associated_with") return sourceFor("object", "concept");
+    if (relationType === "represents") return sourceFor(withType("object") ? "object" : "concept", withType("proper-noun") ? "proper-noun" : "concept");
     if (relationType === "transforms") return sourceFor("object", "object");
     if (relationType === "marks") return sourceFor("symbol", "location");
     if (relationType === "part_of") return sourceFor("symbol", "quote");
     return { source: left, target: right };
+  };
+
+  const normalizeRelationPair = (source = {}, target = {}, relationType = "co_occurs") => {
+    const symmetricTypes = new Set(["co_occurs", "associated_with", "interacts_with"]);
+    if (!symmetricTypes.has(relationType)) return { source, target };
+    return String(source.id || "") <= String(target.id || "")
+      ? { source, target }
+      : { source: target, target: source };
   };
 
   const entityLabelPositions = (text = "", label = "") => {
@@ -903,11 +1007,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const label = String(candidate.label || "").replace(/\s+/g, " ").trim();
     const normalized = normalizeEntityToken(label);
     let canonical = label;
+    if (normalized === "abramo") canonical = "Abrahamo";
     if (candidate.entityType === "object") {
       if (/^fuente de agua\s+/.test(normalized)) canonical = "fuente de agua";
       if (/^agua\s+(?:de|del|della|du|of)\s+/.test(normalized)) canonical = "agua";
       if (/^water\s+(?:source|spring)\s+/.test(normalized)) canonical = "water source";
     }
+    if (/^ombra\s+(?:uno|due|tre|1|2|3)$/.test(normalized)) canonical = "ombra";
     if (candidate.entityType === "location" && /^castillo\s+de\s+musica$/.test(normalized)) canonical = "castillo";
     if (canonical === label) return candidate;
     return {
@@ -924,6 +1030,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const rawLabel = String(value || "").replace(/\s+/g, " ").trim();
       const label = source === "seed" ? rawLabel : cleanEntityPhrase(rawLabel, config);
       if (label.length < 2 || label.length > 96) return;
+      if (isWeakEntityLabel(label, source)) return;
       if (source !== "seed" && isEntityStopWord(label, config)) return;
       candidates.push({ label, source, confidence, entityType: entityType || inferEntityType(label, source) });
     };
@@ -1024,10 +1131,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const validChunks = chunks.filter(Boolean).filter((chunk) => !looksLikeKnowledgeEnvelope(chunk.text || ""));
     if (!validChunks.length) throw new Error("Chunk Knowledge non trovato per entity extraction");
     if (config.replaceExisting !== false) {
+      const chunkDocumentIds = [...new Set(validChunks.map((chunk) => chunk.documentId).filter(Boolean))];
+      const cleanupDocumentId = payload?.documentId || (chunkDocumentIds.length === 1 ? chunkDocumentIds[0] : "");
       await deleteEntitiesAndRelations({
         workspaceId,
         chunkIds: validChunks.map((chunk) => chunk.id),
-        documentId: payload?.documentId || "",
+        documentId: cleanupDocumentId,
       });
     }
     const now = nowIso();
@@ -1113,8 +1222,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (sourceLocalCount >= maxRelationsPerEntityPerChunk || targetLocalCount >= maxRelationsPerEntityPerChunk) continue;
         const relationType = config.relationType || narrativeRelationType || inferRelationType(source, target);
         const oriented = orientRelationPair(source, target, relationType);
-        const relationSource = oriented.source || source;
-        const relationTarget = oriented.target || target;
+        const normalizedPair = normalizeRelationPair(oriented.source || source, oriented.target || target, relationType);
+        const relationSource = normalizedPair.source || source;
+        const relationTarget = normalizedPair.target || target;
         if (relationSource.id === relationTarget.id) continue;
         const relationKey = [
           chunk.documentId || payload?.documentId || workspaceId,
@@ -1192,7 +1302,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const documentId = String(payload?.documentId || config.documentId || "").trim();
     const scopedEntities = byWorkspace(entities, workspaceId)
       .filter((entity) => !documentId || entity.documentId === documentId)
-      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId);
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+      .filter((entity) => !isWeakEntityLabel(entity.label, entity.source))
+      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, config));
     const entityIds = new Set(scopedEntities.map((entity) => entity.id));
     const scopedRelations = byWorkspace(relations, workspaceId)
       .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))

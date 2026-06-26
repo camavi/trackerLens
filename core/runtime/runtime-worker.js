@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.64-kg-quality-18";
+const RUNTIME_WORKER_VERSION = "0.1.98-it-relations-13";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -22,14 +22,14 @@ const loadRuntimeScripts = () => {
     "dependency-manager.js",
     "channel-registry.js",
     "event-log-store.js",
-    "event-bus.js",
+    "event-bus.js?v=kg-20260626-it-relations-13",
     "runtime-graph-store.js",
     "runtime-snapshot-store.js",
     "node-execution-controller.js",
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260625-kg-quality-18",
+    "knowledge-runtime.js?v=kg-20260626-it-relations-13",
     "ai-agent-runtime.js",
     "orchestrator-agent-runtime.js"
   );

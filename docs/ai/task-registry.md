@@ -9,7 +9,7 @@ Last updated: 2026-06-25.
 
 ### TASK-027: Knowledge Runtime
 
-Status: Step 8 Document Store upload UX complete and user-verified; Step 9 Knowledge Graph quality and analytics started.
+Status: Step 5 AI Agent RAG verification complete and user-verified after Step 9 Knowledge Graph quality/analytics.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -19,11 +19,30 @@ Current sub-steps:
 - Step 2 Document Store + Chunk Processor: base runtime handlers implemented; topbar Knowledge Test sample added and user-verified.
 - Step 3 Embedding Generator + cosine similarity: local deterministic vectors implemented and provider-backed embeddings wired through existing AI provider profiles with local fallback.
 - Step 4 RAG Search node: base local search implemented and user-verified with clean single-result sample context.
-- Step 5 AI Agent consumes RAG context: first-class `knowledge.rag.context` prompt/job/result metadata implemented; Flow Map AI RAG Debug inspector panel added; browser verification pending.
+- Step 5 AI Agent consumes RAG context: complete and user-verified. First-class `knowledge.rag.context` prompt/job/result metadata implemented; Flow Map AI RAG Debug inspector panel shows the AI job, RAG query, result count, context and sources for the Knowledge Sample AI Answer node.
 - Step 6 Knowledge Graph base: local Entity Extractor persists entities/relations, emits entity/relation channels, and Knowledge Graph emits local snapshots; inspector/analytics pending.
 - Step 7 Knowledge inspector and analytics: Flow Map `Knowledge Graph Debug` inspector panel and `View Graph` dialog added for local entity/relation/snapshot inspection; graph visualizer migrated to canvas and user-verified.
 - Step 8 Document upload/import UX: complete and user-verified. Document Store/Text Knowledge/Memory nodes expose `Upload Document`, upload progress, document-count `Documents` dialog and `Knowledge Document Debug`; `.txt`, `.md`, `.json` and `.csv` uploads emit local EventBus document payloads, surface uploaded document/chunk metadata in inspector, support confirmed document/delete-derived-record cleanup, preserve upload/replay scope through graph snapshots, and replay stored documents without duplicating them.
-- Step 9 Knowledge Graph quality and analytics: started. View Graph now surfaces quality metrics/top hubs/repeated evidence, relation persistence deduplicates equivalent source/target/type edges across chunks while preserving occurrence metadata, conservative entity alias canonicalization has started for repeated water-source variants, and deterministic narrative relation inference adds stronger local relation types before generic fallbacks.
+- Step 9 Knowledge Graph quality and analytics: complete and user-verified. View Graph surfaces quality metrics/top hubs/repeated evidence, relation persistence deduplicates equivalent source/target/type edges across chunks while preserving occurrence metadata, conservative entity alias canonicalization covers repeated water-source variants, deterministic narrative relation inference adds stronger local relation types before generic fallbacks, and manual graph exports verified corrected `heals`/`says` behavior.
+- Knowledge Graph Test preset: `Sample Test` can now create and run a focused graph pipeline (`Manual JSON -> Document Store -> Chunk Processor -> Entity Extractor -> Knowledge Graph -> Preview`) and waits for a valid graph snapshot, using the relation-created channel as the single graph trigger.
+- Knowledge Graph Test cleanup removes stale runtime dependencies by preset id/source before rerun, preventing duplicate overlapping edges between Entity Extractor and Knowledge Graph.
+- Knowledge Graph Test connection/dependency records now use the same shape as Knowledge Test records, including `connectionId` on runtime dependencies and `channel` on connection records, so dependency repair does not create duplicate links.
+- Event Bus BroadcastChannel delivery now ignores events from other workspaces, so multiple Flow Map tabs do not cross-trigger runtime pipelines.
+- Flow Map auto-refresh now skips overlapping `loadRuntime` cycles and keeps the runtime worker idempotent when it is already running for the active workspace.
+- Added Flow Map `repair=knowledge-graph` startup cleanup and UI payload caps to recover extension workspaces that contain stale Knowledge Graph sample or oversized runtime records.
+- Added Flow Map `repair=hard` startup cleanup for workspace-scoped runtime graph reset when a plugin workspace contains corrupt nodes/edges.
+- Added standalone `flowMapRepair.html` for plugin recovery when the Flow Map page itself crashes before startup repair can complete.
+- Knowledge Graph View/Debug falls back to the latest snapshot document for the configured collection when the node's configured `documentId` is stale.
+- Knowledge Graph Debug/View now shows configured/latest/effective document ids and whether it is using the latest snapshot fallback.
+- Italian graph quality filters now reject weak Italian sentence-start tokens, pronouns and numeric-only entity labels before graph persistence.
+- Italian graph quality filters now also reject common capitalized narrative/speech verbs that were entering the graph as false proper nouns.
+- Italian graph quality now classifies common biblical/abstract labels as `concept` and object labels such as `Arca`/`Croce` as `object`.
+- Italian semantic classification is kept as re-typing only, without broad keyword promotion, to avoid inflating graph entity counts.
+- Italian cleanup filters residual pronoun-like labels (`Tutti`, `Colui`) and canonicalizes numbered shadow variants such as `Ombra Due`.
+- Italian cleanup filters residual connective labels such as `Poiché`.
+- Italian cleanup filters residual incomplete title/adjective labels such as standalone `Sommo`.
+- Italian relation quality now adds conservative context-driven relation types before generic `co_occurs`: `fulfills`, `foreshadows`, `establishes`, `teaches`, `represents` and `opposes`.
+- Italian relation quality maps biblical source/entity pairs to `mentions`, oriented from the source/book/section to the mentioned entity.
 
 Main files:
 
@@ -140,6 +159,7 @@ Main files:
 - Flow Map Preview polish: long payload headers preserve copy/clear actions, and newly created Preview nodes start clean instead of replaying older cached events.
 - Flow Map Sample Test render fix: numeric flow positions normalize to CSS percent coordinates so generated nodes render in place immediately.
 - Flow Map Knowledge Sample layout spacing: generated sample nodes use margin-aware columns and taller rows to avoid overlap.
+- Knowledge Graph Italian quality pass: biblical source/entity pairs now use `mentions`, source/source pairs now use `references`, residual capitalized verb/common labels such as `Doveva`/`Viene`/`Aveva`/`Siamo` are filtered, digit-heavy quote artifacts such as `112 L’` and generic all-caps word symbols are rejected, stale same-document entities are cleaned on regeneration and hidden from snapshots/inspector exports, View Graph exposes connected-only and with-isolated exports plus a clearer initial canvas/focus reset and canvas cleanup on close, and symmetric generic relations are normalized to prevent opposite-direction duplicates.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

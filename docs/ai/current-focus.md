@@ -154,7 +154,7 @@ Verification notes:
 - `node --check js/profileView.js` passes.
 - Local authenticated dashboard HTTP flow verified against `127.0.0.1:8000`: register `201`, summary `200`, activity `200`, system-status `200`, logout `204`.
 
-Knowledge Runtime document upload/import UX is complete and user-verified; Knowledge Graph quality and analytics is starting:
+Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics and AI Agent RAG verification are complete and user-verified:
 
 - Knowledge requirements audited after API/backend Step 4 was verified by the user;
 - existing AI memory, runtime storage and provider registry were audited before adding new stores;
@@ -199,13 +199,35 @@ Knowledge Runtime document upload/import UX is complete and user-verified; Knowl
 - Flow Map and runtime worker script URLs now include a Knowledge entity-cleanup cache-buster so browser/worker caches do not keep running an older `knowledge-runtime.js` after extraction changes.
 - Document Store Play now replays an existing stored document by emitting `knowledge.document.created` downstream instead of sending the text back into the Document Store input, preventing infinite duplicate document creation on every Play.
 - Step 8 Document Store upload/import UX is closed as user-verified after manual testing of upload, document listing, delete, preview/full document, graph debug and canvas graph visualizer interactions.
-- Step 9 Knowledge Graph quality and analytics has started: the View Graph `Info` pane now surfaces graph-level quality signals from the visible graph, including average degree, density, connected components, isolated entities, repeated relation pairs and clickable top hubs.
+- Step 9 Knowledge Graph quality and analytics is complete: the View Graph `Info` pane surfaces graph-level quality signals from the visible graph, including average degree, density, connected components, isolated entities, repeated relation pairs and clickable top hubs.
 - Knowledge relation quality now deduplicates equivalent source/target/type relations across chunks at document scope, preserving `occurrenceCount` and `chunkIds` metadata so repeated evidence does not over-densify the visual graph.
 - View Graph `Info` now reports repeated evidence from relation `occurrenceCount` and lists the strongest repeated relations, making the deduplicated graph easier to validate.
 - Entity quality now canonicalizes conservative water-source aliases such as `fuente de agua mágica/cristalina` -> `fuente de agua` and `agua del río` -> `agua`, preserving original labels in entity metadata aliases and surfacing aliases in the View Graph selection pane.
 - Knowledge Graph snapshots now include top-entity aliases so copied graph data can confirm which labels were canonicalized.
 - Relation quality now includes deterministic narrative relation inference from local context windows, adding stronger relation types such as `helps`, `heals`, `confronts`, `uses`, `travels_to`, `transforms` and `reveals` before falling back to generic `appears_in`, `interacts_with` or `co_occurs`.
 - Narrative relation inference now rejects self-edges after alias canonicalization and tightens `helps`, `reveals` and `transforms` to avoid obvious false positives such as object self-transforms or location-to-person help relations.
+- Italian Knowledge Graph quality now filters common Italian pronouns, determiners, question words and numeric-only labels before entity persistence, reducing noisy nodes such as `Egli`, `Chi`, `Suo`, `Sua`, `Cosa`, `Chiedilo` and numeric fragments across any Italian document.
+- Italian Knowledge Graph quality now also rejects common capitalized narrative/speech verbs before they become proper-noun entities, reducing nodes such as `Andiamo`, `Venne`, `Aiuto` and stripping prefixes such as `Sussurrò Ombra Due`.
+- Italian semantic classification now maps common biblical/abstract Italian labels such as `Vita`, `Morte`, `Giustizia`, `Scrittura`, `Luce`, `Ombra` and `Parola` to `concept`, and object labels such as `Arca`/`Croce` to `object`, instead of treating them as proper nouns.
+- Italian semantic classification no longer promotes all biblical concept/object terms through broad keyword extraction; it only re-types candidates already found by existing extraction, avoiding the entity count spike seen in the Italian graph export.
+- Italian graph cleanup now filters residual pronoun-like labels such as `Tutti`/`Colui`, classifies `assoluzione` as a concept and canonicalizes numbered shadow variants such as `Ombra Due` back to `ombra`.
+- Italian cleanup now filters residual connective labels such as `Poiché` that can appear as capitalized sentence starters in relation exports.
+- Italian cleanup now filters residual incomplete title/adjective labels such as standalone `Sommo`.
+- Italian relation quality now adds conservative context-driven relation types before `co_occurs`: `fulfills`, `foreshadows`, `establishes`, `teaches`, `represents` and `opposes`, using explicit Italian/biblical cues such as `adempie`, `prefigura`, `alleanza`, `insegna`, `rappresenta`, `sacrificio`, `peccato` and `morte`.
+- Italian relation quality now maps biblical source/entity pairs to `mentions` and orients them from the source/book/section (`Bibbia`, `Genesi`, `Esodo`, `Atti`, `Corinzi`, `Apocalisse`, `Vecchio/Nuovo Testamento`, `Scrittura`) to the mentioned entity, reducing generic book/person `co_occurs`.
+- Italian relation quality now maps biblical source/source pairs such as `Bibbia -> Corinzi/Esodo/Levi` to `references`, reducing another class of generic `co_occurs` edges in biblical exports.
+- Italian cleanup now filters residual capitalized verb labels such as `Doveva`, `Viene`, `Vengono`, `Veniva` and `Venivano` before they become graph entities.
+- Knowledge relation quality now normalizes symmetric edge orientation for generic relations such as `co_occurs`, preventing duplicate opposite-direction pairs such as `Abrahamo -> Dio` and `Dio -> Abrahamo`.
+- Italian cleanup now filters residual helper/connector labels such as `Aveva` and strips sentence-start prefixes such as `Così/Cosí` before candidate labels are persisted.
+- Italian cleanup now filters additional capitalized sentence-start/common-word labels such as `Eravamo`, `Siamo`, `Sono`, `Dopo`, `Qualcosa`, `Semplice`, `Vecchio`, `Via`, `Uscita`, `Ogni` and `Presto`.
+- Quote extraction now rejects digit-heavy fragments and page/chapter artifacts such as `112 L’`, requiring at least two lexical words before a quote entity can enter the graph.
+- Symbol extraction now rejects generic all-caps Italian words such as `ABITA`, `COMPIUTO`, `MEDIANTE` and `SANGUE`; only technical/acronym-like tokens such as `HIV`, `AIDS`, `API`, `RAG` or tokens with digit/separator markers are kept as symbols.
+- Entity extraction cleanup now falls back to the document id found on input chunks when `payload.documentId` is absent, so stale entities from the same document are removed on regeneration instead of lingering in graph exports.
+- Knowledge Graph snapshots now apply the same weak-entity and stopword filters as extraction, so stale low-quality entities already stored in IndexedDB are not counted or rendered even before a full extractor rerun.
+- Knowledge Graph inspector/View Graph now applies the same UI-side weak-entity filter before rendering or `Copy Data`, so raw IndexedDB entities such as stale all-caps symbols do not leak back into graph exports.
+- View Graph export now has two explicit actions: `Copy Graph` exports only connected entities/relations, while `Copy With Isolated` includes filtered isolated entities for full audit exports.
+- View Graph canvas now opens zoomed out at 85% with no default selected node, keeps non-focused nodes more readable when a node is selected and clears focus by clicking the canvas background.
+- View Graph canvas now disposes pending animation frames and pointer handlers before rerender/close, preventing repeated dialog opens from leaving active canvas work behind.
 - Narrative relation inference now uses stricter local windows for `heals` and removes generic `camino` as a `travels_to` trigger, reducing false positives where nearby characters are not the actual healed target or where a path is only being mentioned.
 - Narrative relation inference now also requires local person/object action windows for `uses`, reducing broad object-use edges caused by a person and object merely sharing the same chunk.
 - Narrative relation inference now tightens `heals` again so cure mentions alone do not mark nearby advisors/observers as healed; the healed person needs local drink/speech/voice/miracle evidence.
@@ -218,18 +240,29 @@ Knowledge Runtime document upload/import UX is complete and user-verified; Knowl
 - `heals` now uses a wider cure-scene context but only for candidate cure objects (`agua`/`té`), while `says` requires a proper-noun speaker plus quote to prevent quote-location false positives.
 - `says` no longer falls back from any proper-noun + quote pair; quotes are linked only when the candidate speaker appears before the quote and near a speech/action cue.
 - Speaker matching for `says` is capped to a tighter pre-quote window so nearby non-speakers in the same scene are not attached to the quote.
+- Step 9 Knowledge Graph quality and analytics is closed after user verification with the Liber story export: `heals` resolves to `té de color rojo -> Liber`, `says` resolves only to `Liber -> QUIERO HABLAR`, and graph exports no longer include the earlier quote/location or nearby-supporter false positives.
+- Step 5 AI Agent RAG verification is closed after user verification in the `AI RAG Debug` inspector: the Knowledge Sample AI Answer job shows a populated `RAG query`, non-empty `RAG context`, result metadata and scoped Knowledge Sample context.
+- Sample Test now includes `Knowledge Graph Test`, a focused preset that creates `Manual JSON -> Document Store -> Chunk Processor -> Entity Extractor -> Knowledge Graph -> Preview`, emits a sample narrative document and waits for a valid `knowledge.graph.snapshot`; the graph node is triggered by the relation-created channel to avoid duplicate visual links/snapshots.
+- Knowledge Graph Test cleanup now also removes stale runtime dependencies by preset id/source before recreating the graph pipeline, preventing overlapping duplicate edges on a single port after reruns.
+- Knowledge Graph Test link records now match the existing Knowledge Test pattern: runtime dependencies use a `dep_*` id, carry `connectionId`, source/target types and the connection record stores `channel` plus endpoint/node refs so dependency repair does not create duplicate visual links.
+- Event Bus broadcast delivery is now scoped by `workspaceId`, preventing two open Flow Map tabs from consuming each other's Knowledge Graph Test events through the shared BroadcastChannel.
+- Flow Map refresh now guards against overlapping `loadRuntime` calls and avoids restarting an already-running runtime worker for the same workspace, reducing renderer pressure from the 15s auto-refresh loop.
+- Flow Map startup supports `repair=knowledge-graph`, which removes stale Knowledge Graph sample nodes/edges/events/logs and oversized runtime records for the selected workspace before the first render; runtime event/log payloads are also capped for UI rendering.
+- Flow Map startup also supports `repair=hard`, a workspace-scoped runtime graph reset for plugin workspaces with corrupt node/edge records that crash after first render.
+- Added standalone `flowMapRepair.html`, a minimal IndexedDB repair page that does not load Flow Map and can delete all records referencing a corrupted workspace, including pages/widgets/runtime/knowledge stores.
+- Knowledge Graph View now falls back to the latest snapshot document in the node collection when the node config still points to an older/sample `documentId`, so uploaded-document graphs are visible without manually editing node config.
+- Knowledge Graph Debug/View now surfaces `Configured document`, `Latest snapshot document`, `Viewing document`, and a document status flag so stale config vs latest snapshot mismatches are visible.
 
 ## Next Logical Step
 
-Knowledge Graph quality and analytics.
+Knowledge Runtime end-to-end verification and cleanup.
 
 Target behavior:
 
-- graph analytics should make noisy extraction visible without requiring raw store inspection;
-- View Graph should help identify hubs, isolated entities, duplicate/repeated pairs and overly dense relation clusters;
-- Entity Extractor should continue reducing low-value narrative terms without hard-coding a single document;
-- relation quality should move beyond generic `co_occurs` where deterministic local signals are strong enough;
-- analytics should remain local-first and scoped by workspace/document/collection filters.
+- upload/import, chunking, embeddings, RAG, AI answer and graph generation should be validated as one user-facing run;
+- delete cleanup should remove stored documents and derived chunks, embeddings, entities, relations, sources and metrics;
+- debug panels should make each stage inspectable without raw IndexedDB access;
+- remaining Knowledge Runtime work should be documented before moving back to API Backend Step 5 or multilingual extraction.
 
 ## Required Updates When Work Changes
 
