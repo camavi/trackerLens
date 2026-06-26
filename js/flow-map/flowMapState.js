@@ -381,9 +381,10 @@ const syncOrchestratorAgentRuntime = (workspaceId = state.filters.workspaceId) =
   }
 };
 
-const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId) => {
+const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId, options = {}) => {
   if (!window.TrackerLensRuntimeWorker?.start) return false;
   const id = workspaceId || "workspace_global";
+  const forceRefresh = Boolean(options.forceRefresh);
   if (isFlowMapRecoveryMode()) {
     state.runtimeWorker = {
       ...state.runtimeWorker,
@@ -398,6 +399,9 @@ const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId) => {
   }
   const status = window.TrackerLensRuntimeWorker.status?.() || {};
   const active = (status.workspaces || []).find((workspace) => workspace.workspaceId === id);
+  if (forceRefresh && window.TrackerLensRuntimeWorker.refresh) {
+    window.TrackerLensRuntimeWorker.refresh(id);
+  }
   if (state.runtimeWorker.connected && state.runtimeWorker.workspaceId === id && active?.status === "running") {
     state.runtimeWorker = {
       ...state.runtimeWorker,
@@ -1133,7 +1137,7 @@ const loadRuntime = async (options = {}) => {
     });
     state.previewClearedAt = loadStoredPreviewClears(workspaceId);
     rebuildPreviewPayloadsFromEvents();
-    if (!syncBackgroundRuntime(workspaceId)) {
+    if (!syncBackgroundRuntime(workspaceId, { forceRefresh: force })) {
       syncPageRuntimes(workspaceId);
     }
     state.graphEngine = engineResult;

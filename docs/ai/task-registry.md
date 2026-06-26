@@ -3,13 +3,13 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-25.
+Last updated: 2026-06-26.
 
 ## Active
 
 ### TASK-027: Knowledge Runtime
 
-Status: Step 5 AI Agent RAG verification complete and user-verified after Step 9 Knowledge Graph quality/analytics.
+Status: Graph Query agent-consumption step in progress after Step 9 Knowledge Graph quality/analytics.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -24,9 +24,13 @@ Current sub-steps:
 - Step 7 Knowledge inspector and analytics: Flow Map `Knowledge Graph Debug` inspector panel and `View Graph` dialog added for local entity/relation/snapshot inspection; graph visualizer migrated to canvas and user-verified.
 - Step 8 Document upload/import UX: complete and user-verified. Document Store/Text Knowledge/Memory nodes expose `Upload Document`, upload progress, document-count `Documents` dialog and `Knowledge Document Debug`; `.txt`, `.md`, `.json` and `.csv` uploads emit local EventBus document payloads, surface uploaded document/chunk metadata in inspector, support confirmed document/delete-derived-record cleanup, preserve upload/replay scope through graph snapshots, and replay stored documents without duplicating them.
 - Step 9 Knowledge Graph quality and analytics: complete and user-verified. View Graph surfaces quality metrics/top hubs/repeated evidence, relation persistence deduplicates equivalent source/target/type edges across chunks while preserving occurrence metadata, conservative entity alias canonicalization covers repeated water-source variants, deterministic narrative relation inference adds stronger local relation types before generic fallbacks, and manual graph exports verified corrected `heals`/`says` behavior.
-- Knowledge Graph Test preset: `Sample Test` can now create and run a focused graph pipeline (`Manual JSON -> Document Store -> Chunk Processor -> Entity Extractor -> Knowledge Graph -> Preview`) and waits for a valid graph snapshot, using the relation-created channel as the single graph trigger.
+- Step 10 Knowledge Graph Query: in progress. `Graph Query` node emits prompt-ready `knowledge.graph.context` from persisted entities/relations/evidence, AI Agent runtime consumes Graph Context as first-class prompt/job metadata, and AI/RAG/Graph preview events now publish a clean answer payload while full prompt/context details remain in AI debug jobs.
+- Knowledge Graph Test preset: `Sample Test` can now create and run a focused graph pipeline (`Manual JSON -> Document Store -> Chunk Processor -> Entity Extractor -> Knowledge Graph -> Preview`, plus `Graph Query -> Preview -> AI Agent`) and waits for graph context consumed by an AI Agent.
 - Knowledge Graph Test cleanup removes stale runtime dependencies by preset id/source before rerun, preventing duplicate overlapping edges between Entity Extractor and Knowledge Graph.
 - Knowledge Graph Test connection/dependency records now use the same shape as Knowledge Test records, including `connectionId` on runtime dependencies and `channel` on connection records, so dependency repair does not create duplicate links.
+- Knowledge and AI Agent runtime event delivery is now dependency-aware for linked nodes, so disconnected Graph Query/AI sample nodes no longer keep consuming stale/same-channel query or context events.
+- Graph Query no longer executes a saved config query from plain `knowledge.graph.updated` index-refresh events; those updates are ignored unless the payload carries an explicit query. A visual graph-source edge is now required before Graph Query reads persisted graph data; otherwise it emits an empty graph context.
+- Forced Flow Map runtime reloads now refresh the background worker immediately, so link deletion updates live runtime subscriptions without waiting for a manual page refresh.
 - Event Bus BroadcastChannel delivery now ignores events from other workspaces, so multiple Flow Map tabs do not cross-trigger runtime pipelines.
 - Flow Map auto-refresh now skips overlapping `loadRuntime` cycles and keeps the runtime worker idempotent when it is already running for the active workspace.
 - Added Flow Map `repair=knowledge-graph` startup cleanup and UI payload caps to recover extension workspaces that contain stale Knowledge Graph sample or oversized runtime records.

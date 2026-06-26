@@ -599,6 +599,22 @@ const configFieldDefinitions = (node = {}) => {
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.updated" },
       ];
     }
+    if (subtype === "graph-query") {
+      return [
+        { key: "query", label: "Query", type: "textarea", placeholder: "Dio, Abramo, fede..." },
+        { key: "depth", label: "Depth", placeholder: "1" },
+        { key: "topK", label: "Top entities", placeholder: "12" },
+        { key: "maxRelations", label: "Max relations", placeholder: "48" },
+        { key: "maxEvidence", label: "Max evidence chunks", placeholder: "6" },
+        { key: "maxContextChars", label: "Max context chars", placeholder: "5200" },
+        { key: "relationTypes", label: "Relation types", placeholder: "mentions,references,co_occurs" },
+        { key: "includeEvidence", label: "Include evidence", type: "checkbox", defaultValue: true },
+        { key: "preferLatestDocument", label: "Use latest document", type: "checkbox", defaultValue: true },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
+      ];
+    }
     return [
       { key: "title", label: "Title", placeholder: "Knowledge Document" },
       { key: "sourceType", label: "Source type", placeholder: "manual" },

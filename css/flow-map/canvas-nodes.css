@@ -1297,6 +1297,46 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
   background: rgba(56, 189, 248, 0.14);
 }
 
+.tl-flow-kg-query-scope {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.tl-flow-kg-query-scope > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 5px;
+  padding: 6px;
+  border: 1px solid rgba(var(--node-rgb, 56, 189, 248), 0.2);
+  border-radius: 6px;
+  background: rgba(3, 9, 14, 0.48);
+}
+
+.tl-flow-kg-query-scope strong,
+.tl-flow-kg-query-scope em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-kg-query-scope strong {
+  color: rgba(226, 232, 240, 0.62);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.tl-flow-kg-query-scope em {
+  grid-column: 1 / -1;
+  color: rgb(var(--node-rgb, 56, 189, 248));
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+}
+
 .tl-flow-port-node-body {
   display: grid;
   gap: 8px;

@@ -284,7 +284,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const normalizeEntityToken = (value = "") =>
     normalizeKnowledgeText(String(value || "")
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, ""));
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\p{L}\p{N}_-]+/gu, " "));
 
   const isNumericOnlyEntity = (label = "") => {
     const normalized = normalizeEntityToken(label);
@@ -597,13 +598,32 @@ window.TrackerLensKnowledgeRuntime = (() => {
     !node.metadata?.library &&
     !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
   const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))];
+  const nodeIncomingDependencies = (node = {}, dependencies = []) =>
+    (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+  const dependencyChannel = (dependency = {}) =>
+    dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "";
   const nodeInputs = (node = {}, dependencies = []) => {
-    const incoming = dependencies
-      .filter((dependency) => dependency.targetNodeId === node.id)
-      .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
+    const incomingDependencies = nodeIncomingDependencies(node, dependencies);
+    const incoming = incomingDependencies
+      .map(dependencyChannel)
       .filter(Boolean);
-    return unique([...(node.inputs || []), ...(node.channels || []), ...incoming]);
+    if (incoming.length) return unique(incoming);
+    return unique([...(node.inputs || []), ...(node.channels || [])]);
   };
+  const acceptsDependencyEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
+    const incomingDependencies = nodeIncomingDependencies(node, dependencies);
+    if (!incomingDependencies.length) return true;
+    if (event?.targetNodeId && event.targetNodeId === node.id) return true;
+    const eventChannel = String(event?.channel || "");
+    const sourceNodeId = String(event?.sourceNodeId || "");
+    return incomingDependencies.some((dependency) =>
+      String(dependency.sourceNodeId || "") === sourceNodeId &&
+      dependencyChannel(dependency) === eventChannel
+    );
+  };
+  const hasGraphSourceDependency = (node = {}, dependencies = []) =>
+    nodeIncomingDependencies(node, dependencies)
+      .some((dependency) => dependencyChannel(dependency) === "knowledge.graph.updated");
   const nodeOutput = (node = {}, config = {}, fallback = "knowledge.output") =>
     config.outputChannel || config.output || node.outputs?.[0] || fallback;
   const assignedEmbeddingNodeIds = (node = {}, runtime = {}) =>
@@ -611,6 +631,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((dependency) => dependency.targetNodeId === node.id)
       .filter((dependency) => (dependency.channel || dependency.metadata?.sourcePort || dependency.metadata?.targetPort) === "knowledge.embedding.created")
       .map((dependency) => dependency.sourceNodeId));
+
+  const relationMatchesType = (relation = {}, allowedTypes = []) =>
+    !allowedTypes.length || allowedTypes.includes(String(relation.relationType || "").toLowerCase());
+
+  const graphEntityText = (entity = {}) =>
+    [entity.label, entity.id, entity.entityType, ...(entity.metadata?.aliases || [])].map((value) => String(value || "")).join(" ");
+
+  const scoreGraphEntity = (entity = {}, queryTokens = [], cleanQuery = "") => {
+    const haystack = normalizeEntityToken(graphEntityText(entity));
+    if (!haystack) return 0;
+    let score = cleanQuery && haystack.includes(cleanQuery) ? 8 : 0;
+    queryTokens.forEach((token) => {
+      if (!token || token.length < 2) return;
+      if (haystack === token) score += 6;
+      else if (haystack.includes(token)) score += 3;
+    });
+    return score + Math.min(3, Number(entity.confidence || 0) * 3);
+  };
 
   const createDocument = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
     const now = nowIso();
@@ -1299,8 +1337,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
       listStore(STORES.relations),
     ]);
     const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
-    const documentId = String(payload?.documentId || config.documentId || "").trim();
-    const scopedEntities = byWorkspace(entities, workspaceId)
+    const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const preferLatestDocument = payload?.preferLatestDocument === true || payload?.preferLatestDocument === "true" ||
+      config.preferLatestDocument === true || config.preferLatestDocument === "true";
+    const workspaceEntities = byWorkspace(entities, workspaceId)
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId);
+    const latestDocumentEntity = [...workspaceEntities]
+      .filter((entity) => entity.documentId)
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+    const configuredDocumentHasEntities = configuredDocumentId
+      ? workspaceEntities.some((entity) => entity.documentId === configuredDocumentId)
+      : false;
+    const documentId = configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
+      ? configuredDocumentId
+      : latestDocumentEntity?.documentId || configuredDocumentId;
+    const documentStatus = configuredDocumentId && documentId && configuredDocumentId !== documentId
+      ? "using latest document"
+      : configuredDocumentId
+        ? "configured"
+        : "all";
+    const scopedEntities = workspaceEntities
       .filter((entity) => !documentId || entity.documentId === documentId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
       .filter((entity) => !isWeakEntityLabel(entity.label, entity.source))
@@ -1444,6 +1500,201 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return record;
   };
 
+  const queryGraph = async ({ workspaceId, query = "", config = {}, payload = {} } = {}) => {
+    const cleanQuery = String(query || config.query || payload?.entity || payload?.label || "").trim();
+    if (!cleanQuery) throw new Error("Query Knowledge Graph vuota");
+    const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
+    const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const preferLatestDocument = payload?.preferLatestDocument === true || payload?.preferLatestDocument === "true" ||
+      config.preferLatestDocument === true || config.preferLatestDocument === "true";
+    const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
+    const topK = Math.max(1, Math.min(80, Number(payload?.topK || config.topK || 12)));
+    const maxRelations = Math.max(1, Math.min(240, Number(payload?.maxRelations || config.maxRelations || 48)));
+    const maxEvidence = Math.max(0, Math.min(24, Number(payload?.maxEvidence || config.maxEvidence || 6)));
+    const includeEvidence = payload?.includeEvidence !== false && config.includeEvidence !== false;
+    const relationTypes = splitConfigList(payload?.relationTypes || config.relationTypes).map((item) => item.toLowerCase());
+    const cleanToken = normalizeEntityToken(cleanQuery);
+    const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !entityStopWords.has(token));
+    const [entities, relations, chunks] = await Promise.all([
+      listStore(STORES.entities),
+      listStore(STORES.relations),
+      listStore(STORES.chunks),
+    ]);
+    const workspaceEntities = byWorkspace(entities, workspaceId)
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId);
+    const latestDocumentEntity = [...workspaceEntities]
+      .filter((entity) => entity.documentId)
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+    const configuredDocumentHasEntities = configuredDocumentId
+      ? workspaceEntities.some((entity) => entity.documentId === configuredDocumentId)
+      : false;
+    const documentId = configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
+      ? configuredDocumentId
+      : latestDocumentEntity?.documentId || configuredDocumentId;
+    const documentStatus = configuredDocumentId && documentId && configuredDocumentId !== documentId
+      ? "using latest document"
+      : configuredDocumentId
+        ? "configured"
+        : "all";
+    const scopedEntities = workspaceEntities
+      .filter((entity) => !documentId || entity.documentId === documentId)
+      .filter((entity) => !isWeakEntityLabel(entity.label, entity.source))
+      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, config));
+    const scopedEntityIds = new Set(scopedEntities.map((entity) => entity.id));
+    const entityById = new Map(scopedEntities.map((entity) => [entity.id, entity]));
+    const scopedRelations = byWorkspace(relations, workspaceId)
+      .filter((relation) => scopedEntityIds.has(relation.sourceEntityId) && scopedEntityIds.has(relation.targetEntityId))
+      .filter((relation) => !documentId || relation.documentId === documentId)
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+      .filter((relation) => relationMatchesType(relation, relationTypes));
+    const rankedSeeds = scopedEntities
+      .map((entity) => ({ entity, score: scoreGraphEntity(entity, queryTokens, cleanToken) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || String(a.entity.label || "").localeCompare(String(b.entity.label || "")))
+      .slice(0, topK);
+    const seedIds = new Set(rankedSeeds.map((item) => item.entity.id));
+    const selectedRelationIds = new Set();
+    const selectedEntityIds = new Set(seedIds);
+    let frontier = new Set(seedIds);
+    for (let level = 0; level < depth && frontier.size; level += 1) {
+      const next = new Set();
+      scopedRelations.forEach((relation) => {
+        const touches = frontier.has(relation.sourceEntityId) || frontier.has(relation.targetEntityId);
+        if (!touches || selectedRelationIds.size >= maxRelations) return;
+        selectedRelationIds.add(relation.id);
+        [relation.sourceEntityId, relation.targetEntityId].forEach((id) => {
+          if (!selectedEntityIds.has(id)) next.add(id);
+          selectedEntityIds.add(id);
+        });
+      });
+      frontier = next;
+    }
+    const selectedRelations = scopedRelations.filter((relation) => selectedRelationIds.has(relation.id));
+    if (!selectedRelations.length && rankedSeeds.length) {
+      scopedRelations
+        .filter((relation) => seedIds.has(relation.sourceEntityId) || seedIds.has(relation.targetEntityId))
+        .slice(0, maxRelations)
+        .forEach((relation) => {
+          selectedRelationIds.add(relation.id);
+          selectedEntityIds.add(relation.sourceEntityId);
+          selectedEntityIds.add(relation.targetEntityId);
+        });
+    }
+    const relationsResult = scopedRelations.filter((relation) => selectedRelationIds.has(relation.id)).slice(0, maxRelations);
+    const degree = new Map();
+    relationsResult.forEach((relation) => {
+      degree.set(relation.sourceEntityId, (degree.get(relation.sourceEntityId) || 0) + 1);
+      degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) || 0) + 1);
+    });
+    const seedScoreById = new Map(rankedSeeds.map((item) => [item.entity.id, item.score]));
+    const entitiesResult = [...selectedEntityIds]
+      .map((id) => entityById.get(id))
+      .filter(Boolean)
+      .sort((a, b) =>
+        (seedScoreById.get(b.id) || 0) - (seedScoreById.get(a.id) || 0) ||
+        (degree.get(b.id) || 0) - (degree.get(a.id) || 0) ||
+        String(a.label || "").localeCompare(String(b.label || ""))
+      )
+      .slice(0, Math.max(topK, 24));
+    const chunkIds = new Set([
+      ...entitiesResult.map((entity) => entity.chunkId).filter(Boolean),
+      ...relationsResult.map((relation) => relation.chunkId).filter(Boolean),
+    ]);
+    const evidence = includeEvidence
+      ? byWorkspace(chunks, workspaceId)
+        .filter((chunk) => chunkIds.has(chunk.id))
+        .slice(0, maxEvidence)
+        .map((chunk, index) => ({
+          index: index + 1,
+          chunkId: chunk.id,
+          documentId: chunk.documentId,
+          text: String(chunk.text || "").slice(0, 900),
+          metadata: chunk.metadata || {},
+        }))
+      : [];
+    const relationLines = relationsResult.slice(0, Math.min(40, maxRelations)).map((relation, index) => {
+      const source = entityById.get(relation.sourceEntityId);
+      const target = entityById.get(relation.targetEntityId);
+      return `[R${index + 1}] ${source?.label || relation.sourceEntityId} -${relation.relationType || "related_to"}-> ${target?.label || relation.targetEntityId}`;
+    });
+    const entityLines = entitiesResult.slice(0, 30).map((entity, index) =>
+      `[E${index + 1}] ${entity.label || entity.id} (${entity.entityType || "entity"}, connections=${degree.get(entity.id) || 0})`
+    );
+    const evidenceLines = evidence.map((item) => `[S${item.index}] ${String(item.text || "").slice(0, 620)}`);
+    const rawContext = [
+      `Knowledge Graph query: ${cleanQuery}`,
+      entityLines.length ? `Entities:\n${entityLines.join("\n")}` : "Entities: none",
+      relationLines.length ? `Relations:\n${relationLines.join("\n")}` : "Relations: none",
+      evidenceLines.length ? `Evidence:\n${evidenceLines.join("\n\n")}` : "",
+    ].filter(Boolean).join("\n\n");
+    const maxContextChars = Math.max(1200, Math.min(12000, Number(payload?.maxContextChars || config.maxContextChars || 5200)));
+    const context = rawContext.length > maxContextChars ? `${rawContext.slice(0, maxContextChars)}\n...` : rawContext;
+    const record = {
+      id: uniqueId("kgquery"),
+      workspaceId,
+      query: cleanQuery,
+      context,
+      entities: entitiesResult,
+      relations: relationsResult,
+      evidence,
+      resultCount: entitiesResult.length,
+      relationCount: relationsResult.length,
+      scope: {
+        workspaceId,
+        collectionId,
+        configuredDocumentId,
+        documentId,
+        documentStatus,
+        depth,
+        relationTypes,
+        mode: "knowledge-graph",
+      },
+      status: "ready",
+      createdAt: nowIso(),
+    };
+    await putRecord(STORES.queries, record);
+    return record;
+  };
+
+  const emptyGraphQuery = async ({ workspaceId, query = "", config = {}, payload = {}, reason = "missing-graph-source" } = {}) => {
+    const cleanQuery = String(query || config.query || payload?.entity || payload?.label || "").trim();
+    const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
+    const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
+    const relationTypes = splitConfigList(payload?.relationTypes || config.relationTypes).map((item) => item.toLowerCase());
+    const context = [
+      `Knowledge Graph query: ${cleanQuery}`,
+      `Graph source: ${reason}`,
+      "Entities: none",
+      "Relations: none",
+    ].join("\n\n");
+    const record = {
+      id: uniqueId("kgquery"),
+      workspaceId,
+      query: cleanQuery,
+      context,
+      entities: [],
+      relations: [],
+      evidence: [],
+      resultCount: 0,
+      relationCount: 0,
+      scope: {
+        workspaceId,
+        collectionId,
+        configuredDocumentId,
+        documentId: "",
+        documentStatus: reason,
+        depth,
+        relationTypes,
+        mode: "knowledge-graph",
+      },
+      status: reason,
+      createdAt: nowIso(),
+    };
+    await putRecord(STORES.queries, record);
+    return record;
+  };
+
   class KnowledgeRuntime {
     constructor({ workspaceId = "workspace_global" } = {}) {
       this.workspaceId = workspaceId;
@@ -1513,6 +1764,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
     async handleEvent({ node, payload, event }) {
       if (!node?.id || event?.sourceNodeId === node.id || event?.meta?.knowledgeRuntime === node.id) return;
+      if (!acceptsDependencyEvent({ node, event, dependencies: this.runtime?.dependencies || [] })) {
+        await this.log({
+          node,
+          level: "debug",
+          message: `Knowledge skipped unlinked ${event?.channel || "event"}: ${node.label || node.id}`,
+          context: {
+            inputChannel: event?.channel || "",
+            sourceNodeId: event?.sourceNodeId || "",
+            inputEventId: event?.id || "",
+          },
+        });
+        return;
+      }
       const startedAt = performance.now();
       const config = nodeConfig(node);
       const subtype = nodeSubtype(node);
@@ -1554,6 +1818,37 @@ window.TrackerLensKnowledgeRuntime = (() => {
         } else if (subtype === "knowledge-graph") {
           result = await buildKnowledgeGraphSnapshot({ workspaceId: this.workspaceId, payload, config });
           outputChannel = nodeOutput(node, config, "knowledge.graph.updated");
+        } else if (subtype === "graph-query") {
+          const payloadQuery = payload?.query || payload?.text || payload?.question || payload?.entity || "";
+          const isGraphUpdateSignal = event?.channel === "knowledge.graph.updated";
+          const query = payloadQuery || (isGraphUpdateSignal ? "" : config.query || "");
+          if (!String(query || "").trim()) {
+            await this.log({
+              node,
+              message: `Knowledge Graph query signal ignored: ${node.label || node.id}`,
+              context: {
+                action: "graph-query-index-signal",
+                inputChannel: event?.channel || "",
+                sourceNodeId: event?.sourceNodeId || "",
+                reason: "missing-query",
+              },
+            });
+            return;
+          }
+          const allowGlobalGraphLookup = config.allowGlobalGraphLookup === true || config.allowGlobalGraphLookup === "true" ||
+            payload?.allowGlobalGraphLookup === true || payload?.allowGlobalGraphLookup === "true";
+          if (!allowGlobalGraphLookup && !hasGraphSourceDependency(node, this.runtime?.dependencies || [])) {
+            result = await emptyGraphQuery({
+              workspaceId: this.workspaceId,
+              query,
+              payload,
+              config,
+              reason: "missing-graph-source",
+            });
+          } else {
+            result = await queryGraph({ workspaceId: this.workspaceId, query, payload, config });
+          }
+          outputChannel = nodeOutput(node, config, "knowledge.graph.context");
         } else if (subtype === "rag-search") {
           const query = payload?.query || payload?.text || payload?.question || config.query || "";
           if (!String(query || "").trim()) {
@@ -1649,6 +1944,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     createChunks,
     createEmbeddings,
     search,
+    queryGraph,
     cosineSimilarity,
     tokenVector,
     get,

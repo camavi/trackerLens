@@ -3,11 +3,11 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-23.
+Last updated: 2026-06-26.
 
 ## Active Area
 
-Knowledge Runtime local-first baseline.
+Knowledge Runtime Graph Query and agent consumption.
 
 ## Completed Sequence
 
@@ -17,6 +17,20 @@ Knowledge Runtime local-first baseline.
 4. Step 4: real compound commands.
 
 ## Latest Completed Work
+
+Knowledge Graph Query baseline is in progress:
+
+- `Graph Query` is being added as a first-class Knowledge node that reads persisted entities/relations and emits `knowledge.graph.context`.
+- Graph context includes matched entities, neighboring relations, scoped evidence chunks and a compact prompt-ready context block.
+- AI Agent runtime is being extended to recognize `knowledge.graph.context` and inject it into prompts/job metadata like RAG context.
+- `Knowledge Graph Test` is being extended to include `Graph Query -> Preview -> AI Agent`, so agents can consume graph information, not just visualize snapshots.
+- Graph Query now supports `preferLatestDocument` so sample flows keep working when the user replaces the uploaded document inside the same collection.
+- AI Agent graph/RAG responses now emit a clean preview payload (`question`, `answer`, compact relations/entities/evidence or sources) while the AI debug job keeps the full prompt and raw context for inspection.
+- Knowledge runtime now routes events by actual incoming dependencies when a node has visual links, preventing disconnected Graph Query/source nodes from continuing to consume same-channel events.
+- AI Agent runtime now applies the same dependency-aware event routing, so linked agents do not consume unlinked Graph/RAG context events from the same global channel.
+- Graph Query now treats `knowledge.graph.updated` as an index-refresh signal only; it no longer falls back to a saved `config.query` on graph updates without an explicit query payload.
+- Graph Query requires a visual `knowledge.graph.updated` graph-source edge before it reads persisted graph data; without that edge it emits an empty graph context instead of querying the workspace store. Graph updates still do not trigger a query by themselves.
+- Flow Map forced runtime reload now explicitly refreshes the background runtime worker, so deleting a link updates live Knowledge/AI subscriptions without requiring a browser refresh.
 
 Flow Map library separation baseline is complete:
 

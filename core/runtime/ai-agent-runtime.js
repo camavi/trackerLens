@@ -117,11 +117,24 @@ window.TrackerLensAiAgentRuntime = (() => {
     !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
 
   const agentInputs = (node = {}, dependencies = []) => {
-    const incoming = dependencies
-      .filter((dependency) => dependency.targetNodeId === node.id)
-      .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
+    const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+    const incoming = incomingDependencies
+      .map((dependency) => dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort)
       .filter(Boolean);
-    return unique([...(node.inputs || []), ...(node.channels || []), ...incoming]);
+    if (incoming.length) return unique(incoming);
+    return unique([...(node.inputs || []), ...(node.channels || [])]);
+  };
+
+  const agentAcceptsDependencyEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
+    const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+    if (!incomingDependencies.length) return true;
+    if (event?.targetNodeId && event.targetNodeId === node.id) return true;
+    const eventChannel = String(event?.channel || "");
+    const sourceNodeId = String(event?.sourceNodeId || "");
+    return incomingDependencies.some((dependency) =>
+      String(dependency.sourceNodeId || "") === sourceNodeId &&
+      String(dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "") === eventChannel
+    );
   };
 
   const agentOutput = (node = {}, config = {}) =>
@@ -144,6 +157,11 @@ window.TrackerLensAiAgentRuntime = (() => {
     event?.channel === "knowledge.rag.context" ||
     (event?.eventType === "knowledge_emit" && event?.meta?.subtype === "rag-search" && payload?.context !== undefined) ||
     (payload?.queryId && Array.isArray(payload?.results) && payload?.context !== undefined);
+
+  const isGraphContextEvent = ({ payload = {}, event = {} } = {}) =>
+    event?.channel === "knowledge.graph.context" ||
+    (event?.eventType === "knowledge_emit" && event?.meta?.subtype === "graph-query" && payload?.context !== undefined) ||
+    (payload?.queryId && Array.isArray(payload?.entities) && Array.isArray(payload?.relations) && payload?.context !== undefined);
 
   const normalizeRagContext = ({ payload = {}, event = {} } = {}) => {
     if (!isRagContextEvent({ payload, event })) return null;
@@ -184,6 +202,170 @@ window.TrackerLensAiAgentRuntime = (() => {
     ].filter(Boolean).join("\n\n");
   };
 
+  const normalizeGraphContext = ({ payload = {}, event = {} } = {}) => {
+    if (!isGraphContextEvent({ payload, event })) return null;
+    const entities = Array.isArray(payload.entities) ? payload.entities : [];
+    const relations = Array.isArray(payload.relations) ? payload.relations : [];
+    const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+    const compactText = (value = "", max = 3600) => {
+      const text = String(value || "").trim();
+      return text.length > max ? `${text.slice(0, max)}\n...` : text;
+    };
+    return {
+      query: String(payload.query || payload.question || "").trim(),
+      queryId: payload.queryId || payload.id || "",
+      context: compactText(payload.context, 4200),
+      resultCount: Number(payload.resultCount ?? entities.length) || 0,
+      relationCount: Number(payload.relationCount ?? relations.length) || 0,
+      entities: entities.slice(0, 16).map((entity) => ({
+        id: entity.id || "",
+        label: entity.label || "",
+        entityType: entity.entityType || "",
+        confidence: Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence) : null,
+        connections: Number.isFinite(Number(entity.connections)) ? Number(entity.connections) : null,
+        score: Number.isFinite(Number(entity.score)) ? Number(entity.score) : null,
+        documentId: entity.documentId || "",
+        chunkId: entity.chunkId || "",
+      })),
+      relations: relations.slice(0, 32).map((relation) => ({
+        id: relation.id || "",
+        sourceEntityId: relation.sourceEntityId || "",
+        targetEntityId: relation.targetEntityId || "",
+        sourceLabel: relation.sourceLabel || "",
+        targetLabel: relation.targetLabel || "",
+        relationType: relation.relationType || "",
+        confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
+        documentId: relation.documentId || "",
+        chunkId: relation.chunkId || "",
+      })),
+      evidence: evidence.slice(0, 4).map((item, index) => ({
+        index: item.index || index + 1,
+        chunkId: item.chunkId || "",
+        documentId: item.documentId || "",
+        text: compactText(item.text, 520),
+        metadata: item.metadata || {},
+      })),
+      scope: payload.scope || {},
+      inputChannel: event?.channel || "",
+      inputEventId: event?.id || "",
+    };
+  };
+
+  const renderGraphPromptBlock = (graphContext = null) => {
+    if (!graphContext) return "";
+    const evidenceLines = (graphContext.evidence || []).map((source, index) =>
+      `[${index + 1}] document=${source.documentId || ""} chunk=${source.chunkId || ""}\n${String(source.text || "").slice(0, 520)}`
+    ).join("\n\n");
+    return [
+      "Knowledge Graph context:",
+      graphContext.query ? `Query: ${graphContext.query}` : "",
+      graphContext.context ? `Graph neighborhood:\n${graphContext.context}` : "",
+      evidenceLines ? `Evidence:\n${evidenceLines}` : "",
+      "Use the Knowledge Graph context as structured memory. Prefer explicit relations and evidence over generic assumptions.",
+    ].filter(Boolean).join("\n\n");
+  };
+
+  const compactTextValue = (value = "", max = 900) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return text.length > max ? `${text.slice(0, max)}\n...` : text;
+  };
+
+  const resultAnswerText = (result = {}) => {
+    if (typeof result.text === "string" && result.text.trim()) return result.text.trim();
+    if (typeof result.response?.text === "string" && result.response.text.trim()) return result.response.text.trim();
+    if (typeof result.response === "string" && result.response.trim()) return result.response.trim();
+    if (result.response !== undefined && result.response !== null) return compactJson(result.response, 1200);
+    if (typeof result.summary === "string" && result.summary.trim()) return result.summary.trim();
+    return "";
+  };
+
+  const cleanRelation = (relation = {}) => ({
+    source: relation.sourceLabel || relation.source || "",
+    type: relation.relationType || relation.type || "",
+    target: relation.targetLabel || relation.target || "",
+    confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
+    documentId: relation.documentId || "",
+    chunkId: relation.chunkId || "",
+  });
+
+  const cleanEntity = (entity = {}) => ({
+    label: entity.label || "",
+    type: entity.entityType || entity.type || "",
+    confidence: Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence) : null,
+    connections: Number.isFinite(Number(entity.connections)) ? Number(entity.connections) : null,
+    score: Number.isFinite(Number(entity.score)) ? Number(entity.score) : null,
+    documentId: entity.documentId || "",
+    chunkId: entity.chunkId || "",
+  });
+
+  const cleanEvidence = (item = {}, index = 0) => ({
+    index: item.index || index + 1,
+    documentId: item.documentId || "",
+    chunkId: item.chunkId || "",
+    text: compactTextValue(item.text, 520),
+  });
+
+  const buildCleanAiPayload = ({ result = {}, config = {} } = {}) => {
+    const mode = String(config.emitMode || config.outputMode || "").toLowerCase();
+    const graphContext = result.graphContext || null;
+    const ragContext = result.ragContext || null;
+    if (!graphContext && !ragContext && !["clean", "answer"].includes(mode)) return result;
+
+    const answer = resultAnswerText(result);
+    const base = {
+      provider: result.provider || "",
+      model: result.model || "",
+      role: result.role || "",
+      answer,
+      response: { text: answer },
+      text: answer,
+      usage: result.usage || {},
+      cost: result.cost || {},
+      latencyMs: result.latencyMs ?? null,
+      inputChannel: result.inputChannel || "",
+    };
+
+    if (graphContext) {
+      return {
+        ...base,
+        contextType: "knowledge-graph",
+        question: graphContext.query || "",
+        graph: {
+          queryId: graphContext.queryId || "",
+          resultCount: graphContext.resultCount ?? 0,
+          relationCount: graphContext.relationCount ?? 0,
+          scope: graphContext.scope || {},
+          entities: (graphContext.entities || []).slice(0, 10).map(cleanEntity),
+          relations: (graphContext.relations || []).slice(0, 16).map(cleanRelation),
+          evidence: (graphContext.evidence || []).slice(0, 4).map(cleanEvidence),
+        },
+      };
+    }
+
+    if (ragContext) {
+      return {
+        ...base,
+        contextType: "rag",
+        question: ragContext.query || "",
+        rag: {
+          queryId: ragContext.queryId || "",
+          resultCount: ragContext.resultCount ?? 0,
+          scope: ragContext.scope || {},
+          sources: (ragContext.sources || []).slice(0, 6).map((source, index) => ({
+            index: source.index || index + 1,
+            score: Number.isFinite(Number(source.score)) ? Number(source.score) : null,
+            documentId: source.documentId || "",
+            chunkId: source.chunkId || "",
+            text: compactTextValue(source.text, 520),
+          })),
+        },
+      };
+    }
+
+    return base;
+  };
+
   const renderPromptTemplate = (template = "", context = {}) =>
     String(template || "").replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token) => {
       const key = String(token || "").trim();
@@ -198,12 +380,17 @@ window.TrackerLensAiAgentRuntime = (() => {
   const buildPrompt = ({ node, payload, event, memory = "", config = nodeConfig(node) }) => {
     const subtype = nodeSubtype(node);
     const ragContext = config.ragContext || normalizeRagContext({ payload, event });
+    const graphContext = config.graphContext || normalizeGraphContext({ payload, event });
     const ragPromptBlock = renderRagPromptBlock(ragContext);
+    const hasCustomPromptTemplate = Boolean(String(config.promptTemplate || config.prompt || config.instruction || "").trim());
+    const graphPromptBlock = hasCustomPromptTemplate ? "" : renderGraphPromptBlock(graphContext);
     const systemPrompt = String(config.systemPrompt || "").trim() ||
       `You are a Trackers Lens ${subtype || "AI"} runtime node.`;
     const template = String(config.promptTemplate || config.prompt || config.instruction || "").trim() ||
       (ragContext
         ? "Answer the Knowledge query using the provided RAG context.\n\nQuery: {{ragContext.query}}\n\nContext:\n{{ragContext.context}}\n\nPayload: {{payload}}\nMemory: {{memory}}"
+        : graphContext
+          ? "Answer the Knowledge Graph query using the provided graph context.\n\nQuery: {{graphContext.query}}\n\nGraph context:\n{{graphContext.context}}\n\nPayload: {{payload}}\nMemory: {{memory}}"
         : "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}");
     const outputInstructions = String(config.outputInstructions || "").trim() ||
       "Return structured runtime output ready for channel emission.";
@@ -221,6 +408,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       },
       inputDataContext: config.inputDataContext || null,
       ragContext,
+      graphContext,
     };
     return [
       systemPrompt,
@@ -228,6 +416,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       `Role: ${config.agentType || subtype || "agent"}`,
       config.inputDataContext ? `Input data context:\n${compactJson(config.inputDataContext)}` : "",
       ragPromptBlock ? `\n${ragPromptBlock}` : "",
+      graphPromptBlock ? `\n${graphPromptBlock}` : "",
       `\nTask:\n${renderPromptTemplate(template, context)}`,
       `\nOutput instructions:\n${outputInstructions}`,
     ].filter(Boolean).join("\n");
@@ -269,7 +458,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     return byChannel;
   };
 
-  const fallbackResponse = ({ node, payload, event, reason = "", ragContext = null }) => {
+  const fallbackResponse = ({ node, payload, event, reason = "", ragContext = null, graphContext = null }) => {
     const subtype = nodeSubtype(node);
     const keys = payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload).slice(0, 12) : [];
     return {
@@ -282,6 +471,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       inputChannel: event.channel || "",
       reason,
       ragContext,
+      graphContext,
       payloadPreview: keys.length ? Object.fromEntries(keys.slice(0, 6).map((key) => [key, payload[key]])) : clonePayload(payload),
     };
   };
@@ -595,10 +785,12 @@ window.TrackerLensAiAgentRuntime = (() => {
       const config = await resolveNodeConfig(node);
       const inputDataContext = await collectInputDataContext({ node, event, workspaceId: this.workspaceId, config, runtime: this.runtime });
       const ragContext = normalizeRagContext({ payload, event });
+      const graphContext = normalizeGraphContext({ payload, event });
       const promptConfig = {
         ...config,
         ...(inputDataContext ? { inputDataContext } : {}),
         ...(ragContext ? { ragContext } : {}),
+        ...(graphContext ? { graphContext } : {}),
       };
       const provider = await pickProvider(config);
       const model = String(config.model || provider?.model || "local-model");
@@ -623,6 +815,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         memoryContext: memory,
         inputDataContext,
         ragContext,
+        graphContext,
         status: "running",
         provider: provider?.name || provider?.provider || "fallback",
         model,
@@ -655,6 +848,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           memoryContext: memory,
           inputDataContext,
           ragContext,
+          graphContext,
         };
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
@@ -673,13 +867,14 @@ window.TrackerLensAiAgentRuntime = (() => {
           memoryContext: memory,
           inputDataContext,
           ragContext,
+          graphContext,
           result,
           updatedAt: new Date().toISOString(),
         });
         return result;
       } catch (error) {
         const latencyMs = Math.round(performance.now() - startedAt);
-        const result = fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext });
+        const result = fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext, graphContext });
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -697,6 +892,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           memoryContext: memory,
           inputDataContext,
           ragContext,
+          graphContext,
           result,
           error: error?.message || String(error),
           updatedAt: new Date().toISOString(),
@@ -728,6 +924,19 @@ window.TrackerLensAiAgentRuntime = (() => {
         event?.meta?.aiAgentRuntime === node.id ||
         event?.meta?.flowMapDirectAiExecution
       ) return;
+      if (!agentAcceptsDependencyEvent({ node, event, dependencies: this.runtime?.dependencies || [] })) {
+        await this.log({
+          node,
+          level: "debug",
+          message: `AI agent skipped unlinked ${event?.channel || "event"}: ${node.label || node.id}`,
+          context: {
+            inputChannel: event?.channel || "",
+            sourceNodeId: event?.sourceNodeId || "",
+            inputEventId: event?.id || "",
+          },
+        });
+        return;
+      }
       const runId = event.meta?.runId || payload?.runId || "";
       const executionKey = `${node.id}:${runId || "live"}:${event.id || event.channel || Date.now()}`;
       if (this.executionKeys.has(executionKey)) return;
@@ -740,8 +949,10 @@ window.TrackerLensAiAgentRuntime = (() => {
         event = mapped.event;
         const result = await this.execute({ node, payload, event });
         const latencyMs = Math.round(performance.now() - startedAt);
-        const channel = agentOutput(node, await resolveNodeConfig(node));
-        await this.bus.emit(channel, result, {
+        const config = await resolveNodeConfig(node);
+        const channel = agentOutput(node, config);
+        const emitPayload = buildCleanAiPayload({ result, config });
+        await this.bus.emit(channel, emitPayload, {
           workspaceId: this.workspaceId,
           eventType: "ai_agent_response",
           sourceNodeId: node.id,
@@ -755,12 +966,15 @@ window.TrackerLensAiAgentRuntime = (() => {
             model: result.model || "",
             ragQueryId: result.ragContext?.queryId || "",
             ragResultCount: result.ragContext?.resultCount ?? null,
+            graphQueryId: result.graphContext?.queryId || "",
+            graphResultCount: result.graphContext?.resultCount ?? null,
+            graphRelationCount: result.graphContext?.relationCount ?? null,
           },
         });
         await this.log({
           node,
           message: `AI agent emitted ${channel}: ${node.label || node.id}`,
-          context: { inputChannel: event.channel, outputChannel: channel, inputEventId: event.id, runId, result, latencyMs },
+          context: { inputChannel: event.channel, outputChannel: channel, inputEventId: event.id, runId, result: emitPayload, latencyMs },
         });
         if (nodeSubtype(node) === "memory") {
           await window.TrackerLensAiRuntimeStore?.remember?.({

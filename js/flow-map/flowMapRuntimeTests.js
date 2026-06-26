@@ -1514,6 +1514,45 @@ const waitForKnowledgeAiRagJob = async ({ workspaceId = "", runId = "", agentId 
   return { job: null, ragContext: null };
 };
 
+const waitForKnowledgeGraphQueryRecord = async ({ workspaceId = "", query = "", timeoutMs = 5000 } = {}) => {
+  const storeName = window.TrackerLensKnowledgeRuntime?.STORES?.queries || "tl_knowledge_queries";
+  const started = Date.now();
+  const expected = String(query || "").trim().toLowerCase();
+  while (Date.now() - started < timeoutMs) {
+    const records = await readKnowledgeRuntimeRecords(storeName);
+    const record = records
+      .filter((item) =>
+        (!workspaceId || item.workspaceId === workspaceId) &&
+        item.scope?.mode === "knowledge-graph" &&
+        (!expected || String(item.query || "").trim().toLowerCase() === expected)
+      )
+      .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""))[0];
+    if (record?.context && (record.entities?.length || record.relations?.length)) return record;
+    await wait(160);
+  }
+  return null;
+};
+
+const waitForKnowledgeAiGraphJob = async ({ workspaceId = "", runId = "", agentId = "", query = "", timeoutMs = 8000 } = {}) => {
+  const started = Date.now();
+  const expectedQuery = String(query || "").trim().toLowerCase();
+  while (Date.now() - started < timeoutMs) {
+    const data = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => ({ jobs: [] }));
+    const job = (data?.jobs || [])
+      .filter((item) =>
+        (!workspaceId || item.workspaceId === workspaceId) &&
+        (!runId || item.runId === runId || item.result?.runId === runId) &&
+        (!agentId || item.agentId === agentId)
+      )
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0];
+    const graphContext = job?.graphContext || job?.result?.graphContext || null;
+    const hasMatchingQuery = !expectedQuery || String(graphContext?.query || "").trim().toLowerCase() === expectedQuery;
+    if (job && graphContext?.context && hasMatchingQuery) return { job, graphContext };
+    await wait(180);
+  }
+  return { job: null, graphContext: null };
+};
+
 const waitForKnowledgeGraphSnapshot = async ({ workspaceId = "", collectionId = "", documentId = "", timeoutMs = 6000 } = {}) => {
   const knowledge = window.TrackerLensKnowledgeRuntime;
   const stores = knowledge?.STORES || {};
@@ -2953,10 +2992,25 @@ const runKnowledgeGraphSampleTest = async () => {
       collectionId,
     },
   };
+  const graphQueryText = "What does Liber use against the troll?";
+  const graphQueryPayload = {
+    query: graphQueryText,
+    collectionId,
+    documentId,
+    depth: 2,
+    topK: 12,
+    maxRelations: 18,
+    maxEvidence: 3,
+    maxContextChars: 3200,
+    includeEvidence: true,
+    preferLatestDocument: true,
+    purpose: "knowledge-graph-query-sample",
+  };
   const layout = (() => {
     const left = 5;
     const step = 25;
     const top = 12;
+    const row = 34;
     return {
       docSource: { x: left, y: top },
       documentStore: { x: left + step, y: top },
@@ -2964,6 +3018,11 @@ const runKnowledgeGraphSampleTest = async () => {
       extractor: { x: left + step * 3, y: top },
       graph: { x: left + step * 4, y: top },
       preview: { x: left + step * 5, y: top },
+      querySource: { x: left + step * 2.8, y: top + row },
+      graphQuery: { x: left + step * 4, y: top + row },
+      contextPreview: { x: left + step * 5.2, y: top + row },
+      aiGraph: { x: left + step * 4, y: top + row * 2 },
+      aiPreview: { x: left + step * 5.2, y: top + row * 2 },
     };
   })();
   const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge Graph sample" }) => ({
@@ -3113,13 +3172,121 @@ const runKnowledgeGraphSampleTest = async () => {
     paletteLabel: "Preview",
     config: { previewMode: "json", maxChars: 6000 },
   });
-  const nodes = [docSource, documentStore, chunker, extractor, graph, preview];
+  const querySource = nodeBase({
+    name: "query_source",
+    type: "source",
+    label: "Graph Query Source",
+    outputs: ["knowledge.graph.query"],
+    ...layout.querySource,
+    tone: "green",
+    icon: "help",
+    subtype: "manual-json",
+    category: "sources",
+    settingsSchema: { json: "object" },
+    paletteLabel: "Manual JSON",
+    paletteAction: "Source: Manual JSON",
+    config: {
+      emitChannel: "knowledge.graph.query",
+      json: prettyRuntimeValue(graphQueryPayload),
+    },
+  });
+  const graphQuery = nodeBase({
+    name: "graph_query",
+    type: "knowledge",
+    label: "Graph Query Sample",
+    inputs: ["knowledge.graph.query", "knowledge.graph.updated"],
+    outputs: ["knowledge.graph.context"],
+    ...layout.graphQuery,
+    tone: "cyan",
+    icon: "manage_search",
+    subtype: "graph-query",
+    category: "knowledge",
+    settingsSchema: { query: "string", depth: "number", topK: "number", maxRelations: "number", maxEvidence: "number", relationTypes: "string", includeEvidence: "boolean", collectionId: "string", documentId: "string", outputChannel: "string" },
+    paletteLabel: "Graph Query",
+    config: {
+      depth: 2,
+      topK: 12,
+      maxRelations: 18,
+      maxEvidence: 3,
+      maxContextChars: 3200,
+      includeEvidence: true,
+      preferLatestDocument: true,
+      collectionId,
+      documentId,
+      outputChannel: "knowledge.graph.context",
+    },
+  });
+  const contextPreview = nodeBase({
+    name: "graph_context_preview",
+    type: "devPreview",
+    label: "Graph Context Preview",
+    inputs: ["raw"],
+    outputs: ["output"],
+    ...layout.contextPreview,
+    tone: "blue",
+    icon: "data_object",
+    subtype: "preview",
+    category: "dev",
+    settingsSchema: { mode: "raw|json" },
+    paletteLabel: "Preview",
+    config: { previewMode: "json", maxChars: 7000 },
+  });
+  const aiGraph = nodeBase({
+    name: "graph_ai",
+    type: "aiAgent",
+    label: "AI Graph Answer Sample",
+    inputs: ["task"],
+    outputs: ["diagnostic"],
+    ...layout.aiGraph,
+    tone: "violet",
+    icon: "psychology",
+    subtype: "debugger",
+    category: "ai-agents",
+    settingsSchema: { provider: "string", model: "string", expected: "string" },
+    paletteLabel: "AI Debugger",
+    config: {
+      providerProfile: "local_lm_studio",
+      providerType: "lm-studio",
+      provider: "lm-studio",
+      model: "local-model",
+      inputDataMode: "off",
+      memoryMode: "none",
+      emitMode: "clean",
+      expected: "Answer the user query from Knowledge Graph context",
+      systemPrompt: "You answer using only the provided Knowledge Graph context. If the graph context is insufficient, say what relation or evidence is missing.",
+      promptTemplate: "Question: {{payload.query}}\n\nKnowledge Graph context:\n{{payload.context}}\n\nReturn a concise answer in the same language as the question.",
+      output: "diagnostic",
+      outputInstructions: "Return only the final answer. Do not include runtime metadata.",
+    },
+  });
+  aiGraph.channels = ["task", "knowledge.graph.context"];
+  const aiPreview = nodeBase({
+    name: "graph_ai_preview",
+    type: "devPreview",
+    label: "AI Graph Answer Preview",
+    inputs: ["raw"],
+    outputs: ["output"],
+    ...layout.aiPreview,
+    tone: "blue",
+    icon: "smart_toy",
+    subtype: "preview",
+    category: "dev",
+    settingsSchema: { mode: "raw|json" },
+    paletteLabel: "Preview",
+    config: { previewMode: "json", maxChars: 6000 },
+  });
+  const nodes = [docSource, documentStore, chunker, extractor, graph, preview, querySource, graphQuery, contextPreview, aiGraph, aiPreview];
   const links = [
     [docSource, documentStore, "document", "document"],
     [documentStore, chunker, "knowledge.document.created", "knowledge.document.created"],
     [chunker, extractor, "knowledge.chunk.created", "knowledge.chunk.created"],
     [extractor, graph, "knowledge.relation.created", "knowledge.relation.created"],
     [graph, preview, "knowledge.graph.updated", "raw"],
+    [graph, graphQuery, "knowledge.graph.updated", "knowledge.graph.updated"],
+    [querySource, graphQuery, "knowledge.graph.query", "knowledge.graph.query"],
+    [graphQuery, contextPreview, "knowledge.graph.context", "raw"],
+    [graphQuery, aiGraph, "knowledge.graph.context", "task"],
+    [aiGraph, aiPreview, "diagnostic", "raw"],
   ];
   const createKnowledgeGraphSampleRuntimeLink = async ({ source, target, sourcePort, targetPort, index = 0 } = {}) => {
     const createdAt = new Date().toISOString();
@@ -3182,13 +3349,14 @@ const runKnowledgeGraphSampleTest = async () => {
   };
   const cleanupKnowledgeGraphSampleRecords = async () => {
     const knowledge = window.TrackerLensKnowledgeRuntime;
-    if (!knowledge?.listStore || !knowledge?.deleteRecords) return { documents: 0, chunks: 0, entities: 0, relations: 0, metrics: 0 };
+    if (!knowledge?.listStore || !knowledge?.deleteRecords) return { documents: 0, chunks: 0, entities: 0, relations: 0, queries: 0, metrics: 0 };
     const stores = knowledge.STORES || {};
-    const [documents, chunks, entities, relations, metrics] = await Promise.all([
+    const [documents, chunks, entities, relations, queries, metrics] = await Promise.all([
       knowledge.listStore(stores.documents),
       knowledge.listStore(stores.chunks),
       knowledge.listStore(stores.entities),
       knowledge.listStore(stores.relations),
+      knowledge.listStore(stores.queries),
       knowledge.listStore(stores.metrics),
     ]);
     const sampleDocuments = (documents || [])
@@ -3214,6 +3382,12 @@ const runKnowledgeGraphSampleTest = async () => {
         item.metadata?.collectionId === collectionId ||
         entityIds.has(item.sourceEntityId) ||
         entityIds.has(item.targetEntityId));
+    const sampleQueries = (queries || [])
+      .filter((item) => item.workspaceId === workspaceId)
+      .filter((item) =>
+        item.scope?.collectionId === collectionId ||
+        item.scope?.documentId === documentId ||
+        String(item.query || "") === graphQueryText);
     const sampleMetrics = (metrics || [])
       .filter((item) => item.workspaceId === workspaceId)
       .filter((item) => item.value?.collectionId === collectionId || item.value?.documentId === documentId);
@@ -3221,6 +3395,7 @@ const runKnowledgeGraphSampleTest = async () => {
       knowledge.deleteRecords(stores.relations, sampleRelations.map((item) => item.id)),
       knowledge.deleteRecords(stores.entities, sampleEntities.map((item) => item.id)),
       knowledge.deleteRecords(stores.chunks, sampleChunks.map((item) => item.id)),
+      knowledge.deleteRecords(stores.queries, sampleQueries.map((item) => item.id)),
       knowledge.deleteRecords(stores.metrics, sampleMetrics.map((item) => item.id)),
       knowledge.deleteRecords(stores.documents, sampleDocuments.map((item) => item.id)),
     ]);
@@ -3229,6 +3404,7 @@ const runKnowledgeGraphSampleTest = async () => {
       chunks: sampleChunks.length,
       entities: sampleEntities.length,
       relations: sampleRelations.length,
+      queries: sampleQueries.length,
       metrics: sampleMetrics.length,
     };
   };
@@ -3321,31 +3497,56 @@ const runKnowledgeGraphSampleTest = async () => {
     });
     if (docEvent) mergeRuntimeEvent(docEvent);
     const snapshot = await waitForKnowledgeGraphSnapshot({ workspaceId, collectionId, documentId, timeoutMs: 8000 });
-    const ok = Boolean(snapshot?.value?.entityCount > 0 && snapshot?.value?.relationCount > 0);
+    const queryEvent = await bus.emit("knowledge.graph.query", {
+      ...graphQueryPayload,
+      __test: true,
+      runId,
+      sourceNodeId: querySource.id,
+      emittedAt: new Date().toISOString(),
+    }, {
+      workspaceId,
+      flowId: flowIdForWorkspace(workspaceId),
+      eventType: "flow_knowledge_graph_sample_query",
+      sourceNodeId: querySource.id,
+      meta: { test: true, runId, origin: "knowledge-graph-sample-test", rootNodeId: querySource.id },
+    });
+    if (queryEvent) mergeRuntimeEvent(queryEvent);
+    const graphContext = await waitForKnowledgeGraphQueryRecord({ workspaceId, query: graphQueryText, timeoutMs: 6000 });
+    const aiGraphResult = await waitForKnowledgeAiGraphJob({ workspaceId, runId, agentId: aiGraph.id, query: graphQueryText, timeoutMs: 9000 });
+    const ok = Boolean(
+      snapshot?.value?.entityCount > 0 &&
+      snapshot?.value?.relationCount > 0 &&
+      graphContext?.context &&
+      aiGraphResult.graphContext?.context
+    );
     finishFlowMapTestRun({
       runId,
-      summary: ok ? "Knowledge Graph sample completed: graph snapshot generated" : "Knowledge Graph sample created with warnings",
-      error: ok ? "" : "Knowledge Graph sample non ha generato uno snapshot valido",
+      summary: ok ? "Knowledge Graph sample completed: graph context generated and consumed by AI Agent" : "Knowledge Graph sample created with warnings",
+      error: ok ? "" : "Knowledge Graph sample non ha generato graph context o job AI valido",
     });
     await recordFlowAction({
       workspaceId,
-      nodeId: graph.id,
+      nodeId: graphQuery.id,
       level: ok ? "info" : "warning",
-      message: ok ? "Knowledge Graph sample test completed" : "Knowledge Graph sample test completed without valid graph snapshot",
+      message: ok ? "Knowledge Graph sample test completed" : "Knowledge Graph sample test completed without valid graph context",
       context: {
         action: "flow-map-knowledge-graph-sample-test",
         runId,
         snapshotId: snapshot?.id || "",
         entityCount: snapshot?.value?.entityCount || 0,
         relationCount: snapshot?.value?.relationCount || 0,
+        graphQueryId: graphContext?.id || "",
+        graphContextEntities: graphContext?.entities?.length || 0,
+        graphContextRelations: graphContext?.relations?.length || 0,
+        aiJobId: aiGraphResult.job?.id || "",
         collectionId,
         documentId,
         cleanup: knowledgeCleanup,
       },
     });
     await loadRuntime({ force: true, silent: true });
-    setFocusState({ mode: "nodes", nodeId: graph.id, nodeType: "knowledge", channel: "knowledge.graph.updated", connectionId: "" });
-    centerViewportOnNode?.(nodeById(graph.id) || graph, (state.runtime.nodes || []).findIndex((node) => node.id === graph.id), { select: true });
+    setFocusState({ mode: "nodes", nodeId: graphQuery.id, nodeType: "knowledge", channel: "knowledge.graph.context", connectionId: "" });
+    centerViewportOnNode?.(nodeById(graphQuery.id) || graphQuery, (state.runtime.nodes || []).findIndex((node) => node.id === graphQuery.id), { select: true });
   } catch (error) {
     console.error("Flow Map Knowledge Graph sample test error:", error);
     state.error = error?.message || "Errore Knowledge Graph sample Flow Map";

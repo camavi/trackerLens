@@ -1081,6 +1081,23 @@ const renderFlowPortNodeBody = (node, view) => {
   );
 };
 
+const renderKnowledgeGraphQueryScope = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  const documentId = String(config.documentId || "").trim();
+  const collectionId = String(config.collectionId || "").trim();
+  const scope = documentId ? "document" : collectionId ? "collection" : "workspace";
+  const shortValue = (value = "") => {
+    const clean = String(value || "").trim();
+    return clean.length > 22 ? `${clean.slice(0, 10)}...${clean.slice(-7)}` : clean || "all";
+  };
+  return _.div(
+    { class: "tl-flow-kg-query-scope", title: `Scope: ${scope} · Collection: ${collectionId || "all"} · Document: ${documentId || "all"}` },
+    _.span(icon("filter_alt", "sm"), _.strong("Scope"), _.em(scope)),
+    _.span(icon("folder", "sm"), _.strong("Collection"), _.em(shortValue(collectionId))),
+    _.span(icon("description", "sm"), _.strong("Document"), _.em(shortValue(documentId)))
+  );
+};
+
 const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   if (isAgentBridgeNode(node)) {
     return [_.div(
@@ -1162,6 +1179,20 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openKnowledgeGraphViewDialog(node);
         },
       }, icon("account_tree", "sm"), "View Graph"),
+      renderInlineNodeSettings(node),
+      _.span(
+        { class: "tl-flow-node-metrics" },
+        _.em(`${view.runtime.eventsPerMin}/min`),
+        _.em(`${view.runtime.latency || 0}ms`),
+        _.em(`${view.metrics.listeners || 0} listeners`)
+      ),
+    ];
+  }
+  if (nodeCategory(node) === "knowledge" && nodeSubtype(node) === "graph-query") {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      renderKnowledgeGraphQueryScope(node),
       renderInlineNodeSettings(node),
       _.span(
         { class: "tl-flow-node-metrics" },
@@ -2332,6 +2363,9 @@ const loadAiInspectorJob = async (node = {}, { force = false } = {}) => {
 const aiJobRagContext = (job = {}) =>
   job.ragContext || job.result?.ragContext || null;
 
+const aiJobGraphContext = (job = {}) =>
+  job.graphContext || job.result?.graphContext || null;
+
 const renderInspectorAiRag = (node = {}) => {
   if (nodeCategory(node) !== "ai-agents") {
     return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
@@ -2340,11 +2374,13 @@ const renderInspectorAiRag = (node = {}) => {
   const stateJob = state.aiInspectorJobs[node.id] || { loading: true, job: null, count: 0 };
   const job = stateJob.job || null;
   const ragContext = aiJobRagContext(job || {});
+  const graphContext = aiJobGraphContext(job || {});
   const result = job?.result || {};
   const sources = Array.isArray(ragContext?.sources) ? ragContext.sources : [];
+  const evidence = Array.isArray(graphContext?.evidence) ? graphContext.evidence : [];
   return _.section(
     { class: "tl-flow-detail-list" },
-    _.h3("AI RAG Debug"),
+    _.h3("AI Knowledge Debug"),
     ...[
       ["Jobs", stateJob.loading ? "loading..." : stateJob.count || 0],
       ["Job ID", job?.id || "N/D"],
@@ -2355,6 +2391,10 @@ const renderInspectorAiRag = (node = {}) => {
       ["RAG query", ragContext?.query || "N/D"],
       ["RAG query ID", ragContext?.queryId || "N/D"],
       ["RAG results", ragContext ? String(ragContext.resultCount ?? sources.length) : "N/D"],
+      ["Graph query", graphContext?.query || "N/D"],
+      ["Graph query ID", graphContext?.queryId || "N/D"],
+      ["Graph entities", graphContext ? String(graphContext.resultCount ?? graphContext.entities?.length ?? 0) : "N/D"],
+      ["Graph relations", graphContext ? String(graphContext.relationCount ?? graphContext.relations?.length ?? 0) : "N/D"],
     ].map(([label, value]) => _.div(_.span(label), _.strong(String(value)))),
     stateJob.error ? _.p({ class: "tl-flow-muted" }, stateJob.error) : null,
     ragContext
@@ -2377,6 +2417,28 @@ const renderInspectorAiRag = (node = {}) => {
         }))
       )
       : _.p({ class: "tl-flow-muted" }, stateJob.loading ? "Caricamento ultimo job AI..." : "Nessun contesto RAG trovato per l'ultimo job AI."),
+    graphContext
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Graph context"),
+        _.div(
+          { class: "tl-flow-storage-record-actions" },
+          copyRuntimeButton(graphContext, "Copy Graph context"),
+          btn({
+            class: "is-ghost is-compact",
+            title: "Refresh AI job",
+            onclick: () => loadAiInspectorJob(node, { force: true }),
+          }, icon("sync", "sm"), "Refresh")
+        ),
+        _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue({
+          query: graphContext.query,
+          context: graphContext.context,
+          scope: graphContext.scope,
+          entities: graphContext.entities,
+          relations: graphContext.relations,
+        }))
+      )
+      : null,
     sources.length
       ? _.div(
         { class: "is-wide" },
@@ -2388,6 +2450,24 @@ const renderInspectorAiRag = (node = {}) => {
               { class: "tl-flow-rag-source" },
               _.strong(`#${source.index || "?"} · score ${Number.isFinite(source.score) ? source.score.toFixed(3) : "N/D"}`),
               _.span(source.documentId || source.chunkId || "source"),
+              _.p(source.text || "")
+            )
+          )
+        )
+      )
+      : null
+    ,
+    evidence.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Graph evidence"),
+        _.div(
+          { class: "tl-flow-rag-source-list" },
+          ...evidence.slice(0, 6).map((source, index) =>
+            _.article(
+              { class: "tl-flow-rag-source" },
+              _.strong(`#${source.index || index + 1}`),
+              _.span(source.documentId || source.chunkId || "evidence"),
               _.p(source.text || "")
             )
           )
@@ -5536,7 +5616,7 @@ const renderInspector = () => {
       ? [{ id: "storage-record", title: "Last Stored Record", content: renderInspectorStorageRecord(node) }]
       : []),
     ...(nodeCategory(node) === "ai-agents"
-      ? [{ id: "ai-rag-debug", title: "AI RAG Debug", content: renderInspectorAiRag(node) }]
+      ? [{ id: "ai-knowledge-debug", title: "AI Knowledge Debug", content: renderInspectorAiRag(node) }]
       : []),
     ...(nodeCategory(node) === "knowledge"
       ? [{ id: "knowledge-graph-debug", title: "Knowledge Graph Debug", content: renderInspectorKnowledgeGraph(node) }]
