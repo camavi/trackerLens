@@ -7,7 +7,7 @@ Last updated: 2026-06-26.
 
 ## Active Area
 
-Knowledge Runtime Graph Query and agent consumption.
+Knowledge Runtime multilingual graph quality.
 
 ## Completed Sequence
 
@@ -18,12 +18,19 @@ Knowledge Runtime Graph Query and agent consumption.
 
 ## Latest Completed Work
 
-Knowledge Graph Query baseline is in progress:
+Knowledge Graph multilingual quality baseline is complete:
 
-- `Graph Query` is being added as a first-class Knowledge node that reads persisted entities/relations and emits `knowledge.graph.context`.
+- Knowledge runtime now has language profiles for Italian, Spanish, English, French and German with language-specific stop words and weak sentence-start tokens.
+- Documents and chunks now persist detected/preferred language metadata, so graph extraction/query can carry language scope across the pipeline.
+- Entity extraction, graph snapshots and Graph Query now use language-aware stopword/weak-label filtering while keeping the previous legacy stopword set as a conservative safety net.
+- User-verified multilingual graph exports for Italian, Spanish, English, French and German after language-specific cleanup passes.
+
+Knowledge Graph Query baseline is complete:
+
+- `Graph Query` is a first-class Knowledge node that reads persisted entities/relations and emits `knowledge.graph.context`.
 - Graph context includes matched entities, neighboring relations, scoped evidence chunks and a compact prompt-ready context block.
-- AI Agent runtime is being extended to recognize `knowledge.graph.context` and inject it into prompts/job metadata like RAG context.
-- `Knowledge Graph Test` is being extended to include `Graph Query -> Preview -> AI Agent`, so agents can consume graph information, not just visualize snapshots.
+- AI Agent runtime recognizes `knowledge.graph.context` and injects it into prompts/job metadata like RAG context.
+- `Knowledge Graph Test` includes `Graph Query -> Preview -> AI Agent`, so agents can consume graph information, not just visualize snapshots.
 - Graph Query now supports `preferLatestDocument` so sample flows keep working when the user replaces the uploaded document inside the same collection.
 - AI Agent graph/RAG responses now emit a clean preview payload (`question`, `answer`, compact relations/entities/evidence or sources) while the AI debug job keeps the full prompt and raw context for inspection.
 - Knowledge runtime now routes events by actual incoming dependencies when a node has visual links, preventing disconnected Graph Query/source nodes from continuing to consume same-channel events.

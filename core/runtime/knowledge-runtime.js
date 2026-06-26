@@ -230,6 +230,66 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? value.filter(Boolean).map((item) => String(item).trim()).filter(Boolean)
       : String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 
+  const normalizeLanguage = (value = "") => {
+    const language = String(value || "").trim().toLowerCase().split(/[-_]/)[0];
+    return ["it", "es", "en", "fr", "de"].includes(language) ? language : "";
+  };
+
+  const languageProfiles = {
+    it: {
+      stopWords: ["alla", "alle", "allo", "anche", "ancora", "aveva", "avevano", "che", "chi", "come", "con", "cosa", "da", "del", "della", "delle", "di", "dopo", "dove", "era", "erano", "gli", "il", "in", "io", "la", "le", "lei", "loro", "lui", "ma", "mentre", "mi", "nel", "non", "per", "perche", "perché", "poi", "quale", "quando", "questa", "questo", "si", "sono", "sua", "suo", "tra", "una"],
+      weakStarts: ["allora", "andiamo", "aveva", "certo", "chiese", "disse", "doveva", "ecco", "erano", "guardò", "guardo", "mentre", "rispose", "sussurrò", "venne", "vide"],
+    },
+    es: {
+      stopWords: ["a", "ahora", "al", "aunque", "como", "con", "cuando", "de", "del", "donde", "el", "ella", "en", "era", "la", "las", "lo", "los", "mas", "más", "mi", "muy", "no", "para", "pero", "por", "que", "se", "sin", "solo", "sólo", "su", "sus", "un", "una", "y"],
+      weakStarts: ["comenzó", "dijo", "entonces", "estaba", "había", "mientras", "respondió", "solo", "sólo", "susurró", "tenía", "vio"],
+    },
+    en: {
+      stopWords: ["a", "an", "and", "are", "as", "at", "because", "but", "by", "even", "for", "from", "have", "he", "her", "him", "his", "in", "is", "it", "its", "life", "many", "more", "nothing", "of", "on", "one", "only", "or", "search", "she", "that", "the", "their", "then", "they", "this", "to", "was", "were", "what", "with"],
+      weakStarts: ["asked", "because", "began", "called", "came", "could", "even", "life", "nothing", "one", "only", "said", "saw", "search", "then", "what", "whispered", "would"],
+    },
+    fr: {
+      stopWords: ["a", "au", "avec", "bien", "c'était", "cetait", "ce", "ces", "comme", "dans", "de", "des", "du", "elle", "en", "et", "il", "ils", "je", "la", "le", "les", "leur", "leurs", "lui", "mais", "meme", "même", "ne", "nous", "ou", "par", "pas", "plus", "pour", "puis", "que", "qui", "rien", "se", "ses", "son", "sur", "un", "une", "vie", "vous"],
+      weakStarts: ["alors", "avait", "bien", "c'était", "cetait", "demanda", "dit", "etait", "était", "ils", "leurs", "meme", "même", "plus", "puis", "repondit", "répondit", "rien", "ses", "vie", "vit"],
+    },
+    de: {
+      stopWords: ["aber", "als", "am", "an", "auch", "auf", "aus", "bei", "bis", "da", "dann", "das", "dass", "dem", "den", "der", "des", "die", "doch", "du", "ein", "eine", "einem", "einen", "einer", "eines", "er", "es", "etwas", "für", "hatte", "ich", "ihm", "ihn", "ihr", "ihre", "im", "in", "ist", "ja", "kein", "keine", "mit", "nach", "nicht", "nichts", "nur", "oder", "sie", "so", "und", "von", "war", "waren", "was", "weil", "wenn", "wer", "wie", "wir", "zu", "zum", "zur"],
+      weakStarts: ["aber", "als", "auch", "dann", "doch", "fragte", "ging", "hatte", "kam", "nur", "rief", "sagte", "sah", "war", "waren", "weil", "wenn"],
+    },
+  };
+
+  const scoreLanguage = (text = "", language = "") => {
+    const profile = languageProfiles[language];
+    if (!profile) return 0;
+    const tokens = (normalizeKnowledgeText(text).match(/[a-zà-ÿ]{2,}/gi) || []).map(normalizeEntityToken);
+    const counts = tokens.reduce((map, token) => map.set(token, (map.get(token) || 0) + 1), new Map());
+    return profile.stopWords.reduce((score, word) => {
+      const token = normalizeEntityToken(word);
+      if (token.length < 2) return score;
+      return score + Math.min(6, counts.get(token) || 0);
+    }, 0);
+  };
+
+  const detectLanguage = (text = "", preferred = "") => {
+    const explicit = normalizeLanguage(preferred);
+    if (explicit) return explicit;
+    const scores = Object.keys(languageProfiles)
+      .map((language) => ({ language, score: scoreLanguage(text, language) }))
+      .sort((left, right) => right.score - left.score);
+    return scores[0]?.score > 1 ? scores[0].language : "auto";
+  };
+
+  const languageProfileFor = (config = {}, text = "") => {
+    const language = detectLanguage(text, config.language || config.lang || config.locale || config.metadata?.language || "");
+    return {
+      language,
+      profile: languageProfiles[language] || null,
+    };
+  };
+
+  const preferredRuntimeLanguage = (config = {}, payload = {}) =>
+    normalizeLanguage(config.language || config.lang || config.locale || payload?.languageOverride || payload?.metadata?.languageOverride || "");
+
   const entityStopWords = new Set([
     "a", "al", "all", "alla", "alle", "allo", "agli", "allora", "anche", "ancora", "and", "andiamo", "ando", "andò", "are", "as", "at", "avec", "but", "by",
     "aveva", "avevano", "che", "chi", "chiese", "ci", "come", "con", "cosa", "cosi", "così", "cosí", "cui", "da", "dai", "dagli", "dalla", "dalle", "de", "del", "della", "delle", "degli", "dei", "dello", "des", "di", "disse", "do", "dove", "dunque", "du", "e", "ecco", "egli", "ella", "el", "en", "et",
@@ -263,12 +323,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const semanticConceptEntityTokens = new Set([
     "alleanza", "amore", "assoluzione", "benedizione", "fede", "grazia", "giustizia", "gloria", "legge", "luce", "morte",
-    "ombra", "pace", "parola", "peccato", "preghiera", "promessa", "redenzione", "salvezza", "santita", "santità",
+    "hoffnung", "ombra", "pace", "parola", "peccato", "preghiera", "promessa", "redenzione", "salvezza", "santita", "santità",
     "scrittura", "verita", "verità", "vita"
   ]);
 
   const semanticObjectEntityTokens = new Set([
     "agnello", "arca", "calice", "croce", "pane", "sangue", "tempio"
+  ]);
+
+  const semanticRoleEntityTokens = new Set([
+    "alte frau", "alter mann", "anciana", "anciano", "anziana", "anziano", "elder", "old woman", "old man", "vieil homme", "vieille femme"
   ]);
 
   const knownAcronymEntityTokens = new Set([
@@ -312,24 +376,70 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return false;
   };
 
+  const languageStopWordSet = (config = {}, text = "") => {
+    const { profile } = languageProfileFor(config, text);
+    return new Set([
+      ...entityStopWords,
+      ...(profile?.stopWords || []).map(normalizeEntityToken),
+      ...splitConfigList(config.stopWords || config.entityStopWords).map(normalizeEntityToken),
+    ]);
+  };
+
+  const languageWeakStartSet = (config = {}, text = "") => {
+    const { profile } = languageProfileFor(config, text);
+    return new Set([
+      ...weakSentenceStartEntityTokens,
+      ...(profile?.weakStarts || []).map(normalizeEntityToken),
+    ]);
+  };
+
+  const isWeakEntityLabelForLanguage = (label = "", source = "", config = {}, text = "") => {
+    const words = normalizeEntityToken(label).split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    if (source === "seed") return false;
+    const language = detectLanguage(text || config.text || "", config.language || "");
+    if (language === "de" && source === "proper-noun") return true;
+    if (isWeakEntityLabel(label, source)) return true;
+    const weakStarts = languageWeakStartSet(config, text);
+    const stopWords = languageStopWordSet(config, text);
+    if (words.length === 1 && weakStarts.has(words[0])) return true;
+    if (source === "declared-name" && words.every((word) => stopWords.has(word) || weakStarts.has(word))) return true;
+    if (source === "declared-name") return false;
+    if (source === "proper-noun" && words.every((word) => stopWords.has(word) || weakStarts.has(word))) return true;
+    return false;
+  };
+
   const isEntityStopWord = (label = "", config = {}) => {
     const words = normalizeEntityToken(label).split(/\s+/).filter(Boolean);
     if (!words.length) return true;
-    const customStopWords = new Set(splitConfigList(config.stopWords || config.entityStopWords).map(normalizeEntityToken));
-    if (words.every((word) => entityStopWords.has(word) || customStopWords.has(word))) return true;
+    const stopWords = languageStopWordSet(config, config.text || "");
+    if (words.every((word) => stopWords.has(word))) return true;
     if (words.length === 1 && words[0].length <= 2) return true;
     return false;
   };
 
   const cleanEntityPhrase = (value = "", config = {}) => {
-    const customStopWords = new Set(splitConfigList(config.stopWords || config.entityStopWords).map(normalizeEntityToken));
+    const stopWords = languageStopWordSet(config, config.text || "");
+    const weakStarts = languageWeakStartSet(config, config.text || "");
     const isStop = (word = "") => {
       const normalized = normalizeEntityToken(word);
-      return entityStopWords.has(normalized) || customStopWords.has(normalized);
+      return stopWords.has(normalized) || weakStarts.has(normalized);
     };
-    const words = String(value || "").replace(/\s+/g, " ").trim().split(/\s+/).filter(Boolean);
+    const words = String(value || "")
+      .replace(/\b[lL]['’](?=[a-zà-ÿ])/g, "")
+      .replace(/^['’]?était$/i, "")
+      .replace(/\b([A-ZÀ-Ý][A-Za-zÀ-ÿ]+)['’]s\b/g, "$1")
+      .replace(/\b[Cc]['’]était\s+(?=[A-ZÀ-Ý])/g, "")
+      .replace(/\b[Cc]etait\s+(?=[A-ZÀ-Ý])/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
     while (words.length > 1 && isStop(words[0])) words.shift();
     while (words.length > 1 && isStop(words[words.length - 1])) words.pop();
+    if (words.length > 2 && /^[A-ZÀ-Ý]/.test(words[0]) && isStop(words[1])) {
+      return words[0].trim();
+    }
     return words.join(" ").trim();
   };
 
@@ -659,6 +769,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const isUploadedDocument = payloadSourceType === "upload" || eventOrigin === "knowledge-upload";
     const isLiveReplayDocument = payloadSourceType === "live-test-replay" || event?.eventType === "flow_live_knowledge_document";
     const preferPayloadScope = isUploadedDocument || isLiveReplayDocument;
+    const title = preferPayloadScope ? (payload?.title || config.title || node?.label || "Knowledge Document") : (config.title || payload?.title || node?.label || "Knowledge Document");
+    const preferredLanguage = preferredRuntimeLanguage(config, payload);
+    const language = detectLanguage(`${title}\n${text}`, preferredLanguage);
     const document = {
       id: preferPayloadScope
         ? (payload?.documentId || payload?.id || uniqueId("kdoc"))
@@ -666,14 +779,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
       workspaceId,
       sourceId: config.sourceId || event?.sourceNodeId || node?.id || "",
       sourceType: preferPayloadScope ? (payloadSourceType || config.sourceType || "runtime-channel") : (config.sourceType || payloadSourceType || "runtime-channel"),
-      title: preferPayloadScope ? (payload?.title || config.title || node?.label || "Knowledge Document") : (config.title || payload?.title || node?.label || "Knowledge Document"),
+      title,
       mimeType: preferPayloadScope ? (payload?.mimeType || config.mimeType || "text/plain") : (config.mimeType || payload?.mimeType || "text/plain"),
-      language: preferPayloadScope ? (payload?.language || config.language || "") : (config.language || payload?.language || ""),
+      language,
       text,
       metadata: {
         ...(payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
         inputChannel: event?.channel || "",
         nodeId: node?.id || "",
+        language,
+        languageDetected: !normalizeLanguage(preferredLanguage),
         collectionId: preferPayloadScope
           ? (payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "")
           : (config.collectionId || payload?.collectionId || payload?.metadata?.collectionId || ""),
@@ -712,6 +827,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     });
     const now = nowIso();
     const records = [];
+    const language = detectLanguage(sourceText, preferredRuntimeLanguage(config));
     if (config.replaceExisting !== false) {
       await deleteChunksAndEmbeddings({ workspaceId, documentId: document.id || documentId });
     }
@@ -731,6 +847,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           title: document.title || "",
           inputChannel: event?.channel || "",
           nodeId: node?.id || "",
+          language,
           collectionId: document.metadata?.collectionId || config.collectionId || "",
         },
         createdAt: now,
@@ -795,6 +912,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (semanticLocationEntityTokens.has(normalized)) return "location";
     if (semanticConceptEntityTokens.has(normalized)) return "concept";
     if (semanticObjectEntityTokens.has(normalized)) return "object";
+    if (semanticRoleEntityTokens.has(normalized)) return "term";
     if (/^[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}$/.test(clean)) return "proper-noun";
     return "term";
   };
@@ -1063,13 +1181,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const entityCandidatesFromText = (text = "", config = {}) => {
     const clean = String(text || "");
+    const languageConfig = { ...config, text: clean, language: detectLanguage(clean, config.language || "") };
     const candidates = [];
     const push = (value = "", source = "pattern", confidence = 0.72, entityType = "") => {
       const rawLabel = String(value || "").replace(/\s+/g, " ").trim();
-      const label = source === "seed" ? rawLabel : cleanEntityPhrase(rawLabel, config);
+      const label = source === "seed" ? rawLabel : cleanEntityPhrase(rawLabel, languageConfig);
       if (label.length < 2 || label.length > 96) return;
-      if (isWeakEntityLabel(label, source)) return;
-      if (source !== "seed" && isEntityStopWord(label, config)) return;
+      if (isWeakEntityLabelForLanguage(label, source, languageConfig, clean)) return;
+      if (source !== "seed" && isEntityStopWord(label, languageConfig)) return;
       candidates.push({ label, source, confidence, entityType: entityType || inferEntityType(label, source) });
     };
     const pushKeywordMatches = ({ pattern, source, entityType, confidence = 0.76 } = {}) => {
@@ -1086,6 +1205,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       /\b(?:called|named|my\s+name\s+is)\s+([A-Z][A-Za-z'’-]{2,}(?:\s+[A-Z][A-Za-z'’-]{2,}){0,2})/giu,
       /\b(?:chiamata|chiamato|mi\s+chiamo|il\s+mio\s+nome\s+e)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
       /\b(?:appelee|appele|je\s+m'appelle|mon\s+nom\s+est)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
+      /\b(?:genannt|namens|mein\s+name\s+ist|ich\s+heiße|ich\s+heisse)\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,2})/giu,
     ].forEach((pattern) => {
       [...clean.matchAll(pattern)].forEach((match) => push(match[1], "declared-name", 0.88, "proper-noun"));
     });
@@ -1093,22 +1213,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
       {
         entityType: "location",
         source: "keyword-location",
-        pattern: new RegExp(`\\b((?:bosque|forest|foresta|foret|forêt|castillo|castle|chateau|château|montaña|mountain|montagne|caverna|cave|grotta|reino|kingdom|regno|pueblo|village|rio|río|river|fiume|camino|sendero|path|trail)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
+        pattern: new RegExp(`\\b((?:bosque|forest|foresta|foret|forêt|wald|bäume|baeume|castillo|castle|chateau|château|schloss|burg|montaña|mountain|montagne|berg|felsen|steine|caverna|cave|grotta|höhle|hoehle|reino|kingdom|regno|reich|pueblo|village|dorf|rio|río|river|fiume|fluss|camino|sendero|path|trail|weg|pfad)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
       },
       {
         entityType: "object",
         source: "keyword-object",
-        pattern: new RegExp(`\\b((?:flor|flower|fiore|fleur|fuente|source|spring|fontana|manantial|agua|water|acqua|eau|té|te|tea|taza|cup|antorcha|torch|torcia|palo|stick|bastone)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
+        pattern: new RegExp(`\\b((?:flor|flower|fiore|fleur|blume|fuente|source|spring|fontana|manantial|quelle|agua|water|acqua|eau|wasser|té|te|tea|tee|taza|cup|becher|tasse|antorcha|torch|torcia|fackel|palo|stick|bastone|stock)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
       },
       {
         entityType: "creature",
         source: "keyword-creature",
-        pattern: /\b(troll|monstruo|monster|mostro|creature|criatura|cervatillo|fawn|cerbiatto|bestias salvajes|wild beasts|bêtes sauvages)\b/giu,
+        pattern: /\b(troll|monstruo|monster|mostro|ungeheuer|monster|creature|kreatur|criatura|cervatillo|fawn|cerbiatto|rehkitz|bestias salvajes|wild beasts|bêtes sauvages|wilde tiere)\b/giu,
       },
       {
         entityType: "concept",
         source: "keyword-concept",
-        pattern: /\b(autocontrol|self-control|resiliencia|resilience|disciplina|discipline|optimismo|optimism|determinación|determinacion|determination|miedo|fear|paura|esperanza|hope|espoir|amistad|friendship|amitié|coraje|courage|compasión|compasion|compassion)\b/giu,
+        pattern: /\b(autocontrol|self-control|selbstbeherrschung|resiliencia|resilience|widerstandsfähigkeit|widerstandsfaehigkeit|disciplina|discipline|disziplin|optimismo|optimism|optimismus|determinación|determinacion|determination|entschlossenheit|miedo|fear|paura|angst|esperanza|hope|espoir|hoffnung|amistad|friendship|amitié|freundschaft|coraje|courage|mut|compasión|compasion|compassion|mitgefühl|mitgefuehl)\b/giu,
       },
     ].forEach(pushKeywordMatches);
     (clean.match(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}\b/g) || [])
@@ -1121,10 +1241,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const seen = new Map();
     candidates
       .filter((candidate) => candidate.confidence >= threshold)
-      .filter((candidate) => candidate.source === "seed" || !isEntityStopWord(candidate.label, config))
-      .filter((candidate) => isEntityAllowedByMode(candidate, clean, config))
+      .filter((candidate) => candidate.source === "seed" || !isEntityStopWord(candidate.label, languageConfig))
+      .filter((candidate) => isEntityAllowedByMode(candidate, clean, languageConfig))
       .filter((candidate) => !allowedTypes.length || allowedTypes.includes(candidate.entityType.toLowerCase()))
-      .map((candidate) => canonicalEntityCandidate(candidate, config))
+      .map((candidate) => canonicalEntityCandidate(candidate, languageConfig))
       .forEach((candidate) => {
         const key = normalizeKnowledgeText(candidate.label);
         const previous = seen.get(key);
@@ -1186,7 +1306,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxRelationDistance = Math.max(120, Math.min(1200, Number(config.maxRelationDistance || 520)));
     const relationRecords = new Map();
     for (const chunk of validChunks) {
-      const candidates = entityCandidatesFromText(chunk.text || "", config);
+      const language = detectLanguage(chunk.text || "", preferredRuntimeLanguage(config));
+      const chunkConfig = { ...config, language, text: chunk.text || "" };
+      const candidates = entityCandidatesFromText(chunk.text || "", chunkConfig);
       const chunkEntities = [];
       for (const candidate of candidates) {
         const entityId = `kentity_${safeId(workspaceId)}_${safeId(chunk.documentId || "doc")}_${safeId(candidate.label.toLowerCase())}`;
@@ -1210,6 +1332,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             ...(chunk.metadata || {}),
             inputChannel: event?.channel || "",
             nodeId: node?.id || "",
+            language,
             collectionId: chunk.metadata?.collectionId || config.collectionId || "",
             aliases,
           },
@@ -1307,6 +1430,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           metadata: {
             inputChannel: event?.channel || "",
             nodeId: node?.id || "",
+            language,
             collectionId: chunk.metadata?.collectionId || config.collectionId || "",
             chunkIds: [chunk.id || ""].filter(Boolean),
             occurrenceCount: 1,
@@ -1359,8 +1483,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const scopedEntities = workspaceEntities
       .filter((entity) => !documentId || entity.documentId === documentId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
-      .filter((entity) => !isWeakEntityLabel(entity.label, entity.source))
-      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, config));
+      .filter((entity) => !isWeakEntityLabelForLanguage(entity.label, entity.source, { ...config, language: entity.metadata?.language || config.language || "" }))
+      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, { ...config, language: entity.metadata?.language || config.language || "" }));
     const entityIds = new Set(scopedEntities.map((entity) => entity.id));
     const scopedRelations = byWorkspace(relations, workspaceId)
       .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
@@ -1514,7 +1638,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const includeEvidence = payload?.includeEvidence !== false && config.includeEvidence !== false;
     const relationTypes = splitConfigList(payload?.relationTypes || config.relationTypes).map((item) => item.toLowerCase());
     const cleanToken = normalizeEntityToken(cleanQuery);
-    const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !entityStopWords.has(token));
+    const queryLanguage = detectLanguage(cleanQuery, payload?.language || config.language || "");
+    const queryStopWords = languageStopWordSet({ ...config, language: queryLanguage }, cleanQuery);
+    const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !queryStopWords.has(token));
     const [entities, relations, chunks] = await Promise.all([
       listStore(STORES.entities),
       listStore(STORES.relations),
@@ -1538,8 +1664,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         : "all";
     const scopedEntities = workspaceEntities
       .filter((entity) => !documentId || entity.documentId === documentId)
-      .filter((entity) => !isWeakEntityLabel(entity.label, entity.source))
-      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, config));
+      .filter((entity) => !isWeakEntityLabelForLanguage(entity.label, entity.source, { ...config, language: entity.metadata?.language || config.language || "" }))
+      .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, { ...config, language: entity.metadata?.language || config.language || "" }));
     const scopedEntityIds = new Set(scopedEntities.map((entity) => entity.id));
     const entityById = new Map(scopedEntities.map((entity) => [entity.id, entity]));
     const scopedRelations = byWorkspace(relations, workspaceId)
@@ -1945,6 +2071,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     createEmbeddings,
     search,
     queryGraph,
+    normalizeLanguage,
+    detectLanguage,
+    languageProfiles,
     cosineSimilarity,
     tokenVector,
     get,
