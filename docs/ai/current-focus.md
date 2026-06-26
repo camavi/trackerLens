@@ -7,7 +7,7 @@ Last updated: 2026-06-26.
 
 ## Active Area
 
-Knowledge Runtime multilingual graph quality.
+Knowledge Runtime Graph Query ranking.
 
 ## Completed Sequence
 
@@ -24,6 +24,16 @@ Knowledge Graph multilingual quality baseline is complete:
 - Documents and chunks now persist detected/preferred language metadata, so graph extraction/query can carry language scope across the pipeline.
 - Entity extraction, graph snapshots and Graph Query now use language-aware stopword/weak-label filtering while keeping the previous legacy stopword set as a conservative safety net.
 - User-verified multilingual graph exports for Italian, Spanish, English, French and German after language-specific cleanup passes.
+
+Knowledge Graph Query ranking refinement is complete:
+
+- Graph Query now enriches returned entities with `score`, `connections` and `matched` metadata.
+- Graph Query now enriches returned relations with labels, direct-match flags and relation scores for cleaner AI/Preview payloads.
+- Definitional queries such as "chi e X?" prioritize direct relations around the matched entity before generic `co_occurs` neighbors.
+- Graph Query evidence now scans document chunks containing the matched entity and clips snippets around that entity, so definitional answers get local evidence instead of only relation-neighborhood text.
+- Graph Query seed scoring now requires an actual lexical match before adding confidence, preventing unrelated high-confidence entities from becoming query seeds.
+- Definitional Graph Query relation ranking now demotes location-only relations and boosts direct person, quote and concept neighbors.
+- User-verified `chi e Liber?` / `chi è Liber?` now ranks `Liber` as the only query seed, returns focused direct relations and supplies definitional evidence first.
 
 Knowledge Graph Query baseline is complete:
 

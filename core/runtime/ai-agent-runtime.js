@@ -235,6 +235,8 @@ window.TrackerLensAiAgentRuntime = (() => {
         targetLabel: relation.targetLabel || "",
         relationType: relation.relationType || "",
         confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
+        score: Number.isFinite(Number(relation.score)) ? Number(relation.score) : null,
+        direct: relation.direct === true,
         documentId: relation.documentId || "",
         chunkId: relation.chunkId || "",
       })),
@@ -285,6 +287,8 @@ window.TrackerLensAiAgentRuntime = (() => {
     type: relation.relationType || relation.type || "",
     target: relation.targetLabel || relation.target || "",
     confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
+    score: Number.isFinite(Number(relation.score)) ? Number(relation.score) : null,
+    direct: relation.direct === true,
     documentId: relation.documentId || "",
     chunkId: relation.chunkId || "",
   });

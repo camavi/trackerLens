@@ -757,7 +757,103 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (haystack === token) score += 6;
       else if (haystack.includes(token)) score += 3;
     });
+    if (score <= 0) return 0;
     return score + Math.min(3, Number(entity.confidence || 0) * 3);
+  };
+
+  const graphQueryIntent = (query = "") => {
+    const normalized = normalizeEntityToken(query);
+    const asksDefinition = /\b(?:chi|cosa|cos|che|what|who|que|qué|quien|quién|quoi|qui|was|wer)\b/.test(normalized) ||
+      /\b(?:e|è|is|es|est|ist)\b/.test(normalized);
+    const asksRelation = /\b(?:relazione|relation|relacion|relación|lien|beziehung|tra|between|entre|zwischen)\b/.test(normalized);
+    return {
+      definition: asksDefinition,
+      relation: asksRelation,
+    };
+  };
+
+  const graphRelationWeight = (relationType = "", intent = {}) => {
+    const type = String(relationType || "co_occurs").toLowerCase();
+    const weights = {
+      says: 7,
+      represents: 7,
+      reveals: 7,
+      teaches: 7,
+      establishes: 7,
+      fulfills: 7,
+      foreshadows: 7,
+      helps: 6,
+      appears_in: intent.definition ? 1 : 5,
+      travels_to: intent.definition ? 1 : 5,
+      encounters: 5,
+      confronts: 5,
+      expresses: 5,
+      uses: 4,
+      contains: 4,
+      context_for: intent.definition ? 2 : 4,
+      associated_with: 3,
+      interacts_with: 3,
+      mentions: 3,
+      references: 3,
+      co_occurs: intent.definition ? 1.5 : 1,
+    };
+    return weights[type] ?? 2;
+  };
+
+  const scoreGraphRelation = (relation = {}, { seedScoreById = new Map(), entityById = new Map(), intent = {} } = {}) => {
+    const sourceScore = seedScoreById.get(relation.sourceEntityId) || 0;
+    const targetScore = seedScoreById.get(relation.targetEntityId) || 0;
+    const touchesSeed = sourceScore || targetScore;
+    const source = entityById.get(relation.sourceEntityId);
+    const target = entityById.get(relation.targetEntityId);
+    const directness = touchesSeed ? 20 + Math.max(sourceScore, targetScore) : 0;
+    const typeWeight = graphRelationWeight(relation.relationType, intent);
+    const confidence = Number(relation.confidence || 0) * 3;
+    const entityConfidence = Math.max(Number(source?.confidence || 0), Number(target?.confidence || 0));
+    let intentBonus = 0;
+    if (intent.definition && touchesSeed) {
+      const seedId = sourceScore ? relation.sourceEntityId : relation.targetEntityId;
+      const other = entityById.get(seedId === relation.sourceEntityId ? relation.targetEntityId : relation.sourceEntityId);
+      const otherType = String(other?.entityType || "").toLowerCase();
+      if (otherType === "proper-noun") intentBonus += 6;
+      if (otherType === "quote") intentBonus += 5;
+      if (otherType === "concept") intentBonus += 3;
+      if (otherType === "creature") intentBonus += 2;
+      if (otherType === "object") intentBonus += 1;
+      if (otherType === "location") intentBonus -= 5;
+    }
+    return directness + typeWeight + confidence + entityConfidence + intentBonus;
+  };
+
+  const graphDefinitionCueScore = (text = "", intent = {}) => {
+    if (!intent.definition) return 0;
+    const normalized = normalizeEntityToken(text);
+    const cues = [
+      " e ", " era ", " is ", " was ", " es ", " est ", " ist ",
+      " bambino", " ragazzo", " amico", " personaggio", " nato", " vive",
+      " child", " boy", " friend", " character", " born", " lives",
+      " niño", " amigo", " personaje", " nacido", " vive",
+      " enfant", " ami", " personnage", " ne ", " né ", " vit",
+      " kind", " freund", " figur", " geboren", " lebt",
+    ];
+    return cues.reduce((score, cue) => score + (normalized.includes(normalizeEntityToken(cue)) ? 2 : 0), 0);
+  };
+
+  const graphEvidenceSnippet = (text = "", labels = [], max = 900) => {
+    const source = String(text || "").trim();
+    if (!source || source.length <= max) return source;
+    const lower = source.toLowerCase();
+    const matchedLabel = labels
+      .map((label) => String(label || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length)
+      .find((label) => lower.includes(label.toLowerCase()));
+    if (!matchedLabel) return source.slice(0, max);
+    const index = lower.indexOf(matchedLabel.toLowerCase());
+    const start = Math.max(0, index - Math.floor(max * 0.35));
+    const end = Math.min(source.length, start + max);
+    const clipped = source.slice(start, end).trim();
+    return start > 0 ? `...${clipped}` : clipped;
   };
 
   const createDocument = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
@@ -1641,6 +1737,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const queryLanguage = detectLanguage(cleanQuery, payload?.language || config.language || "");
     const queryStopWords = languageStopWordSet({ ...config, language: queryLanguage }, cleanQuery);
     const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !queryStopWords.has(token));
+    const intent = graphQueryIntent(cleanQuery);
     const [entities, relations, chunks] = await Promise.all([
       listStore(STORES.entities),
       listStore(STORES.relations),
@@ -1679,12 +1776,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .sort((a, b) => b.score - a.score || String(a.entity.label || "").localeCompare(String(b.entity.label || "")))
       .slice(0, topK);
     const seedIds = new Set(rankedSeeds.map((item) => item.entity.id));
+    const seedScoreById = new Map(rankedSeeds.map((item) => [item.entity.id, item.score]));
+    const orderedScopedRelations = [...scopedRelations]
+      .map((relation) => ({
+        relation,
+        score: scoreGraphRelation(relation, { seedScoreById, entityById, intent }),
+      }))
+      .sort((a, b) =>
+        b.score - a.score ||
+        String(a.relation.relationType || "").localeCompare(String(b.relation.relationType || ""))
+      )
+      .map((item) => item.relation);
     const selectedRelationIds = new Set();
     const selectedEntityIds = new Set(seedIds);
     let frontier = new Set(seedIds);
     for (let level = 0; level < depth && frontier.size; level += 1) {
       const next = new Set();
-      scopedRelations.forEach((relation) => {
+      orderedScopedRelations.forEach((relation) => {
         const touches = frontier.has(relation.sourceEntityId) || frontier.has(relation.targetEntityId);
         if (!touches || selectedRelationIds.size >= maxRelations) return;
         selectedRelationIds.add(relation.id);
@@ -1697,7 +1805,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
     const selectedRelations = scopedRelations.filter((relation) => selectedRelationIds.has(relation.id));
     if (!selectedRelations.length && rankedSeeds.length) {
-      scopedRelations
+      orderedScopedRelations
         .filter((relation) => seedIds.has(relation.sourceEntityId) || seedIds.has(relation.targetEntityId))
         .slice(0, maxRelations)
         .forEach((relation) => {
@@ -1706,14 +1814,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
           selectedEntityIds.add(relation.targetEntityId);
         });
     }
-    const relationsResult = scopedRelations.filter((relation) => selectedRelationIds.has(relation.id)).slice(0, maxRelations);
+    const relationScoreById = new Map(orderedScopedRelations.map((relation) => [
+      relation.id,
+      scoreGraphRelation(relation, { seedScoreById, entityById, intent }),
+    ]));
+    const relationsResultRaw = orderedScopedRelations
+      .filter((relation) => selectedRelationIds.has(relation.id))
+      .slice(0, maxRelations);
     const degree = new Map();
-    relationsResult.forEach((relation) => {
+    relationsResultRaw.forEach((relation) => {
       degree.set(relation.sourceEntityId, (degree.get(relation.sourceEntityId) || 0) + 1);
       degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) || 0) + 1);
     });
-    const seedScoreById = new Map(rankedSeeds.map((item) => [item.entity.id, item.score]));
-    const entitiesResult = [...selectedEntityIds]
+    const entitiesResultRaw = [...selectedEntityIds]
       .map((id) => entityById.get(id))
       .filter(Boolean)
       .sort((a, b) =>
@@ -1722,33 +1835,78 @@ window.TrackerLensKnowledgeRuntime = (() => {
         String(a.label || "").localeCompare(String(b.label || ""))
       )
       .slice(0, Math.max(topK, 24));
+    const entitiesResult = entitiesResultRaw.map((entity) => ({
+      ...entity,
+      connections: degree.get(entity.id) || 0,
+      score: seedScoreById.get(entity.id) || 0,
+      matched: seedIds.has(entity.id),
+    }));
+    const relationsResult = relationsResultRaw.map((relation) => {
+      const source = entityById.get(relation.sourceEntityId);
+      const target = entityById.get(relation.targetEntityId);
+      return {
+        ...relation,
+        sourceLabel: source?.label || relation.sourceEntityId,
+        targetLabel: target?.label || relation.targetEntityId,
+        score: relationScoreById.get(relation.id) || 0,
+        direct: seedIds.has(relation.sourceEntityId) || seedIds.has(relation.targetEntityId),
+      };
+    });
     const chunkIds = new Set([
       ...entitiesResult.map((entity) => entity.chunkId).filter(Boolean),
       ...relationsResult.map((relation) => relation.chunkId).filter(Boolean),
     ]);
+    const matchedLabels = rankedSeeds.map((item) => item.entity.label).filter(Boolean);
+    const normalizedMatchedLabels = matchedLabels.map(normalizeEntityToken).filter(Boolean);
+    const evidenceScore = (chunk = {}) => {
+      const text = normalizeEntityToken(chunk.text || "");
+      let score = 0;
+      rankedSeeds.forEach(({ entity, score: seedScore }) => {
+        if (text.includes(normalizeEntityToken(entity.label))) score += 12 + seedScore;
+      });
+      queryTokens.forEach((token) => {
+        if (text.includes(token)) score += 3;
+      });
+      score += graphDefinitionCueScore(chunk.text || "", intent);
+      if (chunkIds.has(chunk.id)) score += 2;
+      return score;
+    };
+    const scopedChunks = byWorkspace(chunks, workspaceId)
+      .filter((chunk) => !documentId || chunk.documentId === documentId)
+      .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId);
     const evidence = includeEvidence
-      ? byWorkspace(chunks, workspaceId)
-        .filter((chunk) => chunkIds.has(chunk.id))
+      ? scopedChunks
+        .filter((chunk) => {
+          if (chunkIds.has(chunk.id)) return true;
+          const text = normalizeEntityToken(chunk.text || "");
+          return normalizedMatchedLabels.some((label) => text.includes(label));
+        })
+        .map((chunk) => ({ chunk, score: evidenceScore(chunk) }))
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score || String(a.chunk.id || "").localeCompare(String(b.chunk.id || "")))
         .slice(0, maxEvidence)
-        .map((chunk, index) => ({
+        .map(({ chunk, score }, index) => ({
           index: index + 1,
           chunkId: chunk.id,
           documentId: chunk.documentId,
-          text: String(chunk.text || "").slice(0, 900),
+          text: graphEvidenceSnippet(chunk.text || "", matchedLabels, 900),
           metadata: chunk.metadata || {},
+          score,
         }))
       : [];
     const relationLines = relationsResult.slice(0, Math.min(40, maxRelations)).map((relation, index) => {
       const source = entityById.get(relation.sourceEntityId);
       const target = entityById.get(relation.targetEntityId);
-      return `[R${index + 1}] ${source?.label || relation.sourceEntityId} -${relation.relationType || "related_to"}-> ${target?.label || relation.targetEntityId}`;
+      const marker = relation.direct ? " direct" : "";
+      return `[R${index + 1}${marker}] ${source?.label || relation.sourceEntityId} -${relation.relationType || "related_to"}-> ${target?.label || relation.targetEntityId}`;
     });
     const entityLines = entitiesResult.slice(0, 30).map((entity, index) =>
-      `[E${index + 1}] ${entity.label || entity.id} (${entity.entityType || "entity"}, connections=${degree.get(entity.id) || 0})`
+      `[E${index + 1}${entity.matched ? " match" : ""}] ${entity.label || entity.id} (${entity.entityType || "entity"}, connections=${entity.connections || 0}, score=${Number(entity.score || 0).toFixed(2)})`
     );
-    const evidenceLines = evidence.map((item) => `[S${item.index}] ${String(item.text || "").slice(0, 620)}`);
+    const evidenceLines = evidence.map((item) => `[S${item.index} score=${Number(item.score || 0).toFixed(2)}] ${String(item.text || "").slice(0, 720)}`);
     const rawContext = [
       `Knowledge Graph query: ${cleanQuery}`,
+      rankedSeeds.length ? `Matched entities: ${rankedSeeds.map((item) => `${item.entity.label} score=${item.score.toFixed(2)}`).join(", ")}` : "",
       entityLines.length ? `Entities:\n${entityLines.join("\n")}` : "Entities: none",
       relationLines.length ? `Relations:\n${relationLines.join("\n")}` : "Relations: none",
       evidenceLines.length ? `Evidence:\n${evidenceLines.join("\n\n")}` : "",

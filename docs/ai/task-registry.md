@@ -9,7 +9,7 @@ Last updated: 2026-06-26.
 
 ### TASK-027: Knowledge Runtime
 
-Status: Multilingual graph quality baseline complete and user-verified after Graph Query agent-consumption step.
+Status: Graph Query ranking refinement complete and user-verified after multilingual graph quality baseline.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -26,6 +26,7 @@ Current sub-steps:
 - Step 9 Knowledge Graph quality and analytics: complete and user-verified. View Graph surfaces quality metrics/top hubs/repeated evidence, relation persistence deduplicates equivalent source/target/type edges across chunks while preserving occurrence metadata, conservative entity alias canonicalization covers repeated water-source variants, deterministic narrative relation inference adds stronger local relation types before generic fallbacks, and manual graph exports verified corrected `heals`/`says` behavior.
 - Step 10 Knowledge Graph Query: complete and user-verified. `Graph Query` node emits prompt-ready `knowledge.graph.context` from persisted entities/relations/evidence, AI Agent runtime consumes Graph Context as first-class prompt/job metadata, and AI/RAG/Graph preview events now publish a clean answer payload while full prompt/context details remain in AI debug jobs.
 - Step 11 Multilingual graph quality: complete and user-verified. Runtime language profiles/detection now cover Italian, Spanish, English, French and German; documents/chunks/entities/relations persist language metadata, entity/query filters use language-aware stopword/weak-label sets while retaining previous safety filters, and German disables generic capitalized proper-noun extraction to account for noun capitalization.
+- Step 12 Graph Query ranking refinement: complete and user-verified. Query results carry entity score/connections/matched metadata, relation source/target labels, direct-match flags and relation scores; evidence scans matched-entity document chunks and clips around the entity, seed scoring requires lexical matches, and definitional relation ranking demotes location-only links while boosting direct person/quote/concept neighbors.
 - Knowledge Graph Test preset: `Sample Test` can now create and run a focused graph pipeline (`Manual JSON -> Document Store -> Chunk Processor -> Entity Extractor -> Knowledge Graph -> Preview`, plus `Graph Query -> Preview -> AI Agent`) and waits for graph context consumed by an AI Agent.
 - Knowledge Graph Test cleanup removes stale runtime dependencies by preset id/source before rerun, preventing duplicate overlapping edges between Entity Extractor and Knowledge Graph.
 - Knowledge Graph Test connection/dependency records now use the same shape as Knowledge Test records, including `connectionId` on runtime dependencies and `channel` on connection records, so dependency repair does not create duplicate links.
