@@ -2018,7 +2018,7 @@ const runMappingPreviewTest = async () => {
     outputs: ["raw"],
     channels: ["raw"],
     status: "active",
-    flowPosition: { x: 9, y: 14 },
+    flowPosition: { x: 140, y: 140, width: FLOW_NODE_DEFAULT_WIDTH },
     metadata: {
       configured: true,
       draft: false,
@@ -2046,7 +2046,7 @@ const runMappingPreviewTest = async () => {
     outputs: ["output"],
     channels: ["raw"],
     status: "active",
-    flowPosition: { x: 40, y: 14 },
+    flowPosition: { x: 520, y: 140, width: FLOW_NODE_DEFAULT_WIDTH },
     metadata: {
       configured: true,
       draft: false,
@@ -2190,7 +2190,7 @@ const runMappingStorageTest = async () => {
     outputs: ["raw"],
     channels: ["raw"],
     status: "active",
-    flowPosition: { x: 9, y: 24 },
+    flowPosition: { x: 140, y: 360, width: FLOW_NODE_DEFAULT_WIDTH },
     metadata: {
       configured: true,
       draft: false,
@@ -2218,7 +2218,7 @@ const runMappingStorageTest = async () => {
     outputs: [],
     channels: ["raw"],
     status: "active",
-    flowPosition: { x: 40, y: 24 },
+    flowPosition: { x: 520, y: 360, width: FLOW_NODE_DEFAULT_WIDTH },
     metadata: {
       configured: true,
       draft: false,
@@ -2430,10 +2430,10 @@ const runKnowledgeSampleTest = async () => {
   };
   const queryText = String(queryPayload.query || fallbackQueryText);
   const layout = (() => {
-    const left = 4;
-    const step = 23;
-    const top = 9;
-    const row = 40;
+    const left = 140;
+    const step = 340;
+    const top = 140;
+    const row = 300;
     return {
       docSource: { x: left, y: top },
       documentStore: { x: left + step, y: top },
@@ -2447,7 +2447,7 @@ const runKnowledgeSampleTest = async () => {
       aiPreview: { x: left + step * 4.85, y: top + row * 1.82 },
     };
   })();
-  const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge sample" }) => ({
+  const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, width = FLOW_NODE_DEFAULT_WIDTH, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge sample" }) => ({
     id: id(name),
     workspaceId,
     type,
@@ -2458,7 +2458,7 @@ const runKnowledgeSampleTest = async () => {
     outputs,
     channels: uniqueStrings([...inputs, ...outputs]),
     status: "active",
-    flowPosition: { x, y },
+    flowPosition: { x, y, width },
     metadata: {
       configured: true,
       draft: false,
@@ -3029,10 +3029,10 @@ const runKnowledgeGraphSampleTest = async () => {
     purpose: "knowledge-graph-query-sample",
   };
   const layout = (() => {
-    const left = 5;
-    const step = 25;
-    const top = 12;
-    const row = 34;
+    const left = 140;
+    const step = 340;
+    const top = 140;
+    const row = 300;
     return {
       docSource: { x: left, y: top },
       documentStore: { x: left + step, y: top },
@@ -3048,7 +3048,7 @@ const runKnowledgeGraphSampleTest = async () => {
       aiPreview: { x: left + step * 6.2, y: top + row * 2 },
     };
   })();
-  const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge Graph sample" }) => ({
+  const nodeBase = ({ name, type, label, inputs = [], outputs = [], x, y, width = FLOW_NODE_DEFAULT_WIDTH, tone, icon: iconName, subtype, category, config = {}, settingsSchema = {}, paletteLabel = label, paletteAction = "Knowledge Graph sample" }) => ({
     id: id(name),
     workspaceId,
     type,
@@ -3059,7 +3059,7 @@ const runKnowledgeGraphSampleTest = async () => {
     outputs,
     channels: uniqueStrings([...inputs, ...outputs]),
     status: "active",
-    flowPosition: { x, y },
+    flowPosition: { x, y, width },
     metadata: {
       configured: true,
       draft: false,

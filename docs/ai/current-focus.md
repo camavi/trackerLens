@@ -383,6 +383,7 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Added standalone `flowMapRepair.html`, a minimal IndexedDB repair page that does not load Flow Map and can delete all records referencing a corrupted workspace, including pages/widgets/runtime/knowledge stores.
 - Knowledge Graph View now falls back to the latest snapshot document in the node collection when the node config still points to an older/sample `documentId`, so uploaded-document graphs are visible without manually editing node config.
 - Knowledge Graph Debug/View now surfaces `Configured document`, `Latest snapshot document`, `Viewing document`, and a document status flag so stale config vs latest snapshot mismatches are visible.
+- Flow Map canvas now uses world-unit node coordinates instead of viewport-percent placement for newly generated nodes, with viewport-aware edge canvas drawing and per-node width persisted in `flowPosition.width` via a node resize handle.
 
 ## Next Logical Step
 

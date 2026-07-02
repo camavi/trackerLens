@@ -3416,12 +3416,7 @@ const toggleNodeCollapse = async (node) => {
 const duplicateRuntimeNode = async (node) => {
   if (!node?.id) return;
   const now = Date.now();
-  const position = node.flowPosition || node.position || { x: "42%", y: "42%" };
-  const offsetPercent = (value, offset) => {
-    const numeric = parseFloat(value);
-    if (!Number.isFinite(numeric)) return value;
-    return flowCoordinate(numeric + offset);
-  };
+  const position = node.flowPosition || node.position || { x: 240, y: 180, width: FLOW_NODE_DEFAULT_WIDTH };
   const clone = {
     ...JSON.parse(JSON.stringify(node)),
     id: `node_${now}`,
@@ -3430,8 +3425,9 @@ const duplicateRuntimeNode = async (node) => {
     status: "idle",
     runtime: { ...(node.runtime || {}), status: "idle", active: false },
     flowPosition: {
-      x: offsetPercent(position.x, 5),
-      y: offsetPercent(position.y, 5),
+      x: flowCoordinate(flowWorldNumber(position.x) + 80),
+      y: flowCoordinate(flowWorldNumber(position.y) + 80),
+      width: flowNodeWidth(position),
     },
     metadata: {
       ...(node.metadata || {}),

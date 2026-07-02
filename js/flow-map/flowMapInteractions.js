@@ -23,11 +23,14 @@ const beginPan = (event) => {
   document.addEventListener("pointercancel", endInteraction, { once: true });
 };
 
-const clampFlowNumber = (value, min = -120, max = 220) =>
+const clampFlowNumber = (value, min = FLOW_CANVAS_POSITION_MIN, max = FLOW_CANVAS_POSITION_MAX) =>
   Math.max(min, Math.min(max, Number(value) || 0));
 
 const flowPositionNumber = (position = {}, axis = "x") =>
-  clampFlowNumber(parseFloat(position?.[axis]), -120, 220);
+  clampFlowNumber(parseFloat(position?.[axis]));
+
+const flowPositionWidth = (position = {}) =>
+  flowNodeWidth(position);
 
 const wheelPixelDelta = (event) => {
   const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
@@ -124,6 +127,7 @@ const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
       flowPosition: {
         x: flowCoordinate(point.x),
         y: flowCoordinate(point.y),
+        width: FLOW_NODE_DEFAULT_WIDTH,
       },
     });
     state.paletteDragItem = null;
@@ -135,6 +139,7 @@ const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
       flowPosition: {
         x: flowCoordinate(point.x),
         y: flowCoordinate(point.y),
+        width: FLOW_NODE_DEFAULT_WIDTH,
       },
     });
     state.paletteDragItem = null;
@@ -151,6 +156,7 @@ const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
     flowPosition: {
       x: flowCoordinate(point.x),
       y: flowCoordinate(point.y),
+      width: FLOW_NODE_DEFAULT_WIDTH,
     },
     channels: [channelForDraft()].filter(Boolean),
     metadata: {
@@ -195,10 +201,11 @@ const libraryAssetKindForPalette = (item = {}) =>
   item.nodeType === "boxLens" ? "boxLens" : "boxTracker";
 
 const defaultAssetFlowPosition = () => {
-  const offset = Math.min(28, (state.runtime.nodes || []).length * 3);
+  const offset = Math.min(900, (state.runtime.nodes || []).length * 42);
   return {
-    x: flowCoordinate(18 + offset),
-    y: flowCoordinate(18 + offset),
+    x: flowCoordinate(160 + offset),
+    y: flowCoordinate(140 + offset),
+    width: FLOW_NODE_DEFAULT_WIDTH,
   };
 };
 
@@ -1272,6 +1279,7 @@ const beginNodeDrag = (event, node, index) => {
       node: item,
       x: flowPositionNumber(position, "x"),
       y: flowPositionNumber(position, "y"),
+      width: flowPositionWidth(position),
     }];
   }));
   state.interaction = {
@@ -1286,6 +1294,7 @@ const beginNodeDrag = (event, node, index) => {
     startPosition: {
       x: flowPositionNumber(current, "x"),
       y: flowPositionNumber(current, "y"),
+      width: flowPositionWidth(current),
     },
     groupPositions,
   };
@@ -1317,6 +1326,29 @@ const descendantDragNodes = (node = {}) => {
     });
   }
   return result.length ? result : [node];
+};
+
+const beginNodeResize = (event, node, index) => {
+  event.preventDefault();
+  event.stopPropagation();
+  bringNodeToFront(node.id);
+  const position = nodePosition(node, index);
+  state.interaction = {
+    type: "node-resize",
+    nodeId: node.id,
+    workspaceId: node.workspaceId || "",
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    startWidth: flowPositionWidth(position),
+    position: {
+      x: flowPositionNumber(position, "x"),
+      y: flowPositionNumber(position, "y"),
+    },
+  };
+  document.addEventListener("pointermove", handlePointerMove);
+  document.addEventListener("pointerup", endInteraction, { once: true });
+  document.addEventListener("pointercancel", endInteraction, { once: true });
 };
 
 const beginPortLinkDrag = (event, node, index, side = "out", port = "all") => {
@@ -1549,13 +1581,31 @@ const handlePointerMove = (event) => {
       state.nodePositions[nodeId] = {
         x: flowCoordinate(start.x + deltaX),
         y: flowCoordinate(start.y + deltaY),
+        width: start.width,
       };
       const node = document.querySelector(`[data-flow-node-id="${escapeSelectorValue(nodeId)}"]`);
       if (node) {
         node.style.setProperty("--x", state.nodePositions[nodeId].x);
         node.style.setProperty("--y", state.nodePositions[nodeId].y);
+        node.style.setProperty("--node-width", `${state.nodePositions[nodeId].width}px`);
       }
     });
+    renderFlowEdges();
+    return;
+  }
+
+  if (interaction.type === "node-resize") {
+    const dx = Math.abs(event.clientX - interaction.startX);
+    if (!interaction.moved && dx < 3) return;
+    interaction.moved = true;
+    const nextWidth = Math.max(FLOW_NODE_MIN_WIDTH, Math.min(FLOW_NODE_MAX_WIDTH, interaction.startWidth + (event.clientX - interaction.startX) / Math.max(0.1, state.viewport.zoom || 1)));
+    state.nodePositions[interaction.nodeId] = {
+      x: flowCoordinate(interaction.position.x),
+      y: flowCoordinate(interaction.position.y),
+      width: Math.round(nextWidth),
+    };
+    const node = document.querySelector(`[data-flow-node-id="${escapeSelectorValue(interaction.nodeId)}"]`);
+    if (node) node.style.setProperty("--node-width", `${Math.round(nextWidth)}px`);
     renderFlowEdges();
     return;
   }
@@ -1656,6 +1706,11 @@ const endInteraction = (event) => {
     return;
   }
   if (interaction?.type === "node") persistNodePositions(interaction);
+  if (interaction?.type === "node-resize") {
+    if (interaction.moved) persistNodePosition(interaction);
+    flushPendingRuntimeRefresh();
+    return;
+  }
   if (interaction?.type === "pan") {
     if (!interaction.moved && state.inspectorOpen) {
       closeInspector();
@@ -1741,9 +1796,9 @@ const fitVisibleGraph = () => {
 
   const bounds = graph.nodes.reduce((acc, node, index) => {
     const position = nodePosition(node, index);
-    const x = (parseFloat(position.x) / 100) * rect.width;
-    const y = (parseFloat(position.y) / 100) * rect.height;
-    const width = 210;
+    const x = flowWorldNumber(position.x);
+    const y = flowWorldNumber(position.y);
+    const width = flowPositionWidth(position);
     const height = nodeMinHeight(Math.max(nodePorts(node, "in").length, nodePorts(node, "out").length));
     return {
       minX: Math.min(acc.minX, x),
@@ -1770,17 +1825,13 @@ const fitVisibleGraph = () => {
   mount();
 };
 
-const setViewportCenterOnPercent = ({ x = 50, y = 50, zoom = state.viewport.zoom, remount = true } = {}) => {
+const setViewportCenterOnPercent = ({ x = 0, y = 0, zoom = state.viewport.zoom, remount = true } = {}) => {
   const host = document.querySelector(".tl-flow-canvas");
   const rect = host?.getBoundingClientRect?.();
   if (!rect?.width || !rect?.height) return;
   const nextZoom = Math.max(0.45, Math.min(2.2, Number(zoom) || state.viewport.zoom || 1));
-  const rawX = Number(x);
-  const rawY = Number(y);
-  const percentX = Number.isFinite(rawX) ? rawX : 0;
-  const percentY = Number.isFinite(rawY) ? rawY : 0;
-  const graphX = (percentX / 100) * rect.width;
-  const graphY = (percentY / 100) * rect.height;
+  const graphX = flowWorldNumber(x);
+  const graphY = flowWorldNumber(y);
   state.viewport = {
     zoom: Math.round(nextZoom * 100) / 100,
     panX: Math.round((rect.width / 2) - graphX * nextZoom),
@@ -1807,8 +1858,8 @@ const centerViewportOnNode = (node = {}, index = 0, { select = false, zoom = Mat
     bringNodeToFront(node.id);
   }
   centerViewportOnPercent({
-    x: parseFloat(position.x),
-    y: parseFloat(position.y),
+    x: flowWorldNumber(position.x) + flowPositionWidth(position) / 2,
+    y: flowWorldNumber(position.y) + nodeMinHeight(Math.max(nodePorts(node, "in").length, nodePorts(node, "out").length)) / 2,
     zoom,
   });
 };

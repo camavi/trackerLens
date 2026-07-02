@@ -1593,7 +1593,7 @@ const flowPromptActionAlreadyApplied = (action = {}) => {
     const node = flowPromptRuntimeNodeById(action.nodeId);
     const next = action.nextPosition || {};
     const current = node?.flowPosition || node?.position || {};
-    return !!node && Number(current.x || 0) === Number(next.x || 0) && Number(current.y || 0) === Number(next.y || 0);
+    return !!node && flowWorldNumber(current.x) === flowWorldNumber(next.x) && flowWorldNumber(current.y) === flowWorldNumber(next.y);
   }
   if (action.type === "renameNode") {
     const node = flowPromptRuntimeNodeById(action.nodeId);
@@ -1831,8 +1831,9 @@ const flowPromptApplyActionToPlanningContext = (context = {}, action = {}) => {
         label: action.nextLabel || `${source.label || source.id} Copy`,
         sourceRef: newNodeId,
         flowPosition: {
-          x: Number(basePosition.x || 0) + 180,
-          y: Number(basePosition.y || 0) + 120,
+          x: flowCoordinate(flowWorldNumber(basePosition.x) + 180),
+          y: flowCoordinate(flowWorldNumber(basePosition.y) + 120),
+          width: flowNodeWidth(basePosition),
         },
         metadata: {
           ...(source.metadata || {}),
@@ -2332,8 +2333,9 @@ const flowPromptBuildMoveNodePlan = (context = {}, prompt = "") => {
   }
   const current = node.flowPosition || node.position || { x: 0, y: 0 };
   const nextPosition = {
-    x: Number(current.x || 0) + delta.x,
-    y: Number(current.y || 0) + delta.y,
+    x: flowCoordinate(flowWorldNumber(current.x) + delta.x),
+    y: flowCoordinate(flowWorldNumber(current.y) + delta.y),
+    width: flowNodeWidth(current),
   };
   return flowPromptBatchPlan([
     {
@@ -3980,8 +3982,9 @@ const flowPromptFindExistingNode = (spec = {}) => {
 };
 
 const flowPromptPositionForIndex = (index = 0) => ({
-  x: flowCoordinate(10 + (index % 4) * 28),
-  y: flowCoordinate(14 + Math.floor(index / 4) * 30),
+  x: flowCoordinate(120 + (index % 4) * 320),
+  y: flowCoordinate(140 + Math.floor(index / 4) * 240),
+  width: FLOW_NODE_DEFAULT_WIDTH,
 });
 
 const flowPromptNodeFromSpec = ({ spec, workspaceId, index }) => {
@@ -4636,7 +4639,7 @@ const openFlowPromptChatDialog = async () => {
       const node = flowPromptRuntimeNodeById(action.nodeId);
       const nextPosition = action.nextPosition || {};
       if (!node) return { ok: false, reason: "Nodo da spostare non trovato.", action, tool };
-      if (!Number.isFinite(Number(nextPosition.x)) || !Number.isFinite(Number(nextPosition.y))) {
+      if (!Number.isFinite(flowWorldNumber(nextPosition.x, NaN)) || !Number.isFinite(flowWorldNumber(nextPosition.y, NaN))) {
         return { ok: false, reason: "Posizione target non valida.", action, tool };
       }
       return { ok: true, action: { ...action, node, nodeId: node.id, nextPosition }, tool };
@@ -4755,8 +4758,9 @@ const openFlowPromptChatDialog = async () => {
         sourceRef: id,
         assetId: node.assetId || "",
         flowPosition: {
-          x: Number(basePosition.x || 0) + 180,
-          y: Number(basePosition.y || 0) + 120,
+          x: flowCoordinate(flowWorldNumber(basePosition.x) + 180),
+          y: flowCoordinate(flowWorldNumber(basePosition.y) + 120),
+          width: flowNodeWidth(basePosition),
         },
         position: { ...(node.position || { x: 1, y: 1 }) },
         runtime: { ...(node.runtime || {}), status: "idle" },
@@ -4781,8 +4785,9 @@ const openFlowPromptChatDialog = async () => {
       const nextNode = {
         ...node,
         flowPosition: {
-          x: Number(action.nextPosition.x || 0),
-          y: Number(action.nextPosition.y || 0),
+          x: flowCoordinate(flowWorldNumber(action.nextPosition.x)),
+          y: flowCoordinate(flowWorldNumber(action.nextPosition.y)),
+          width: flowNodeWidth(action.nextPosition || node.flowPosition || node.position || {}),
         },
         updatedAt: new Date().toISOString(),
       };

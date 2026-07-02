@@ -7,6 +7,11 @@ const params = new URLSearchParams(window.location.search);
 const defaultViewport = () => ({ zoom: 1, panX: 0, panY: 0 });
 const RUNTIME_EVENT_UI_LIMIT = 220;
 const RUNTIME_LOG_UI_LIMIT = 220;
+const FLOW_CANVAS_POSITION_MIN = -1000000;
+const FLOW_CANVAS_POSITION_MAX = 1000000;
+const FLOW_NODE_DEFAULT_WIDTH = 218;
+const FLOW_NODE_MIN_WIDTH = 160;
+const FLOW_NODE_MAX_WIDTH = 720;
 const RUNTIME_PAYLOAD_UI_BYTES = 24000;
 const flowMapRepairMode = () => String(params.get("repair") || "").trim().toLowerCase();
 const isFlowMapRecoveryMode = () => {
@@ -1743,16 +1748,27 @@ const performanceLabel = (perf = {}) => {
 
 const graphModel = () => graphModelApi().build({ runtime: state.runtime, filters: state.filters });
 
-const cssFlowCoordinate = (value, fallback = "0%") => {
-  if (typeof value === "number" && Number.isFinite(value)) return `${value}%`;
+const flowWorldNumber = (value, fallback = 0) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value ?? "").trim();
   if (!text) return fallback;
-  return /%$/.test(text) ? text : `${Number.isFinite(Number(text)) ? Number(text) : parseFloat(text) || 0}%`;
+  const numeric = Number.isFinite(Number(text)) ? Number(text) : parseFloat(text);
+  return Number.isFinite(numeric) ? numeric : fallback;
 };
+
+const flowNodeWidth = (nodeOrPosition = {}) => {
+  const raw = nodeOrPosition?.flowPosition?.width ?? nodeOrPosition?.metadata?.width ?? nodeOrPosition?.style?.width ?? nodeOrPosition?.width;
+  const width = flowWorldNumber(raw, FLOW_NODE_DEFAULT_WIDTH);
+  return Math.max(FLOW_NODE_MIN_WIDTH, Math.min(FLOW_NODE_MAX_WIDTH, width));
+};
+
+const cssFlowCoordinate = (value, fallback = 0) =>
+  `${flowWorldNumber(value, fallback)}px`;
 
 const normalizeFlowPosition = (position = {}) => ({
   x: cssFlowCoordinate(position.x),
   y: cssFlowCoordinate(position.y),
+  width: flowNodeWidth(position),
 });
 
 const nodePosition = (node, index) => {
@@ -1771,13 +1787,13 @@ const pointerPercent = (event, canvas) => {
   const rect = canvas.getBoundingClientRect();
   const zoom = state.viewport.zoom || 1;
   return {
-    x: ((event.clientX - rect.left - state.viewport.panX) / zoom / rect.width) * 100,
-    y: ((event.clientY - rect.top - state.viewport.panY) / zoom / rect.height) * 100,
+    x: (event.clientX - rect.left - state.viewport.panX) / zoom,
+    y: (event.clientY - rect.top - state.viewport.panY) / zoom,
   };
 };
 
-const flowCoordinate = (value, min = -120, max = 220) =>
-  `${Math.max(min, Math.min(max, value))}%`;
+const flowCoordinate = (value, min = FLOW_CANVAS_POSITION_MIN, max = FLOW_CANVAS_POSITION_MAX) =>
+  `${Math.max(min, Math.min(max, flowWorldNumber(value)))}px`;
 
 const normalizeRuntimeWorkspaceId = (workspaceId = "") => {
   const value = String(workspaceId || "").trim();

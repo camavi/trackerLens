@@ -589,7 +589,7 @@ textarea.tl-flow-menu-input {
   left: var(--x);
   top: var(--y);
   z-index: 3;
-  width: 218px;
+  width: var(--node-width, 218px);
   min-height: max(168px, calc((var(--port-count, 2) * 18px) + 104px));
   display: grid;
   grid-template-rows: auto auto 1fr auto;
@@ -607,6 +607,30 @@ textarea.tl-flow-menu-input {
   cursor: grab;
   user-select: none;
   touch-action: none;
+}
+
+.tl-flow-node-resize {
+  position: absolute;
+  z-index: 18;
+  right: 5px;
+  bottom: 5px;
+  width: 12px;
+  height: 12px;
+  cursor: ew-resize;
+  border-right: 2px solid rgba(var(--node-rgb, 214, 226, 235), 0.52);
+  border-bottom: 2px solid rgba(var(--node-rgb, 214, 226, 235), 0.52);
+  border-radius: 0 0 4px 0;
+  opacity: 0;
+  transition: opacity 0.14s ease, border-color 0.14s ease;
+}
+
+.tl-flow-node:hover .tl-flow-node-resize,
+.tl-flow-node.is-selected .tl-flow-node-resize {
+  opacity: 1;
+}
+
+.tl-flow-node-resize:hover {
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.9);
 }
 
 .tl-flow-node.is-agent-bridge {
@@ -636,7 +660,7 @@ textarea.tl-flow-menu-input {
 }
 
 .tl-flow-node.is-flow-port-node {
-  width: 246px;
+  width: var(--node-width, 246px);
   border-width: 1px;
   overflow: visible;
 }

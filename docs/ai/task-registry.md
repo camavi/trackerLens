@@ -222,6 +222,7 @@ Main files:
 - Embedded Flow Map alias sync: source `Flow In` ports map to left-side inputs and source `Flow Out` ports map to right-side outputs; names, types, title and version refresh from the source while generic `all` ports remain available, and deleting the alias never deletes its source Flow Map.
 - Embedded Flow Map read-only preview: alias body action opens a minimal fitted graph dialog showing current source nodes by name/type and their connections without full node bodies or editing controls.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
+- Flow Map world canvas pass: newly generated nodes use world-unit coordinates instead of viewport-percent positions, the edge canvas follows the visible world viewport, and node width can be resized per node and persisted in `flowPosition.width`.
 - Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
 - Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.
 - Flow Map recursive delete action: node delete dialog can force-delete the selected node plus every downstream child node.

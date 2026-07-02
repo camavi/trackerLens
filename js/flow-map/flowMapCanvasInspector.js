@@ -514,13 +514,22 @@ const edgeCanvasBounds = () => {
   const host = document.querySelector(".tl-flow-canvas");
   const rect = host?.getBoundingClientRect?.();
   if (!rect) return null;
-  const paddingX = rect.width * 2.1;
-  const paddingY = rect.height * 2.1;
+  const zoom = Math.max(0.1, Number(state.viewport.zoom) || 1);
+  const worldX = -state.viewport.panX / zoom;
+  const worldY = -state.viewport.panY / zoom;
+  const worldWidth = rect.width / zoom;
+  const worldHeight = rect.height / zoom;
+  const paddingX = worldWidth * 1.4;
+  const paddingY = worldHeight * 1.4;
+  const left = Math.round(worldX - paddingX);
+  const top = Math.round(worldY - paddingY);
   return {
-    width: Math.max(1, Math.round(rect.width + paddingX * 2)),
-    height: Math.max(1, Math.round(rect.height + paddingY * 2)),
-    offsetX: Math.round(paddingX),
-    offsetY: Math.round(paddingY),
+    width: Math.max(1, Math.round(worldWidth + paddingX * 2)),
+    height: Math.max(1, Math.round(worldHeight + paddingY * 2)),
+    left,
+    top,
+    offsetX: -left,
+    offsetY: -top,
     rect,
   };
 };
@@ -531,11 +540,13 @@ const edgePoint = (point = {}, bounds = { offsetX: 0, offsetY: 0 }) => ({
 });
 
 const canvasPoint = (canvas, position, side = "out", offsetY = 0, portPercent = 50) => {
-  const x = parseFloat(position.x) + (side === "out" ? 16.5 : 0);
-  const y = parseFloat(position.y) + ((portPercent / 100) * 9.6);
+  const width = flowPositionWidth(position);
+  const height = nodeMinHeight(1);
+  const x = flowWorldNumber(position.x) + (side === "out" ? width : 0);
+  const y = flowWorldNumber(position.y) + ((portPercent / 100) * height);
   return {
-    x: (x / 100) * canvas.width,
-    y: (y / 100) * canvas.height + offsetY,
+    x,
+    y: y + offsetY,
   };
 };
 
@@ -644,9 +655,9 @@ const drawFlowEdges = () => {
     canvas.height = Math.round(height * dpr);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
-    canvas.style.left = `${-bounds.offsetX}px`;
-    canvas.style.top = `${-bounds.offsetY}px`;
   }
+  canvas.style.left = `${bounds.left}px`;
+  canvas.style.top = `${bounds.top}px`;
 
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -733,8 +744,8 @@ const drawFlowEdges = () => {
     if (sourceNode && state.interaction.point) {
       const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: sourceIndex, side: "out", port: state.interaction.sourcePort || outputPortLabel(sourceNode) }), bounds);
       const to = {
-        x: (state.interaction.point.x / 100) * rect.width + bounds.offsetX,
-        y: (state.interaction.point.y / 100) * rect.height + bounds.offsetY,
+        x: state.interaction.point.x + bounds.offsetX,
+        y: state.interaction.point.y + bounds.offsetY,
       };
       const rgb = toneRgb(graphTone(sourceNode));
       ctx.save();
@@ -959,11 +970,19 @@ const refreshRuntimeDom = ({ preserveScroll = false } = {}) => {
   });
 };
 
+const canDeleteRuntimeCanvasNode = (node = null) =>
+  Boolean(node && !node.metadata?.library && (
+    isDraftNode(node) ||
+    isInlineConfigNode(node) ||
+    isEmbeddedFlowMapNode(node) ||
+    isFlowBoundaryNode(node)
+  ));
+
 const renderNodeQuickActions = (node, view) => {
   if (!node?.id || node.metadata?.library) return null;
   const paused = view.runtime.status === "paused";
   const disabled = view.runtime.status === "disabled";
-  const canDeleteRuntimeNode = isDraftNode(node) || isInlineConfigNode(node) || isEmbeddedFlowMapNode(node);
+  const canDeleteRuntimeNode = canDeleteRuntimeCanvasNode(node);
   return _.span(
     { class: "tl-flow-node-quick-actions", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
     btn({
@@ -1223,7 +1242,7 @@ const renderNodeContextMenu = () => {
   const view = runtimeNodeBase(node, recentActivity(graphModel()).nodeActivity?.get(node.id), nodePerformance(node));
   const disabled = view.runtime.status === "disabled";
   const paused = view.runtime.status === "paused";
-  const canDelete = isDraftNode(node) || ((isInlineConfigNode(node) || isEmbeddedFlowMapNode(node)) && !node.metadata?.library);
+  const canDelete = canDeleteRuntimeCanvasNode(node);
   const item = (action, iconName, label, options = {}) => _.button(
     {
       type: "button",
@@ -1288,8 +1307,8 @@ const lazyVisibleNodes = (graph = {}, activity = {}) => {
   const visible = nodes.filter((node, index) => {
     if (selected.has(node.id)) return true;
     const pos = nodePosition(node, index);
-    const x = state.viewport.panX + (pos.x / 100) * 2600 * zoom;
-    const y = state.viewport.panY + (pos.y / 100) * 1800 * zoom;
+    const x = state.viewport.panX + flowWorldNumber(pos.x) * zoom;
+    const y = state.viewport.panY + flowWorldNumber(pos.y) * zoom;
     return x > -360 && x < width + 360 && y > -260 && y < height + 320;
   });
   return visible.length ? visible.slice(0, 180) : nodes.slice(0, 100);
@@ -1314,10 +1333,10 @@ const minimapViewportBounds = (rect = { width: 1440, height: 900 }) => {
   const width = Math.max(1, rect.width || 1440);
   const height = Math.max(1, rect.height || 900);
   return {
-    minX: ((-state.viewport.panX) / zoom / width) * 100,
-    minY: ((-state.viewport.panY) / zoom / height) * 100,
-    maxX: ((width - state.viewport.panX) / zoom / width) * 100,
-    maxY: ((height - state.viewport.panY) / zoom / height) * 100,
+    minX: (-state.viewport.panX) / zoom,
+    minY: (-state.viewport.panY) / zoom,
+    maxX: (width - state.viewport.panX) / zoom,
+    maxY: (height - state.viewport.panY) / zoom,
   };
 };
 
@@ -1331,15 +1350,15 @@ const minimapNodeSizePercent = (node = {}, rect = { width: 1440, height: 900 }) 
   const nodeRect = element?.getBoundingClientRect?.();
   if (!node.metadata?.collapsed && hostRect?.width && hostRect?.height && nodeRect?.width && nodeRect?.height) {
     return {
-      width: (nodeRect.width / zoom / hostRect.width) * 100,
-      height: (nodeRect.height / zoom / hostRect.height) * 100,
+      width: nodeRect.width / zoom,
+      height: nodeRect.height / zoom,
     };
   }
 
   const portCount = Math.max(nodePorts(node, "in").length, nodePorts(node, "out").length, 1);
   return {
-    width: (210 / Math.max(1, rect.width || 1440)) * 100,
-    height: ((node.metadata?.collapsed ? 92 : nodeMinHeight(portCount)) / Math.max(1, rect.height || 900)) * 100,
+    width: flowNodeWidth(node),
+    height: node.metadata?.collapsed ? 92 : nodeMinHeight(portCount),
   };
 };
 
@@ -1351,8 +1370,8 @@ const minimapGraphFrame = (graph = {}, rect = { width: 1440, height: 900 }) => {
     return {
       node,
       index,
-      x: Number(parseFloat(pos.x)) || 0,
-      y: Number(parseFloat(pos.y)) || 0,
+      x: flowWorldNumber(pos.x),
+      y: flowWorldNumber(pos.y),
       width: size.width,
       height: size.height,
     };
@@ -1687,7 +1706,7 @@ const renderCanvas = () => {
               role: "button",
               tabindex: 0,
               class: `tl-flow-node is-${graphTone(node)} is-runtime-${view.runtime.status}${isAgentBridge ? " is-agent-bridge" : ""}${isEmbeddedFlowMapNode(node) ? " is-embedded-flow-map" : ""}${isFlowBoundaryNode(node) ? ` is-flow-port-node is-${flowPortSubtype(node) || "flow-port"}` : ""}${node.metadata?.collapsed ? " is-collapsed" : ""}${state.frontNodeId === node.id ? " is-front" : ""}${state.focus.nodeId === node.id ? " is-selected" : ""}${impactClassForNode(node, impact)}${live || processingNode ? " is-live is-event-active" : ""}${processingNode ? " is-ai-processing" : ""}${live?.status === "orchestrating" ? " is-orchestrating" : ""}${live?.status === "complete" ? " is-task-complete" : ""}${live?.status === "error" ? " is-error" : ""}${isLinkSource ? " is-link-source" : ""}${isLinkTarget ? " is-link-target" : ""}${isLinkHover ? " is-link-hover" : ""}${isInTestRun ? " is-test-path" : ""}`,
-              style: { "--x": pos.x, "--y": pos.y, "--port-count": portCount, minHeight: isAgentBridge ? "58px" : `${nodeMinHeight(portCount)}px` },
+              style: { "--x": pos.x, "--y": pos.y, "--node-width": `${flowPositionWidth(pos)}px`, "--port-count": portCount, minHeight: isAgentBridge ? "58px" : `${nodeMinHeight(portCount)}px` },
               "data-flow-node-id": node.id,
               "data-input-port-count": fullInputPorts.length,
               "data-output-port-count": fullOutputPorts.length,
@@ -1788,7 +1807,12 @@ const renderCanvas = () => {
                 },
               }, icon((state.testRun.running && isInTestRun) || processingNode ? "hourglass_top" : "play_arrow", "sm")) : null,
               _.span({ "data-flow-node-footer-ports": "true" }, isAgentBridge ? "1 agent · 1 in/out" : `${fullInputPorts.length} in · ${fullOutputPorts.length} out`)
-            )
+            ),
+            isAgentBridge ? null : _.span({
+              class: "tl-flow-node-resize",
+              title: "Resize node width",
+              onPointerDown: (event) => beginNodeResize(event, node, index),
+            })
           );
         })
       ),
@@ -5649,7 +5673,7 @@ const renderInspector = () => {
   const channels = node ? nodeChannels(node) : [];
   const channelRecords = selectedChannelRecords(node);
   const draft = isDraftNode(node || {});
-  const canDeleteRuntimeNode = draft || (node && (isInlineConfigNode(node) || isEmbeddedFlowMapNode(node)) && !node.metadata?.library);
+  const canDeleteRuntimeNode = canDeleteRuntimeCanvasNode(node);
   const linkingSource = nodeById(state.linkingSourceId);
   const isLinkTarget = Boolean(node && linkingSource && linkingSource.id !== node.id);
   const view = node ? runtimeNodeBase(node, recentActivity(graphModel()).nodeActivity?.get(node.id), nodePerformance(node)) : null;

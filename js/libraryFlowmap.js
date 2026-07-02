@@ -411,7 +411,7 @@ const createDefaultFlowBoundaryNodes = (workspaceId, now) => {
         active: true,
       },
       position: { x: 1, y: 1 },
-      flowPosition: { x, y: "42%" },
+      flowPosition: { x, y: 260, width: 246 },
       metadata: {
         configured: true,
         draft: false,
@@ -451,7 +451,7 @@ const createDefaultFlowBoundaryNodes = (workspaceId, now) => {
       permission: "flow.input",
       port: { id: "flow.in", name: "flow.in", type: "object", schema: null, required: false },
       side: "out",
-      x: "12%",
+      x: 160,
     }),
     boundaryNode({
       id: `flow_out_${safeFlowId(workspaceId)}`,
@@ -462,7 +462,7 @@ const createDefaultFlowBoundaryNodes = (workspaceId, now) => {
       permission: "flow.output",
       port: { id: "flow.out", name: "flow.out", type: "object", schema: null, required: false },
       side: "in",
-      x: "70%",
+      x: 820,
     }),
   ];
 };
