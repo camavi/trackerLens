@@ -206,6 +206,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     if (!isGraphContextEvent({ payload, event })) return null;
     const entities = Array.isArray(payload.entities) ? payload.entities : [];
     const relations = Array.isArray(payload.relations) ? payload.relations : [];
+    const events = Array.isArray(payload.events) ? payload.events : [];
     const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
     const compactText = (value = "", max = 3600) => {
       const text = String(value || "").trim();
@@ -217,6 +218,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       context: compactText(payload.context, 4200),
       resultCount: Number(payload.resultCount ?? entities.length) || 0,
       relationCount: Number(payload.relationCount ?? relations.length) || 0,
+      eventCount: Number(payload.eventCount ?? events.length) || 0,
       entities: entities.slice(0, 16).map((entity) => ({
         id: entity.id || "",
         label: entity.label || "",
@@ -237,8 +239,24 @@ window.TrackerLensAiAgentRuntime = (() => {
         confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
         score: Number.isFinite(Number(relation.score)) ? Number(relation.score) : null,
         direct: relation.direct === true,
+        semantic: relation.metadata?.semantic === true || relation.semantic === true,
+        method: relation.extraction?.method || relation.method || "",
+        originalType: relation.metadata?.originalRelationType || relation.originalType || "",
+        explanation: relation.metadata?.explanation || relation.explanation || "",
+        evidence: relation.evidence?.quote || relation.evidence?.text || relation.metadata?.evidence?.quote || relation.metadata?.evidence?.text || relation.evidence || "",
         documentId: relation.documentId || "",
         chunkId: relation.chunkId || "",
+      })),
+      events: events.slice(0, 24).map((item) => ({
+        id: item.id || "",
+        sequence: Number.isFinite(Number(item.sequence)) ? Number(item.sequence) : null,
+        eventType: item.eventType || "",
+        subject: item.subject || "",
+        objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
+        participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+        confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
+        score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
+        evidence: item.evidence?.quote || item.evidence?.text || "",
       })),
       evidence: evidence.slice(0, 4).map((item, index) => ({
         index: item.index || index + 1,
@@ -255,15 +273,35 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const renderGraphPromptBlock = (graphContext = null) => {
     if (!graphContext) return "";
+    const relationLines = (graphContext.relations || []).slice(0, 16).map((relation, index) => {
+      const flags = [
+        relation.direct ? "direct" : "",
+        relation.semantic ? "semantic" : "",
+        relation.method ? `method=${relation.method}` : "",
+        relation.originalType ? `original=${relation.originalType}` : "",
+      ].filter(Boolean).join(" ");
+      const evidence = relation.evidence ? `\n  evidence: ${String(relation.evidence).slice(0, 360)}` : "";
+      const explanation = relation.explanation ? `\n  explanation: ${String(relation.explanation).slice(0, 180)}` : "";
+      return `[R${index + 1}${flags ? ` ${flags}` : ""}] ${relation.sourceLabel || relation.sourceEntityId} -${relation.relationType}-> ${relation.targetLabel || relation.targetEntityId}${evidence}${explanation}`;
+    }).join("\n");
     const evidenceLines = (graphContext.evidence || []).map((source, index) =>
       `[${index + 1}] document=${source.documentId || ""} chunk=${source.chunkId || ""}\n${String(source.text || "").slice(0, 520)}`
     ).join("\n\n");
+    const eventLines = (graphContext.events || []).slice(0, 16).map((item, index) => {
+      const sequence = item.sequence !== null && item.sequence !== undefined ? ` seq=${item.sequence}` : "";
+      const score = item.score !== null && item.score !== undefined ? ` score=${Number(item.score || 0).toFixed(2)}` : "";
+      const objects = (item.objects || []).join(", ") || "context";
+      const evidence = item.evidence ? `\n  evidence: ${String(item.evidence).slice(0, 360)}` : "";
+      return `[EV${index + 1}${sequence}${score}] ${item.subject || "event"} -${item.eventType}-> ${objects}${evidence}`;
+    }).join("\n");
     return [
       "Knowledge Graph context:",
       graphContext.query ? `Query: ${graphContext.query}` : "",
       graphContext.context ? `Graph neighborhood:\n${graphContext.context}` : "",
+      relationLines ? `Structured relations:\n${relationLines}` : "",
+      eventLines ? `Structured events:\n${eventLines}` : "",
       evidenceLines ? `Evidence:\n${evidenceLines}` : "",
-      "Use the Knowledge Graph context as structured memory. Prefer explicit relations and evidence over generic assumptions.",
+      "Use direct semantic relations and ordered Structured events as primary evidence when they answer the query. For how/why questions, prefer the ordered event chain over isolated entity relations. If a direct relation or event has an evidence quote, answer from it instead of saying evidence is missing. Prefer explicit relations, events and evidence over generic assumptions. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
     ].filter(Boolean).join("\n\n");
   };
 
@@ -289,6 +327,11 @@ window.TrackerLensAiAgentRuntime = (() => {
     confidence: Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence) : null,
     score: Number.isFinite(Number(relation.score)) ? Number(relation.score) : null,
     direct: relation.direct === true,
+    semantic: relation.metadata?.semantic === true || relation.semantic === true,
+    method: relation.extraction?.method || relation.method || "",
+    originalType: relation.metadata?.originalRelationType || relation.originalType || "",
+    evidence: relation.evidence?.quote || relation.evidence?.text || relation.metadata?.evidence?.quote || relation.metadata?.evidence?.text || relation.evidence || relation.metadata?.explanation || "",
+    explanation: relation.metadata?.explanation || relation.explanation || "",
     documentId: relation.documentId || "",
     chunkId: relation.chunkId || "",
   });
@@ -301,6 +344,17 @@ window.TrackerLensAiAgentRuntime = (() => {
     score: Number.isFinite(Number(entity.score)) ? Number(entity.score) : null,
     documentId: entity.documentId || "",
     chunkId: entity.chunkId || "",
+  });
+
+  const cleanEvent = (item = {}) => ({
+    sequence: Number.isFinite(Number(item.sequence)) ? Number(item.sequence) : null,
+    type: item.eventType || item.type || "",
+    subject: item.subject || "",
+    objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
+    participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+    confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
+    score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
+    evidence: item.evidence?.quote || item.evidence?.text || item.evidence || "",
   });
 
   const cleanEvidence = (item = {}, index = 0) => ({
@@ -339,9 +393,11 @@ window.TrackerLensAiAgentRuntime = (() => {
           queryId: graphContext.queryId || "",
           resultCount: graphContext.resultCount ?? 0,
           relationCount: graphContext.relationCount ?? 0,
+          eventCount: graphContext.eventCount ?? 0,
           scope: graphContext.scope || {},
           entities: (graphContext.entities || []).slice(0, 10).map(cleanEntity),
           relations: (graphContext.relations || []).slice(0, 16).map(cleanRelation),
+          events: (graphContext.events || []).slice(0, 16).map(cleanEvent),
           evidence: (graphContext.evidence || []).slice(0, 4).map(cleanEvidence),
         },
       };
@@ -387,7 +443,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     const graphContext = config.graphContext || normalizeGraphContext({ payload, event });
     const ragPromptBlock = renderRagPromptBlock(ragContext);
     const hasCustomPromptTemplate = Boolean(String(config.promptTemplate || config.prompt || config.instruction || "").trim());
-    const graphPromptBlock = hasCustomPromptTemplate ? "" : renderGraphPromptBlock(graphContext);
+    const graphPromptBlock = renderGraphPromptBlock(graphContext);
     const systemPrompt = String(config.systemPrompt || "").trim() ||
       `You are a Trackers Lens ${subtype || "AI"} runtime node.`;
     const template = String(config.promptTemplate || config.prompt || config.instruction || "").trim() ||

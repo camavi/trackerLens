@@ -2837,7 +2837,7 @@ const knowledgeDocumentRecordsForNode = async (node = {}) => {
 };
 
 const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}) => {
-  if (!node?.id || !document?.id) return { document: 0, chunks: 0, embeddings: 0, entities: 0, relations: 0, sources: 0, metrics: 0 };
+  if (!node?.id || !document?.id) return { document: 0, chunks: 0, embeddings: 0, entities: 0, relations: 0, dictionary: 0, sources: 0, metrics: 0 };
   const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
   const stores = {
     documents: knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents"),
@@ -2845,14 +2845,16 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
     embeddings: knowledgeTableName("TL_KNOWLEDGE_EMBEDDINGS", "tl_knowledge_embeddings"),
     entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
     relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    dictionary: knowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
     sources: knowledgeTableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
     metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
   };
-  const [chunks, embeddings, entities, relations, sources, metrics] = await Promise.all([
+  const [chunks, embeddings, entities, relations, dictionary, sources, metrics] = await Promise.all([
     readKnowledgeInspectorStore(stores.chunks),
     readKnowledgeInspectorStore(stores.embeddings),
     readKnowledgeInspectorStore(stores.entities),
     readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.dictionary),
     readKnowledgeInspectorStore(stores.sources),
     readKnowledgeInspectorStore(stores.metrics),
   ]);
@@ -2875,6 +2877,9 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
       entityIds.has(relation.sourceEntityId) ||
       entityIds.has(relation.targetEntityId)
     );
+  const staleDictionary = (dictionary || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => entry.documentId === documentId || chunkIds.has(entry.chunkId));
   const staleSources = (sources || [])
     .filter((source) => (source.workspaceId || "workspace_global") === workspaceId)
     .filter((source) => source.documentId === documentId);
@@ -2884,6 +2889,7 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
   await Promise.all([
     deleteKnowledgeInspectorStoreRecords(stores.relations, staleRelations.map((relation) => relation.id)),
     deleteKnowledgeInspectorStoreRecords(stores.entities, [...entityIds]),
+    deleteKnowledgeInspectorStoreRecords(stores.dictionary, staleDictionary.map((entry) => entry.id)),
     deleteKnowledgeInspectorStoreRecords(stores.embeddings, staleEmbeddings.map((embedding) => embedding.id)),
     deleteKnowledgeInspectorStoreRecords(stores.chunks, [...chunkIds]),
     deleteKnowledgeInspectorStoreRecords(stores.sources, staleSources.map((source) => source.id)),
@@ -2901,6 +2907,7 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
       embeddings: staleEmbeddings.length,
       entities: entityIds.size,
       relations: staleRelations.length,
+      dictionary: staleDictionary.length,
       sources: staleSources.length,
       metrics: staleMetrics.length,
     },
@@ -3296,6 +3303,12 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
     const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
       ? configuredDocumentId
       : graphMetrics[0]?.value?.documentId || configuredDocumentId;
+    const documentMismatch = Boolean(
+      configuredDocumentId &&
+      documentId &&
+      configuredDocumentId !== documentId &&
+      !isKnowledgeGraphSampleDocumentFallback(configuredDocumentId, documentId)
+    );
     const workspaceEntities = (entities || [])
       .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
@@ -3329,7 +3342,7 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
         configuredDocumentId,
         effectiveDocumentId: documentId,
         latestSnapshotDocumentId: graphMetrics[0]?.value?.documentId || "",
-        documentMismatch: Boolean(configuredDocumentId && documentId && configuredDocumentId !== documentId),
+        documentMismatch,
         collectionId,
         workspaceId,
         loadedAt: Date.now(),
@@ -3359,6 +3372,7 @@ const knowledgeGraphTypeColors = {
   object: "#f59e0b",
   creature: "#f472b6",
   concept: "#a78bfa",
+  source: "#60a5fa",
   quote: "#facc15",
   technology: "#22c55e",
   symbol: "#facc15",
@@ -3375,6 +3389,23 @@ const knowledgeGraphRelationColors = {
   interacts_with: "#f59e0b",
   uses: "#f97316",
   helps: "#10b981",
+  tries_to_help: "#2dd4bf",
+  friend_of: "#4ade80",
+  healed_by: "#14b8a6",
+  cannot_speak: "#fb7185",
+  has_property: "#a78bfa",
+  lives_in: "#34d399",
+  seeks: "#38bdf8",
+  protects: "#22c55e",
+  opposes: "#ef4444",
+  causes: "#f97316",
+  leads_to: "#f59e0b",
+  is_part_of: "#c084fc",
+  teaches: "#fde047",
+  discovers: "#60a5fa",
+  asks_for: "#f472b6",
+  receives_from: "#818cf8",
+  gives_to: "#fb923c",
   heals: "#14b8a6",
   confronts: "#ef4444",
   travels_to: "#38bdf8",
@@ -3446,6 +3477,12 @@ const collectKnowledgeGraphData = async (node = {}) => {
   const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
     ? configuredDocumentId
     : allGraphMetrics[0]?.value?.documentId || configuredDocumentId;
+  const documentMismatch = Boolean(
+    configuredDocumentId &&
+    documentId &&
+    configuredDocumentId !== documentId &&
+    !isKnowledgeGraphSampleDocumentFallback(configuredDocumentId, documentId)
+  );
   const scopedEntities = (entities || [])
     .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
     .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
@@ -3467,10 +3504,14 @@ const collectKnowledgeGraphData = async (node = {}) => {
     documentId,
     configuredDocumentId,
     latestSnapshotDocumentId: allGraphMetrics[0]?.value?.documentId || "",
-    documentMismatch: Boolean(configuredDocumentId && documentId && configuredDocumentId !== documentId),
+    documentMismatch,
     workspaceId,
   };
 };
+
+const isKnowledgeGraphSampleDocumentFallback = (configuredDocumentId = "", effectiveDocumentId = "") =>
+  String(configuredDocumentId || "").startsWith("knowledge_graph_sample_document_") &&
+  /^kdoc_/i.test(String(effectiveDocumentId || ""));
 
 const knowledgeGraphExportData = (graphData = {}, { includeIsolated = false } = {}) => {
   const relations = graphData.relations || [];
@@ -4803,6 +4844,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 _.h3("Index"),
                 _.div(_.span("Entities"), _.strong(String(visible.entities.length))),
                 _.div(_.span("Relations"), _.strong(String(visible.relations.length))),
+                _.div(_.span("Semantic relations"), _.strong(String(visible.relations.filter((relation) => relation.metadata?.semantic).length))),
                 _.div(_.span("Avg degree"), _.strong(analytics.avgDegree.toFixed(2))),
                 _.div(_.span("Density"), _.strong(analytics.density.toFixed(3))),
                 _.div(_.span("Components"), _.strong(String(analytics.components))),
@@ -4916,10 +4958,19 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
   const configuredDocumentId = graph.configuredDocumentId || String(config.documentId || "").trim();
   const effectiveDocumentId = graph.effectiveDocumentId || latestMetric?.value?.documentId || configuredDocumentId || "";
   const latestSnapshotDocumentId = graph.latestSnapshotDocumentId || latestMetric?.value?.documentId || "";
-  const documentMismatch = Boolean(graph.documentMismatch || (configuredDocumentId && effectiveDocumentId && configuredDocumentId !== effectiveDocumentId));
+  const documentMismatch = Boolean(
+    graph.documentMismatch ||
+    (
+      configuredDocumentId &&
+      effectiveDocumentId &&
+      configuredDocumentId !== effectiveDocumentId &&
+      !isKnowledgeGraphSampleDocumentFallback(configuredDocumentId, effectiveDocumentId)
+    )
+  );
   const snapshot = {
     entityCount: graph.entities?.length || 0,
     relationCount: graph.relations?.length || 0,
+    semanticRelationCount: graph.relations?.filter((relation) => relation.metadata?.semantic).length || 0,
     topEntities: graph.topEntities || [],
     latestMetric: latestMetric?.value || null,
     configuredDocumentId,
@@ -4933,6 +4984,7 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
     ...[
       ["Entities", graph.loading ? "loading..." : graph.entities?.length || 0],
       ["Relations", graph.loading ? "loading..." : graph.relations?.length || 0],
+      ["Semantic relations", graph.loading ? "loading..." : graph.relations?.filter((relation) => relation.metadata?.semantic).length || 0],
       ["Snapshots", graph.loading ? "loading..." : graph.metrics?.length || 0],
       ["Latest snapshot", latestMetric?.createdAt ? formatShortDate(latestMetric.createdAt) : "N/D"],
       ["Collection", latestMetric?.value?.collectionId || config.collectionId || "all"],
@@ -4987,8 +5039,11 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
             _.article(
               { class: "tl-flow-rag-source tl-flow-kg-item" },
               _.strong(`${relation.sourceLabel || relation.sourceEntityId} -> ${relation.targetLabel || relation.targetEntityId}`),
-              _.span(`${relation.relationType || "relation"} · confidence ${Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence).toFixed(2) : "N/D"}`),
-              _.p(relation.documentId || relation.chunkId || "")
+              _.span(`${relation.relationType || "relation"} · confidence ${Number.isFinite(Number(relation.confidence)) ? Number(relation.confidence).toFixed(2) : "N/D"}${relation.metadata?.semantic ? ` · ${relation.extraction?.method || "semantic"}` : ""}`),
+              _.p([
+                relation.metadata?.originalRelationType ? `original ${relation.metadata.originalRelationType}` : "",
+                relation.metadata?.explanation || relation.evidence?.quote || relation.documentId || relation.chunkId || "",
+              ].filter(Boolean).join(" · "))
             )
           )
         )

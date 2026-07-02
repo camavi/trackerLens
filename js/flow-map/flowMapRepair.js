@@ -32,6 +32,7 @@
     tables.TL_KNOWLEDGE_EMBEDDINGS || "tl_knowledge_embeddings",
     tables.TL_KNOWLEDGE_ENTITIES || "tl_knowledge_entities",
     tables.TL_KNOWLEDGE_RELATIONS || "tl_knowledge_relations",
+    tables.TL_KNOWLEDGE_DICTIONARY || "tl_knowledge_dictionary",
     tables.TL_KNOWLEDGE_QUERIES || "tl_knowledge_queries",
     tables.TL_KNOWLEDGE_SOURCES || "tl_knowledge_sources",
     tables.TL_KNOWLEDGE_METRICS || "tl_knowledge_metrics",

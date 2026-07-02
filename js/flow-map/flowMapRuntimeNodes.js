@@ -553,7 +553,6 @@ const configFieldDefinitions = (node = {}) => {
     ]);
   }
   if (category === "knowledge") {
-    if (schemaFields.length) return schemaFields;
     if (subtype === "embedding-generator" || subtype === "vector-memory") {
       return [
         { key: "providerProfile", label: "Provider profile", placeholder: "local-hash, local_ollama, local_lm_studio" },
@@ -578,6 +577,9 @@ const configFieldDefinitions = (node = {}) => {
       return [
         { key: "extractionMode", label: "Extraction mode", type: "select", options: ["strict", "balanced", "wide"], defaultValue: "strict" },
         { key: "allowDocumentInput", label: "Allow direct document input", type: "checkbox", defaultValue: false },
+        { key: "useDictionarySeeds", label: "Use Dictionary seeds", type: "checkbox", defaultValue: true },
+        { key: "minDictionarySeedTier", label: "Min Dictionary seed tier", type: "select", options: ["core", "typed"], defaultValue: "typed" },
+        { key: "maxDictionarySeeds", label: "Max Dictionary seeds", placeholder: "48" },
         { key: "entityTypes", label: "Entity types", placeholder: "proper-noun, technology, symbol, url, email" },
         { key: "seedTerms", label: "Seed terms", type: "textarea", placeholder: "Trackers Lens\nKnowledge Runtime" },
         { key: "stopWords", label: "Stop words", type: "textarea", placeholder: "aunque\nhola\nfrustrada" },
@@ -587,6 +589,35 @@ const configFieldDefinitions = (node = {}) => {
         { key: "relationType", label: "Relation type", placeholder: "co_occurs" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.entity.created" },
+      ];
+    }
+    if (subtype === "knowledge-dictionary-builder") {
+      return [
+        { key: "scope", label: "Dictionary scope", type: "select", options: ["document", "collection", "workspace"], defaultValue: "document" },
+        { key: "language", label: "Language", placeholder: "auto, it, en, es, fr, de" },
+        { key: "maxTerms", label: "Max terms", placeholder: "120" },
+        { key: "minFrequency", label: "Min frequency", placeholder: "1" },
+        { key: "previewTerms", label: "Preview terms", placeholder: "16" },
+        { key: "previewIds", label: "Preview IDs", placeholder: "40" },
+        { key: "replaceExisting", label: "Replace document dictionary", type: "checkbox", defaultValue: true },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.dictionary.updated" },
+      ];
+    }
+    if (subtype === "knowledge-event-builder") {
+      return [
+        { key: "extractionMode", label: "Extraction mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
+        { key: "providerProfile", label: "Provider profile", placeholder: "optional for ai/hybrid" },
+        { key: "model", label: "Model", placeholder: "optional" },
+        { key: "maxEvents", label: "Max events", placeholder: "80" },
+        { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
+        { key: "previewEvents", label: "Preview events", placeholder: "16" },
+        { key: "previewIds", label: "Preview IDs", placeholder: "60" },
+        { key: "replaceExisting", label: "Replace document events", type: "checkbox", defaultValue: true },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.events.updated" },
       ];
     }
     if (subtype === "knowledge-graph") {
@@ -599,8 +630,39 @@ const configFieldDefinitions = (node = {}) => {
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.updated" },
       ];
     }
-    if (subtype === "graph-query") {
+    if (subtype === "semantic-relation-enricher") {
       return [
+        { key: "enrichmentMode", label: "Enrichment mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
+        { key: "providerProfile", label: "Provider profile", placeholder: "local_ollama, local_lm_studio" },
+        { key: "model", label: "Model", placeholder: "local-model" },
+        { key: "maxRelations", label: "Max semantic relations", placeholder: "48" },
+        { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
+        { key: "relationTypes", label: "Allowed relation types", placeholder: "friend_of,helps,tries_to_help" },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.semantic.relations" },
+      ];
+    }
+    if (subtype === "knowledge-graph-builder-agent") {
+      return [
+        { key: "providerProfile", label: "Provider profile", placeholder: "local_ollama, local_lm_studio" },
+        { key: "model", label: "Model", placeholder: "local-model" },
+        { key: "domainHint", label: "Domain hint", type: "textarea", placeholder: "technical documentation, narrative story, theology, API docs..." },
+        { key: "maxChunks", label: "Max chunks", placeholder: "6" },
+        { key: "maxChunkChars", label: "Max chars per chunk", placeholder: "1800" },
+        { key: "maxEntities", label: "Max accepted entities", placeholder: "40" },
+        { key: "maxRelations", label: "Max accepted relations", placeholder: "48" },
+        { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.65" },
+        { key: "relationTypes", label: "Allowed relation types", placeholder: "uses,implements,explains,stores_in,retrieves_from,powered_by" },
+        { key: "technicalNormalization", label: "Technical normalization", type: "checkbox", defaultValue: true },
+        { key: "replaceExisting", label: "Replace existing builder graph", type: "checkbox", defaultValue: true },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.proposed" },
+      ];
+    }
+    if (subtype === "graph-query") {
+      return mergeSchemaFields([
         { key: "query", label: "Query", type: "textarea", placeholder: "Dio, Abramo, fede..." },
         { key: "depth", label: "Depth", placeholder: "1" },
         { key: "topK", label: "Top entities", placeholder: "12" },
@@ -609,11 +671,12 @@ const configFieldDefinitions = (node = {}) => {
         { key: "maxContextChars", label: "Max context chars", placeholder: "5200" },
         { key: "relationTypes", label: "Relation types", placeholder: "mentions,references,co_occurs" },
         { key: "includeEvidence", label: "Include evidence", type: "checkbox", defaultValue: true },
+        { key: "includeIsolated", label: "Include isolated entities", type: "checkbox", defaultValue: false },
         { key: "preferLatestDocument", label: "Use latest document", type: "checkbox", defaultValue: true },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
-      ];
+      ]);
     }
     return [
       { key: "title", label: "Title", placeholder: "Knowledge Document" },

@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.105-graph-query-rank-4";
+const RUNTIME_WORKER_VERSION = "0.1.165-knowledge-events-ai-5";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -29,8 +29,8 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260626-graph-query-rank-4",
-    "ai-agent-runtime.js?v=kg-20260626-graph-query-rank-4",
+    "knowledge-runtime.js?v=kg-20260626-knowledge-events-ai-4",
+    "ai-agent-runtime.js?v=kg-20260626-knowledge-events-ai-5",
     "orchestrator-agent-runtime.js"
   );
 };
