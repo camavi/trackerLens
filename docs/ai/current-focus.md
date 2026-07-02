@@ -384,6 +384,7 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Knowledge Graph View now falls back to the latest snapshot document in the node collection when the node config still points to an older/sample `documentId`, so uploaded-document graphs are visible without manually editing node config.
 - Knowledge Graph Debug/View now surfaces `Configured document`, `Latest snapshot document`, `Viewing document`, and a document status flag so stale config vs latest snapshot mismatches are visible.
 - Flow Map canvas now uses world-unit node coordinates instead of viewport-percent placement for newly generated nodes, with viewport-aware edge canvas drawing and per-node width persisted in `flowPosition.width` via a node resize handle.
+- Flow Map world-canvas follow-up is user-verified: new Flow Maps render/delete `Flow In` and `Flow Out`, Sample Test presets no longer overlap, and IndexedDB version-change warnings after DB reset were confirmed non-blocking in the tested flow.
 
 ## Next Logical Step
 
