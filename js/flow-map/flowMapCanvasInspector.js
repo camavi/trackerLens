@@ -2578,6 +2578,56 @@ const cmsInputValue = (value) => value?.target?.value ?? value?.currentTarget?.v
 const isKnowledgeDocumentStoreNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
 
+const isKnowledgeDictionaryBuilderNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-dictionary-builder";
+
+const isKnowledgeEventBuilderNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-event-builder";
+
+const knowledgeDictionaryTierRank = (tier = "") => {
+  const ranks = { core: 0, typed: 1, context: 2, weak: 3 };
+  return ranks[String(tier || "").toLowerCase()] ?? 9;
+};
+
+const knowledgeDictionaryTypeLabel = (entry = {}) => {
+  const candidates = Array.isArray(entry.typeCandidates) ? entry.typeCandidates : [];
+  const labels = candidates
+    .map((candidate) => typeof candidate === "string"
+      ? candidate
+      : candidate?.type || candidate?.label || candidate?.entityType || "")
+    .filter(Boolean);
+  return labels.length ? labels.slice(0, 3).join(", ") : entry.entityType || entry.type || "term";
+};
+
+const knowledgeDictionaryEvidenceText = (entry = {}, maxLength = 180) => {
+  const evidence = entry.evidence || {};
+  const text = String(
+    evidence.quote ||
+    evidence.text ||
+    entry.quote ||
+    entry.context ||
+    entry.metadata?.evidence ||
+    entry.metadata?.explanation ||
+    ""
+  ).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...` : text;
+};
+
+const knowledgeEventEvidenceText = (entry = {}, maxLength = 220) => {
+  const evidence = entry.evidence || {};
+  const text = String(
+    evidence.quote ||
+    evidence.text ||
+    entry.quote ||
+    entry.context ||
+    entry.metadata?.explanation ||
+    ""
+  ).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...` : text;
+};
+
 const knowledgeUploadMimeType = (file = {}) => {
   const name = String(file.name || "").toLowerCase();
   if (file.type) return file.type;
@@ -3062,6 +3112,183 @@ const loadKnowledgeInspectorDocument = async (node = {}, { force = false } = {})
   if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
 };
 
+const knowledgeDictionaryRecordsForNode = async (node = {}) => {
+  const entries = await readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"));
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  const language = String(config.language || "").trim().toLowerCase();
+  return (entries || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => !collectionId || entry.collectionId === collectionId || entry.metadata?.collectionId === collectionId)
+    .filter((entry) => !documentId || entry.documentId === documentId)
+    .filter((entry) => !language || String(entry.language || "").toLowerCase() === language)
+    .sort((a, b) =>
+      knowledgeDictionaryTierRank(a.tier) - knowledgeDictionaryTierRank(b.tier) ||
+      Number(b.usableAsSeed === true) - Number(a.usableAsSeed === true) ||
+      Number(b.seedScore || 0) - Number(a.seedScore || 0) ||
+      Number(b.occurrenceCount || b.metadata?.occurrenceCount || 0) - Number(a.occurrenceCount || a.metadata?.occurrenceCount || 0) ||
+      Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || "") ||
+      String(a.term || a.label || a.lemma || "").localeCompare(String(b.term || b.label || b.lemma || ""))
+    );
+};
+
+const summarizeKnowledgeDictionaryEntries = (entries = []) => {
+  const tierCounts = {};
+  const languageCounts = {};
+  const typeCounts = {};
+  entries.forEach((entry) => {
+    const tier = String(entry.tier || "unknown");
+    const language = String(entry.language || "unknown");
+    const type = knowledgeDictionaryTypeLabel(entry).split(",")[0] || "term";
+    tierCounts[tier] = (tierCounts[tier] || 0) + 1;
+    languageCounts[language] = (languageCounts[language] || 0) + 1;
+    typeCounts[type] = (typeCounts[type] || 0) + 1;
+  });
+  return {
+    entryCount: entries.length,
+    usableSeedCount: entries.filter((entry) => entry.usableAsSeed === true).length,
+    tierCounts,
+    languageCounts,
+    typeCounts,
+  };
+};
+
+const loadKnowledgeInspectorDictionary = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || !isKnowledgeDictionaryBuilderNode(node)) return;
+  const cached = state.knowledgeInspectorDictionaries[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.knowledgeInspectorDictionaries = {
+    ...state.knowledgeInspectorDictionaries,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const entries = await knowledgeDictionaryRecordsForNode(node);
+    state.knowledgeInspectorDictionaries = {
+      ...state.knowledgeInspectorDictionaries,
+      [node.id]: {
+        loading: false,
+        entries,
+        summary: summarizeKnowledgeDictionaryEntries(entries),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.knowledgeInspectorDictionaries = {
+      ...state.knowledgeInspectorDictionaries,
+      [node.id]: {
+        loading: false,
+        entries: [],
+        summary: summarizeKnowledgeDictionaryEntries([]),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: error?.message || "Knowledge dictionary read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const knowledgeEventRecordsForNode = async (node = {}) => {
+  const events = await readKnowledgeInspectorStore(knowledgeTableName("TL_KNOWLEDGE_EVENTS", "tl_knowledge_events"));
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  return (events || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => !collectionId || entry.collectionId === collectionId || entry.metadata?.collectionId === collectionId)
+    .filter((entry) => !documentId || entry.documentId === documentId)
+    .sort((a, b) =>
+      Number(a.sequence || 0) - Number(b.sequence || 0) ||
+      Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0) ||
+      Number(a.sentenceIndex || 0) - Number(b.sentenceIndex || 0) ||
+      Date.parse(a.createdAt || "") - Date.parse(b.createdAt || "")
+    );
+};
+
+const summarizeKnowledgeEventEntries = (events = []) => {
+  const typeCounts = {};
+  const methodCounts = {};
+  const documentCounts = {};
+  let confidenceTotal = 0;
+  let confidenceCount = 0;
+  events.forEach((entry) => {
+    const type = String(entry.eventType || entry.action || "event");
+    const method = String(entry.source?.method || entry.extraction?.method || "unknown");
+    const documentId = String(entry.documentId || "unknown");
+    typeCounts[type] = (typeCounts[type] || 0) + 1;
+    methodCounts[method] = (methodCounts[method] || 0) + 1;
+    documentCounts[documentId] = (documentCounts[documentId] || 0) + 1;
+    const confidence = Number(entry.confidence);
+    if (Number.isFinite(confidence)) {
+      confidenceTotal += confidence;
+      confidenceCount += 1;
+    }
+  });
+  return {
+    eventCount: events.length,
+    typeCounts,
+    methodCounts,
+    documentCounts,
+    averageConfidence: confidenceCount ? confidenceTotal / confidenceCount : null,
+    firstSequence: events[0]?.sequence || null,
+    lastSequence: events[events.length - 1]?.sequence || null,
+  };
+};
+
+const loadKnowledgeInspectorEvents = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || !isKnowledgeEventBuilderNode(node)) return;
+  const cached = state.knowledgeInspectorEvents[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.knowledgeInspectorEvents = {
+    ...state.knowledgeInspectorEvents,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const events = await knowledgeEventRecordsForNode(node);
+    state.knowledgeInspectorEvents = {
+      ...state.knowledgeInspectorEvents,
+      [node.id]: {
+        loading: false,
+        events,
+        summary: summarizeKnowledgeEventEntries(events),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.knowledgeInspectorEvents = {
+      ...state.knowledgeInspectorEvents,
+      [node.id]: {
+        loading: false,
+        events: [],
+        summary: summarizeKnowledgeEventEntries([]),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: error?.message || "Knowledge events read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
 const openKnowledgeDocumentsDialog = async (node = {}) => {
   const data = await knowledgeDocumentRecordsForNode(node).catch((error) => {
     console.warn("Knowledge documents unavailable", error);
@@ -3293,6 +3520,170 @@ const renderInspectorKnowledgeDocument = (node = {}) => {
         _.pre({ class: "tl-flow-storage-record-preview" }, knowledgeDocumentPreviewText(documentRecord, 1800))
       )
       : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento documento Knowledge..." : "Nessun documento trovato per questo nodo.")
+  );
+};
+
+const renderInspectorKnowledgeDictionary = (node = {}) => {
+  if (!isKnowledgeDictionaryBuilderNode(node)) {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadKnowledgeInspectorDictionary(node);
+  const record = state.knowledgeInspectorDictionaries[node.id] || {
+    loading: true,
+    entries: [],
+    summary: summarizeKnowledgeDictionaryEntries([]),
+    config: nodeRuntimeConfig(node),
+  };
+  const entries = record.entries || [];
+  const summary = record.summary || summarizeKnowledgeDictionaryEntries(entries);
+  const config = record.config || nodeRuntimeConfig(node);
+  const countsText = (counts = {}) =>
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([key, count]) => `${key}:${count}`)
+      .join(", ") || "N/D";
+  const exportPayload = {
+    nodeId: node.id,
+    workspaceId: record.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
+    documentId: String(config.documentId || "").trim(),
+    collectionId: String(config.collectionId || "").trim(),
+    language: String(config.language || "").trim(),
+    summary,
+    entries,
+    exportedAt: new Date().toISOString(),
+  };
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("Knowledge Dictionary Debug"),
+    ...[
+      ["Entries", record.loading ? "loading..." : summary.entryCount || 0],
+      ["Usable seeds", record.loading ? "loading..." : summary.usableSeedCount || 0],
+      ["Tier counts", record.loading ? "loading..." : countsText(summary.tierCounts)],
+      ["Languages", record.loading ? "loading..." : countsText(summary.languageCounts)],
+      ["Top types", record.loading ? "loading..." : countsText(summary.typeCounts)],
+      ["Workspace", exportPayload.workspaceId || "workspace_global"],
+      ["Document", exportPayload.documentId || "all"],
+      ["Collection", exportPayload.collectionId || "all"],
+      ["Language", exportPayload.language || "auto"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    record.error ? _.p({ class: "tl-flow-muted" }, record.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        copyRuntimeButton(exportPayload, "Copy dictionary export"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh Knowledge dictionary",
+          onclick: () => loadKnowledgeInspectorDictionary(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    entries.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Top dictionary entries"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...entries.slice(0, 12).map((entry) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`${entry.term || entry.label || entry.lemma || entry.id} · ${entry.tier || "unknown"}${entry.usableAsSeed ? " · seed" : ""}`),
+              _.span(`${knowledgeDictionaryTypeLabel(entry)} · score ${Number.isFinite(Number(entry.seedScore)) ? Number(entry.seedScore).toFixed(2) : "N/D"} · confidence ${Number.isFinite(Number(entry.confidence)) ? Number(entry.confidence).toFixed(2) : "N/D"}`),
+              _.p([
+                entry.lemma && entry.lemma !== entry.term ? `lemma ${entry.lemma}` : "",
+                knowledgeDictionaryEvidenceText(entry),
+                entry.documentId || entry.chunkId || "",
+              ].filter(Boolean).join(" · "))
+            )
+          )
+        )
+      )
+      : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento Dictionary..." : "Nessun entry Dictionary trovato per questo scope.")
+  );
+};
+
+const renderInspectorKnowledgeEvents = (node = {}) => {
+  if (!isKnowledgeEventBuilderNode(node)) {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadKnowledgeInspectorEvents(node);
+  const record = state.knowledgeInspectorEvents[node.id] || {
+    loading: true,
+    events: [],
+    summary: summarizeKnowledgeEventEntries([]),
+    config: nodeRuntimeConfig(node),
+  };
+  const events = record.events || [];
+  const summary = record.summary || summarizeKnowledgeEventEntries(events);
+  const config = record.config || nodeRuntimeConfig(node);
+  const countsText = (counts = {}) =>
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 8)
+      .map(([key, count]) => `${key}:${count}`)
+      .join(", ") || "N/D";
+  const exportPayload = {
+    nodeId: node.id,
+    workspaceId: record.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
+    documentId: String(config.documentId || "").trim(),
+    collectionId: String(config.collectionId || "").trim(),
+    extractionMode: String(config.extractionMode || "rules"),
+    summary,
+    events,
+    exportedAt: new Date().toISOString(),
+  };
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("Knowledge Event Debug"),
+    ...[
+      ["Events", record.loading ? "loading..." : summary.eventCount || 0],
+      ["Event types", record.loading ? "loading..." : countsText(summary.typeCounts)],
+      ["Methods", record.loading ? "loading..." : countsText(summary.methodCounts)],
+      ["Documents", record.loading ? "loading..." : countsText(summary.documentCounts)],
+      ["Avg confidence", record.loading ? "loading..." : Number.isFinite(Number(summary.averageConfidence)) ? Number(summary.averageConfidence).toFixed(2) : "N/D"],
+      ["Sequence range", record.loading ? "loading..." : summary.firstSequence && summary.lastSequence ? `${summary.firstSequence}-${summary.lastSequence}` : "N/D"],
+      ["Workspace", exportPayload.workspaceId || "workspace_global"],
+      ["Document", exportPayload.documentId || "all"],
+      ["Collection", exportPayload.collectionId || "all"],
+      ["Mode", exportPayload.extractionMode || "rules"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    record.error ? _.p({ class: "tl-flow-muted" }, record.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        copyRuntimeButton(exportPayload, "Copy event export"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh Knowledge events",
+          onclick: () => loadKnowledgeInspectorEvents(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    events.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Timeline preview"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...events.slice(0, 16).map((entry) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`[${entry.sequence || "?"}] ${entry.subject || "event"} -${entry.eventType || entry.action || "event"}-> ${(entry.objects || []).join(", ") || "context"}`),
+              _.span(`${entry.source?.method || entry.extraction?.method || "unknown"} · confidence ${Number.isFinite(Number(entry.confidence)) ? Number(entry.confidence).toFixed(2) : "N/D"} · chunk ${entry.chunkIndex ?? "N/D"}`),
+              _.p([
+                knowledgeEventEvidenceText(entry),
+                entry.metadata?.explanation || "",
+                entry.documentId || entry.chunkId || "",
+              ].filter(Boolean).join(" · "))
+            )
+          )
+        )
+      )
+      : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento eventi Knowledge..." : "Nessun evento trovato per questo scope.")
   );
 };
 
@@ -5696,6 +6087,12 @@ const renderInspector = () => {
       : []),
     ...(nodeCategory(node) === "ai-agents"
       ? [{ id: "ai-knowledge-debug", title: "AI Knowledge Debug", content: renderInspectorAiRag(node) }]
+      : []),
+    ...(isKnowledgeDictionaryBuilderNode(node)
+      ? [{ id: "knowledge-dictionary-debug", title: "Knowledge Dictionary Debug", content: renderInspectorKnowledgeDictionary(node) }]
+      : []),
+    ...(isKnowledgeEventBuilderNode(node)
+      ? [{ id: "knowledge-event-debug", title: "Knowledge Event Debug", content: renderInspectorKnowledgeEvents(node) }]
       : []),
     ...(nodeCategory(node) === "knowledge"
       ? [{ id: "knowledge-graph-debug", title: "Knowledge Graph Debug", content: renderInspectorKnowledgeGraph(node) }]
