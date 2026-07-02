@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-06-30.
+Last updated: 2026-07-02.
 
 ## Active
 
@@ -222,7 +222,7 @@ Main files:
 - Flow Map default boundary bootstrap: creating a Flow Map from the library now persists active `Flow In` and `Flow Out` runtime nodes with default typed ports and initial canvas positions.
 - Flow Map embed validation: the Flow Map node picker lists all available Flow Maps, requires an explicit selection and `Inserisci` confirmation, then revalidates the selected graph and rejects maps without any `Flow In` or `Flow Out` node.
 - Embedded Flow Map alias sync: source `Flow In` ports map to left-side inputs and source `Flow Out` ports map to right-side outputs; names, types, title and version refresh from the source while generic `all` ports remain available, and deleting the alias never deletes its source Flow Map.
-- Embedded Flow Map read-only preview: alias body action opens a minimal fitted graph dialog showing current source nodes by name/type and their connections without full node bodies or editing controls.
+- Embedded Flow Map read-only preview: alias body action opens a fitted graph dialog showing current source nodes by name/type, configured IN/OUT ports and their connections without editing controls; the Flow Map File menu can export the full graph preview as JPG.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
 - Flow Map world canvas pass: newly generated nodes use world-unit coordinates instead of viewport-percent positions, the edge canvas follows the visible world viewport, and node width can be resized per node and persisted in `flowPosition.width`.
 - Flow Map world canvas verification: user confirmed new Flow Map boundary nodes can be deleted, Sample Test layouts are correct and the IndexedDB reset warnings are not blocking.

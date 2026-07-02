@@ -4116,6 +4116,23 @@ const downloadCurrentWorkspace = async () => {
   }
 };
 
+const exportCurrentFlowMapImage = async () => {
+  try {
+    await window.TrackerLensFlowMapPreview?.exportJpg?.({
+      graph: {
+        flowMap: { name: currentWorkspaceName() },
+        nodes: state.runtime.nodes || [],
+        dependencies: state.runtime.dependencies || [],
+      },
+      title: currentWorkspaceName(),
+    });
+  } catch (error) {
+    state.error = error?.message || "Export JPG Flow Map non riuscito.";
+    setErrorSignal(state.error);
+    mount({ preserveScroll: true });
+  }
+};
+
 const importWorkspaceFile = () => {
   const input = document.createElement("input");
   input.type = "file";
@@ -4231,6 +4248,7 @@ const renderFileMenu = () =>
     _.div(
       { class: "tl-flow-menu-content" },
       renderFileMenuItem({ iconName: "download", label: "Download", meta: ".tlflow con asset e runtime graph", onclick: downloadCurrentWorkspace }),
+      renderFileMenuItem({ iconName: "image", label: "Export JPG", meta: "Immagine completa del Flow Map", onclick: exportCurrentFlowMapImage }),
       renderFileMenuItem({ iconName: "upload_file", label: "Import", meta: "Sostituisce il Flow Map importato", onclick: importWorkspaceFile }),
       _.span({ class: "tl-flow-menu-separator" }),
       renderFileMenuItem({ iconName: "settings", label: "Settings", meta: "Nome, titolo e stato workspace", onclick: openWorkspaceSettings })

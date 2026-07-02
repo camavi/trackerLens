@@ -508,16 +508,91 @@ body.is-flow-inspector-card-dragging {
 }
 
 .tl-flow-map-preview-panel {
-  --cms-dialog-body-max-height: min(72vh, 680px);
+  --cms-dialog-body-max-height: none;
+  height: min(80vh, calc(100dvh - 24px));
+  max-height: min(80vh, calc(100dvh - 24px));
+  display: flex;
+  flex-direction: column;
+}
+
+.tl-flow-map-preview-panel .cms-dialog-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: grid;
+  overflow: hidden;
+}
+
+.tl-flow-map-preview-root {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
+.tl-flow-map-preview-tools {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 7px;
+}
+
+.tl-flow-map-preview-tools button.is-dense {
+  box-sizing: border-box;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  color: rgba(226, 232, 240, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 7px;
+  line-height: 1;
+  background: rgba(15, 23, 42, 0.74);
+  appearance: none;
+}
+
+.tl-flow-map-preview-tools button.is-dense .material-symbols-rounded,
+.tl-flow-map-preview-tools button.is-dense .material-icons,
+.tl-flow-map-preview-tools button.is-dense svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  font-size: 18px;
+  line-height: 18px;
+  margin: 0;
+}
+
+.tl-flow-map-preview-tools button.is-dense:hover {
+  color: #f8fafc;
+  border-color: rgba(34, 211, 238, 0.48);
+  background: rgba(34, 211, 238, 0.12);
+}
+
+.tl-flow-map-preview-viewport {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 8px;
+  background: #061018;
+}
+
+.tl-flow-map-preview-zoom-shell {
+  position: relative;
+  --preview-zoom: 1;
 }
 
 .tl-flow-map-preview-canvas {
   position: relative;
-  width: min(100%, 1000px);
-  aspect-ratio: 1000 / 560;
+  min-width: 0;
   overflow: hidden;
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  border-radius: 8px;
+  transform: scale(var(--preview-zoom, 1));
+  transform-origin: 0 0;
   background-color: #061018;
   background-image:
     linear-gradient(rgba(34, 211, 238, 0.065) 1px, transparent 1px),
@@ -565,11 +640,11 @@ body.is-flow-inspector-card-dragging {
 
 .tl-flow-map-preview-node {
   position: absolute;
+  box-sizing: border-box;
   min-width: 0;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
   padding: 7px 9px;
   overflow: hidden;
   color: #f8fafc;
@@ -581,6 +656,14 @@ body.is-flow-inspector-card-dragging {
   box-shadow:
     inset 3px 0 0 rgba(var(--preview-rgb, 56, 189, 248), 0.86),
     0 0 16px rgba(var(--preview-rgb, 56, 189, 248), 0.12);
+}
+
+.tl-flow-map-preview-node-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
 }
 
 .tl-flow-map-preview-node-icon {
@@ -618,6 +701,119 @@ body.is-flow-inspector-card-dragging {
   font-style: normal;
 }
 
+.tl-flow-map-preview-node-io {
+  box-sizing: border-box;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.tl-flow-map-preview-ports {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.tl-flow-map-preview-ports span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: rgba(248, 250, 252, 0.98);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.tl-flow-map-preview-ports i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgb(34, 211, 238);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.42);
+}
+
+.tl-flow-map-preview-ports.is-in i {
+  background: rgb(34, 197, 94);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.42);
+}
+
+.tl-flow-map-preview-ports strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-map-preview-ports.is-out span {
+  grid-template-columns: 8px minmax(0, 1fr);
+  width: fit-content;
+  max-width: 100%;
+  justify-self: end;
+}
+
+.tl-flow-map-preview-ports.is-out i {
+  order: 1;
+}
+
+.tl-flow-map-preview-ports.is-out strong {
+  order: 2;
+  text-align: left;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node {
+  gap: 4px;
+  padding: 5px 7px;
+  border-radius: 6px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-head {
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 6px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-copy {
+  gap: 2px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-copy strong {
+  font-size: 9px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-copy em {
+  font-size: 8px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-node-io {
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-ports {
+  gap: 3px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-ports span {
+  grid-template-columns: 6px minmax(0, 1fr);
+  gap: 4px;
+  font-size: 7px;
+}
+
+.tl-flow-map-preview-canvas.is-compact .tl-flow-map-preview-ports i {
+  width: 5px;
+  height: 5px;
+}
+
 .tl-flow-map-preview-empty {
   min-height: 360px;
   display: grid;
@@ -636,9 +832,12 @@ body.is-flow-inspector-card-dragging {
 }
 
 @media (max-width: 720px) {
-  .tl-flow-map-preview-node {
+  .tl-flow-map-preview-node-head {
     grid-template-columns: 22px minmax(0, 1fr);
     gap: 5px;
+  }
+
+  .tl-flow-map-preview-node {
     padding: 5px 6px;
   }
 
@@ -653,6 +852,14 @@ body.is-flow-inspector-card-dragging {
 
   .tl-flow-map-preview-node-copy em {
     font-size: 8px;
+  }
+
+  .tl-flow-map-preview-node-io {
+    gap: 4px;
+  }
+
+  .tl-flow-map-preview-ports span {
+    font-size: 7px;
   }
 }
 

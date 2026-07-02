@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-06-30.
+Last updated: 2026-07-02.
 
 ## Active Area
 
@@ -172,6 +172,7 @@ Flow Map library separation baseline is complete:
 - Embedded Flow Map insertion now lists every available Flow Map in a selection dialog; insertion happens only from the explicit `Inserisci` action, which reloads the selected graph and blocks with an alert unless at least one `Flow In` or `Flow Out` node still exists.
 - Embedded Flow Map nodes expose and automatically refresh the source graph interface: internal `Flow In` definitions render as typed inputs on the left, internal `Flow Out` definitions render as typed outputs on the right, generic `all` ports remain available, and alias deletion removes only the virtual node plus its local links.
 - Embedded Flow Map aliases include a `View Flow Map` action that opens a read-only CMSwift dialog with a fitted minimal graph canvas, compact name/type node cards and source-colored connection paths loaded live from the referenced Flow Map.
+- Embedded Flow Map `View Flow Map` now shows configured IN/OUT ports in the read-only graph preview, and the Flow Map File menu includes `Export JPG` for a full graph image rendered from the same preview/export model.
 - Universal box editor is now the primary editor path for boxLens and boxTracker creation/editing across Workspace, Flow Map, Library and Database Explorer.
 - Legacy `editorBoxLens.html`/`editorBoxTracker.html` pages and their editor CSS/JS have been removed; the universal dialog is now the only boxLens/boxTracker editor surface.
 - Tracker manual test execution is centralized in `core/runtime/tracker-test-runner.js` and consumed by the universal dialog.

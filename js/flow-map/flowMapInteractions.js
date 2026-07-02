@@ -422,6 +422,71 @@ const flowMapPreviewNodeType = (node = {}) => {
   return [node.type || "node", subtype && subtype !== node.type ? subtype : ""].filter(Boolean).join(" · ");
 };
 
+const flowMapPreviewNormalizePort = (port = {}, fallbackName = "port") => {
+  if (typeof port === "string") return { name: port || fallbackName, type: "object" };
+  return {
+    name: String(port.name || port.key || port.channel || port.id || fallbackName),
+    type: String(port.type || port.valueType || "object"),
+    required: Boolean(port.required),
+  };
+};
+
+const flowMapPreviewIsEmbeddedNode = (node = {}) =>
+  node?.type === "flowMap" && Boolean(node?.metadata?.embeddedFlowMap || node?.metadata?.flowMapId);
+
+const flowMapPreviewPortsForNode = (node = {}, side = "out") => {
+  if (!node?.id) return [];
+  if (isFlowPortNode(node, "flow-in")) return side === "out" ? composableFlowPortsForNode(node, "flow-in") : [];
+  if (isFlowPortNode(node, "flow-out")) return side === "in" ? composableFlowPortsForNode(node, "flow-out") : [];
+  if (flowMapPreviewIsEmbeddedNode(node)) {
+    const metadataPorts = side === "in" ? node.metadata?.inputPorts : node.metadata?.outputPorts;
+    const declaredPorts = side === "in" ? node.inputs : node.outputs;
+    const source = Array.isArray(metadataPorts) && metadataPorts.length ? metadataPorts : declaredPorts || [];
+    const unique = new Map();
+    source
+      .filter(Boolean)
+      .map((port, index) => flowMapPreviewNormalizePort(port, `${side}.${index + 1}`))
+      .forEach((port) => {
+        if (!port.name || port.name === "all" || port.name === "agent_control" || unique.has(port.name)) return;
+        unique.set(port.name, port);
+      });
+    return [...unique.values()];
+  }
+  const source = side === "in" ? node.inputs : node.outputs;
+  return (Array.isArray(source) ? source : [])
+    .filter(Boolean)
+    .map((port, index) => flowMapPreviewNormalizePort(port, `${side}.${index + 1}`))
+    .filter((port) => port.name && port.name !== "all" && port.name !== "agent_control");
+};
+
+const flowMapPreviewNodePorts = (node = {}) => ({
+  in: flowMapPreviewPortsForNode(node, "in"),
+  out: flowMapPreviewPortsForNode(node, "out"),
+});
+
+const flowMapPreviewNodeHeight = (node = {}) => {
+  const ports = flowMapPreviewNodePorts(node);
+  const rows = Math.min(5, Math.max(ports.in.length, ports.out.length));
+  return rows ? 92 + rows * 20 : 72;
+};
+
+const flowMapPreviewTextWidthEstimate = (value = "", size = 9) =>
+  String(value || "").length * size * 0.62;
+
+const flowMapPreviewNodeWidth = (node = {}) => {
+  const value = typeof flowNodeWidth === "function" ? flowNodeWidth(node) : Number(node.flowPosition?.width || 218);
+  const width = Number.isFinite(value) ? value : 218;
+  const ports = flowMapPreviewNodePorts(node);
+  const longestInput = Math.max(0, ...ports.in.map((port) => String(port.name || "").length));
+  const longestOutput = Math.max(0, ...ports.out.map((port) => String(port.name || "").length));
+  const portWidth = longestInput && longestOutput
+    ? flowMapPreviewTextWidthEstimate("x".repeat(longestInput + longestOutput), 9) + 108
+    : flowMapPreviewTextWidthEstimate("x".repeat(Math.max(longestInput, longestOutput)), 9) + 88;
+  const labelWidth = flowMapPreviewTextWidthEstimate(node.label || node.id, 13) + 82;
+  const typeWidth = flowMapPreviewTextWidthEstimate(flowMapPreviewNodeType(node), 10) + 82;
+  return Math.min(1040, Math.max(240, width + 96, portWidth, labelWidth, typeWidth));
+};
+
 const loadEmbeddedFlowMapPreview = async (flowMapId = "") => {
   const nodeStore = flowMapStoreName("TL_RUNTIME_NODES", "tl_runtime_nodes");
   const dependencyStore = flowMapStoreName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies");
@@ -440,45 +505,112 @@ const loadEmbeddedFlowMapPreview = async (flowMapId = "") => {
   return { flowMap, nodes, dependencies };
 };
 
-const layoutEmbeddedFlowMapPreview = (nodes = []) => {
-  const width = 1000;
-  const height = 560;
-  const nodeWidth = 168;
-  const nodeHeight = 58;
-  const paddingX = 52;
-  const paddingY = 46;
+const layoutEmbeddedFlowMapPreview = (nodes = [], { compact = false } = {}) => {
+  const minWidth = 1000;
+  const minHeight = 560;
+  const maxWidth = 2600;
+  const maxHeight = 1800;
+  const paddingX = 88;
+  const paddingY = 72;
+  const nodeScale = compact ? 0.56 : 1;
+  const gapX = compact ? 38 : 88;
+  const gapY = compact ? 24 : 36;
   const raw = nodes.map((node, index) => {
     const rawX = Number.parseFloat(node.flowPosition?.x);
     const rawY = Number.parseFloat(node.flowPosition?.y);
+    const width = flowMapPreviewNodeWidth(node) * nodeScale;
+    const height = flowMapPreviewNodeHeight(node) * nodeScale;
     return {
       node,
+      width,
+      height,
       rawX: Number.isFinite(rawX) ? rawX : (index % 5) * 22,
       rawY: Number.isFinite(rawY) ? rawY : Math.floor(index / 5) * 24,
     };
   });
   const xValues = raw.map((item) => item.rawX);
   const yValues = raw.map((item) => item.rawY);
-  const minX = Math.min(...xValues, 0);
-  const maxX = Math.max(...xValues, 0);
-  const minY = Math.min(...yValues, 0);
-  const maxY = Math.max(...yValues, 0);
-  const spanX = maxX - minX;
-  const spanY = maxY - minY;
+  const looksPercentBased = raw.length > 1 &&
+    xValues.every((value) => value >= -5 && value <= 105) &&
+    yValues.every((value) => value >= -5 && value <= 105);
+  const coordinateScale = looksPercentBased ? 12 : 1;
+  const scaled = raw.map((item) => ({
+    ...item,
+    scaledX: item.rawX * coordinateScale,
+    scaledY: item.rawY * coordinateScale,
+  }));
+  const minX = Math.min(...scaled.map((item) => item.scaledX));
+  const minY = Math.min(...scaled.map((item) => item.scaledY));
+  const graphWidth = Math.max(...scaled.map((item) => item.scaledX + item.width)) - minX;
+  const graphHeight = Math.max(...scaled.map((item) => item.scaledY + item.height)) - minY;
+  const shrink = Math.min(1, (maxWidth - paddingX * 2) / Math.max(1, graphWidth), (maxHeight - paddingY * 2) / Math.max(1, graphHeight));
+  const placed = scaled.map((item) => ({
+    ...item,
+    x: paddingX + (item.scaledX - minX) * shrink,
+    y: paddingY + (item.scaledY - minY) * shrink,
+    width: item.width * shrink,
+    height: item.height,
+    nodeScale: nodeScale * shrink,
+  }));
+  placed
+    .sort((a, b) => a.x - b.x || a.y - b.y)
+    .forEach((item, index, list) => {
+      for (let guard = 0; guard < 8; guard += 1) {
+        const collision = list.slice(0, index).find((other) =>
+          item.x < other.x + other.width + gapX &&
+          item.x + item.width + gapX > other.x &&
+          item.y < other.y + other.height + gapY &&
+          item.y + item.height + gapY > other.y
+        );
+        if (!collision) break;
+        item.x = collision.x + collision.width + gapX;
+      }
+    });
+  const width = Math.ceil(Math.max(minWidth, Math.max(...placed.map((item) => item.x + item.width)) + paddingX));
+  const height = Math.ceil(Math.max(minHeight, Math.max(...placed.map((item) => item.y + item.height)) + paddingY));
   return {
     width,
     height,
-    nodeWidth,
-    nodeHeight,
-    nodes: raw.map((item, index) => ({
-      ...item,
-      x: spanX > 0
-        ? paddingX + ((item.rawX - minX) / spanX) * (width - paddingX * 2 - nodeWidth)
-        : (width - nodeWidth) / 2,
-      y: spanY > 0
-        ? paddingY + ((item.rawY - minY) / spanY) * (height - paddingY * 2 - nodeHeight)
-        : (height - nodeHeight) / 2,
-    })),
+    nodes: placed,
   };
+};
+
+const flowMapPreviewDependencyPort = (dependency = {}, side = "out") =>
+  side === "in"
+    ? dependency.metadata?.targetPort || dependency.targetPort || dependency.channel || ""
+    : dependency.metadata?.sourcePort || dependency.sourcePort || dependency.channel || "";
+
+const flowMapPreviewPortAnchorY = (layoutNode = {}, side = "out", portName = "") => {
+  const ports = flowMapPreviewPortsForNode(layoutNode.node, side);
+  if (!ports.length || !portName || portName === "all") return layoutNode.y + layoutNode.height / 2;
+  const index = ports.findIndex((port) => port.name === portName);
+  if (index < 0) return layoutNode.y + layoutNode.height / 2;
+  const visibleCount = Math.min(5, ports.length);
+  const scale = Number.isFinite(Number(layoutNode.nodeScale)) ? Number(layoutNode.nodeScale) : 1;
+  return layoutNode.y + (78 + Math.min(index, visibleCount - 1) * 20) * scale;
+};
+
+const setFlowMapPreviewZoom = (root, nextZoom = 1) => {
+  const zoom = Math.max(0.45, Math.min(1.8, Number(nextZoom) || 1));
+  const previousZoom = Number(root?.dataset.previewZoom || 1) || 1;
+  const shell = root?.querySelector?.(".tl-flow-map-preview-zoom-shell");
+  const canvas = root?.querySelector?.(".tl-flow-map-preview-canvas");
+  const viewport = root?.querySelector?.(".tl-flow-map-preview-viewport");
+  if (!shell || !canvas) return zoom;
+  const width = Number.parseFloat(canvas.dataset.baseWidth || canvas.style.width || "1000") || 1000;
+  const height = Number.parseFloat(canvas.dataset.baseHeight || canvas.style.height || "560") || 560;
+  const centerX = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / previousZoom : width / 2;
+  const centerY = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / previousZoom : height / 2;
+  shell.style.setProperty("--preview-zoom", String(zoom));
+  shell.style.width = `${Math.ceil(width * zoom)}px`;
+  shell.style.height = `${Math.ceil(height * zoom)}px`;
+  if (viewport) {
+    viewport.scrollLeft = Math.max(0, centerX * zoom - viewport.clientWidth / 2);
+    viewport.scrollTop = Math.max(0, centerY * zoom - viewport.clientHeight / 2);
+  }
+  const label = root.querySelector("[data-flow-map-preview-zoom-label]");
+  if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  return zoom;
 };
 
 const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) => {
@@ -490,51 +622,289 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
       _.span("Non ci sono nodi da visualizzare.")
     );
   }
-  const layout = layoutEmbeddedFlowMapPreview(nodes);
+  const layout = layoutEmbeddedFlowMapPreview(nodes, { compact: true });
   const byId = new Map(layout.nodes.map((item) => [item.node.id, item]));
   const edges = dependencies.map((dependency) => {
     const source = byId.get(dependency.sourceNodeId);
     const target = byId.get(dependency.targetNodeId);
     if (!source || !target) return null;
-    const x1 = source.x + layout.nodeWidth;
-    const y1 = source.y + layout.nodeHeight / 2;
+    const x1 = source.x + source.width;
+    const y1 = flowMapPreviewPortAnchorY(source, "out", flowMapPreviewDependencyPort(dependency, "out"));
     const x2 = target.x;
-    const y2 = target.y + layout.nodeHeight / 2;
+    const y2 = flowMapPreviewPortAnchorY(target, "in", flowMapPreviewDependencyPort(dependency, "in"));
     const bend = Math.max(44, Math.abs(x2 - x1) * 0.46);
     return { dependency, source, x1, y1, x2, y2, path: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}` };
   }).filter(Boolean);
   return _.div(
-    { class: "tl-flow-map-preview-canvas" },
-    _.svg(
-      { class: "tl-flow-map-preview-edges", viewBox: `0 0 ${layout.width} ${layout.height}`, preserveAspectRatio: "xMidYMid meet", "aria-hidden": "true" },
-      ...edges.flatMap((edge) => [
-        _.path({ d: edge.path, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
-        _.circle({ cx: edge.x2, cy: edge.y2, r: 3.5, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
-      ])
+    { class: "tl-flow-map-preview-root" },
+    _.div(
+      { class: "tl-flow-map-preview-tools" },
+      _.button({
+        type: "button",
+        class: "is-dense",
+        dense: true,
+        title: "Zoom out",
+        "aria-label": "Zoom out",
+        onclick: (event) => {
+          const root = event.currentTarget.closest(".tl-flow-map-preview-root");
+          const current = Number(root?.dataset.previewZoom || 1);
+          root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, current - 0.15));
+        },
+      }, icon("zoom_out", "md")),
+      _.button({
+        type: "button",
+        class: "is-dense",
+        dense: true,
+        title: "Fit",
+        "aria-label": "Fit",
+        onclick: (event) => {
+          const root = event.currentTarget.closest(".tl-flow-map-preview-root");
+          const viewport = root?.querySelector?.(".tl-flow-map-preview-viewport");
+          const canvas = root?.querySelector?.(".tl-flow-map-preview-canvas");
+          const baseWidth = Number.parseFloat(canvas?.dataset.baseWidth || "0") || 1;
+          const baseHeight = Number.parseFloat(canvas?.dataset.baseHeight || "0") || 1;
+          const fit = Math.min(1, (viewport?.clientWidth || baseWidth) / baseWidth, (viewport?.clientHeight || baseHeight) / baseHeight);
+          root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, Math.max(0.45, fit)));
+        },
+      }, icon("center_focus_strong", "md")),
+      _.button({
+        type: "button",
+        class: "is-dense",
+        dense: true,
+        title: "Zoom in",
+        "aria-label": "Zoom in",
+        onclick: (event) => {
+          const root = event.currentTarget.closest(".tl-flow-map-preview-root");
+          const current = Number(root?.dataset.previewZoom || 1);
+          root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, current + 0.15));
+        },
+      }, icon("zoom_in", "md")),
+      _.span({ "data-flow-map-preview-zoom-label": "true" }, "100%")
     ),
     _.div(
-      { class: "tl-flow-map-preview-nodes" },
-      ...layout.nodes.map(({ node, x, y }) => _.div(
-        {
-          class: "tl-flow-map-preview-node",
-          title: `${node.label || node.id} · ${flowMapPreviewNodeType(node)}`,
-          style: {
-            left: `${(x / layout.width) * 100}%`,
-            top: `${(y / layout.height) * 100}%`,
-            width: `${(layout.nodeWidth / layout.width) * 100}%`,
-            height: `${(layout.nodeHeight / layout.height) * 100}%`,
-            "--preview-rgb": flowMapPreviewToneRgb(node.metadata?.tone),
+      { class: "tl-flow-map-preview-viewport" },
+      _.div(
+        { class: "tl-flow-map-preview-zoom-shell", style: { width: `${layout.width}px`, height: `${layout.height}px` } },
+        _.div(
+          {
+            class: "tl-flow-map-preview-canvas is-compact",
+            "data-base-width": String(layout.width),
+            "data-base-height": String(layout.height),
+            style: { width: `${layout.width}px`, height: `${layout.height}px` },
           },
-        },
-        _.span({ class: "tl-flow-map-preview-node-icon" }, icon(node.metadata?.icon || "extension", "sm")),
-        _.span(
-          { class: "tl-flow-map-preview-node-copy" },
-          _.strong(node.label || node.id),
-          _.em(flowMapPreviewNodeType(node))
+          _.svg(
+            { class: "tl-flow-map-preview-edges", viewBox: `0 0 ${layout.width} ${layout.height}`, preserveAspectRatio: "none", "aria-hidden": "true" },
+            ...edges.flatMap((edge) => [
+              _.path({ d: edge.path, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
+              _.circle({ cx: edge.x2, cy: edge.y2, r: 3.5, style: { "--preview-rgb": flowMapPreviewToneRgb(edge.source.node.metadata?.tone) } }),
+            ])
+          ),
+          _.div(
+            { class: "tl-flow-map-preview-nodes" },
+            ...layout.nodes.map(({ node, x, y, width, height }) => {
+              const ports = flowMapPreviewNodePorts(node);
+              const hasPorts = ports.in.length || ports.out.length;
+              const renderPorts = (items, side) => _.div(
+                { class: `tl-flow-map-preview-ports is-${side}` },
+                ...items.slice(0, 5).map((port) => _.span(
+                  { title: `${side === "in" ? "IN" : "OUT"} · ${port.name}` },
+                  _.i(),
+                  _.strong(port.name)
+                )),
+                items.length > 5 ? _.span({ class: "is-more" }, _.i(), _.strong(`+${items.length - 5} more`)) : null
+              );
+              return _.div(
+                {
+                  class: `tl-flow-map-preview-node${hasPorts ? " has-ports" : ""}`,
+                  title: `${node.label || node.id} · ${flowMapPreviewNodeType(node)}`,
+                  style: {
+                    left: `${x}px`,
+                    top: `${y}px`,
+                    width: `${width}px`,
+                    height: `${height}px`,
+                    "--preview-rgb": flowMapPreviewToneRgb(node.metadata?.tone),
+                  },
+                },
+                _.div(
+                  { class: "tl-flow-map-preview-node-head" },
+                  _.span({ class: "tl-flow-map-preview-node-icon" }, icon(node.metadata?.icon || "extension", "sm")),
+                  _.span(
+                    { class: "tl-flow-map-preview-node-copy" },
+                    _.strong(node.label || node.id),
+                    _.em(flowMapPreviewNodeType(node))
+                  )
+                ),
+                hasPorts ? _.div(
+                  { class: "tl-flow-map-preview-node-io" },
+                  renderPorts(ports.in, "in"),
+                  renderPorts(ports.out, "out")
+                ) : null
+              );
+            })
+          )
         )
-      ))
+      ),
     )
   );
+};
+
+const flowMapExportSafeName = (value = "flow-map") =>
+  String(value || "flow-map").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "flow-map";
+
+const drawFlowMapPreviewRoundRect = (context, x, y, width, height, radius = 8) => {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
+};
+
+const drawFlowMapPreviewText = (context, text = "", x = 0, y = 0, maxWidth = 100) => {
+  const value = String(text || "");
+  if (context.measureText(value).width <= maxWidth) {
+    context.fillText(value, x, y);
+    return;
+  }
+  let clipped = value;
+  while (clipped.length > 1 && context.measureText(`${clipped}...`).width > maxWidth) clipped = clipped.slice(0, -1);
+  context.fillText(`${clipped}...`, x, y);
+};
+
+const drawFlowMapPreviewGraphToCanvas = ({ canvas, graph = {}, title = "", scale = 2 } = {}) => {
+  const nodes = graph.nodes || [];
+  const dependencies = graph.dependencies || [];
+  const layout = layoutEmbeddedFlowMapPreview(nodes);
+  const headerHeight = 74;
+  const width = layout.width;
+  const height = layout.height + headerHeight;
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const context = canvas.getContext("2d");
+  context.save();
+  context.scale(scale, scale);
+  context.fillStyle = "#071018";
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = "#101722";
+  context.fillRect(0, 0, width, headerHeight);
+  context.fillStyle = "#f8fafc";
+  context.font = "700 24px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  drawFlowMapPreviewText(context, title || graph.flowMap?.name || "Flow Map", 32, 32, width - 64);
+  context.fillStyle = "rgba(203, 213, 225, 0.76)";
+  context.font = "500 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  context.fillText(`${nodes.length} nodi · ${dependencies.length} collegamenti`, 32, 55);
+
+  context.save();
+  context.translate(0, headerHeight);
+  context.fillStyle = "#030a10";
+  context.fillRect(0, 0, layout.width, layout.height);
+  context.fillStyle = "rgba(112, 205, 255, 0.105)";
+  for (let x = 0; x <= layout.width; x += 16) {
+    for (let y = 0; y <= layout.height; y += 16) {
+      context.beginPath();
+      context.arc(x, y, 1, 0, Math.PI * 2);
+      context.fill();
+    }
+  }
+
+  const byId = new Map(layout.nodes.map((item) => [item.node.id, item]));
+  dependencies.forEach((dependency) => {
+    const source = byId.get(dependency.sourceNodeId);
+    const target = byId.get(dependency.targetNodeId);
+    if (!source || !target) return;
+    const rgb = flowMapPreviewToneRgb(source.node.metadata?.tone);
+    const x1 = source.x + source.width;
+    const y1 = flowMapPreviewPortAnchorY(source, "out", flowMapPreviewDependencyPort(dependency, "out"));
+    const x2 = target.x;
+    const y2 = flowMapPreviewPortAnchorY(target, "in", flowMapPreviewDependencyPort(dependency, "in"));
+    const bend = Math.max(44, Math.abs(x2 - x1) * 0.46);
+    context.strokeStyle = `rgb(${rgb})`;
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(x1, y1);
+    context.bezierCurveTo(x1 + bend, y1, x2 - bend, y2, x2, y2);
+    context.stroke();
+    context.fillStyle = `rgb(${rgb})`;
+    context.beginPath();
+    context.arc(x2, y2, 4, 0, Math.PI * 2);
+    context.fill();
+  });
+
+  layout.nodes.forEach(({ node, x, y, width: nodeWidth, height: nodeHeight }) => {
+    const rgb = flowMapPreviewToneRgb(node.metadata?.tone);
+    const ports = flowMapPreviewNodePorts(node);
+    context.fillStyle = "#07111a";
+    context.strokeStyle = `rgba(${rgb}, 0.82)`;
+    context.lineWidth = 2;
+    drawFlowMapPreviewRoundRect(context, x, y, nodeWidth, nodeHeight, 8);
+    context.fill();
+    context.stroke();
+    context.fillStyle = `rgb(${rgb})`;
+    context.fillRect(x, y + 8, 4, nodeHeight - 16);
+    context.fillStyle = "#f8fafc";
+    context.font = "700 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    drawFlowMapPreviewText(context, node.label || node.id, x + 14, y + 24, nodeWidth - 24);
+    context.fillStyle = "rgba(203, 213, 225, 0.78)";
+    context.font = "500 10px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    drawFlowMapPreviewText(context, flowMapPreviewNodeType(node), x + 14, y + 40, nodeWidth - 24);
+    const drawPortRows = (items, side) => {
+      items.slice(0, 5).forEach((port, index) => {
+        const rowY = y + 73 + index * 20;
+        const nameWidth = Math.max(40, Math.min(142, nodeWidth * 0.38));
+        const dotX = side === "in" ? x + 13 : x + nodeWidth - 13;
+        context.fillStyle = side === "in" ? "rgba(34, 197, 94, 0.9)" : "rgba(34, 211, 238, 0.9)";
+        context.beginPath();
+        context.arc(dotX, rowY - 4, 3, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = "rgba(241, 245, 249, 0.9)";
+        context.font = "600 9px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+        context.textAlign = side === "in" ? "left" : "right";
+        drawFlowMapPreviewText(context, port.name, side === "in" ? dotX + 10 : dotX - 10, rowY, nameWidth);
+        context.textAlign = "left";
+      });
+    };
+    drawPortRows(ports.in, "in");
+    drawPortRows(ports.out, "out");
+  });
+  context.restore();
+  context.restore();
+};
+
+const exportFlowMapGraphAsJpg = async ({ graph = null, filename = "", title = "" } = {}) => {
+  const fallbackTitle = typeof currentWorkspaceName === "function" ? currentWorkspaceName() : "Flow Map";
+  const sourceGraph = graph || {
+    flowMap: { name: fallbackTitle },
+    nodes: state.runtime.nodes || [],
+    dependencies: state.runtime.dependencies || [],
+  };
+  if (!sourceGraph.nodes?.length) {
+    window.alert("Non ci sono nodi da esportare.");
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  const exportTitle = title || sourceGraph.flowMap?.name || fallbackTitle;
+  drawFlowMapPreviewGraphToCanvas({ canvas, graph: sourceGraph, title: exportTitle, scale: 2 });
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  if (!blob) throw new Error("Export JPG non riuscito.");
+  const anchor = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  anchor.href = url;
+  anchor.download = filename || `${flowMapExportSafeName(exportTitle || "flow-map")}.jpg`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+window.TrackerLensFlowMapPreview = {
+  render: renderEmbeddedFlowMapPreview,
+  exportJpg: exportFlowMapGraphAsJpg,
 };
 
 const openEmbeddedFlowMapPreviewDialog = async (aliasNode = {}) => {
@@ -562,6 +932,15 @@ const openEmbeddedFlowMapPreviewDialog = async (aliasNode = {}) => {
     ),
   });
   dialog.open();
+  requestAnimationFrame(() => {
+    const root = document.querySelector(".tl-flow-map-preview-dialog .tl-flow-map-preview-root");
+    const viewport = root?.querySelector?.(".tl-flow-map-preview-viewport");
+    const canvas = root?.querySelector?.(".tl-flow-map-preview-canvas");
+    const baseWidth = Number.parseFloat(canvas?.dataset.baseWidth || "0") || 1;
+    const baseHeight = Number.parseFloat(canvas?.dataset.baseHeight || "0") || 1;
+    const fit = Math.min(1, (viewport?.clientWidth || baseWidth) / baseWidth, (viewport?.clientHeight || baseHeight) / baseHeight);
+    if (root) root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, Math.max(0.45, fit)));
+  });
 };
 
 const resolveAiAgentAliasNodes = async (nodes = []) => {
