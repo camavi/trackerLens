@@ -366,14 +366,40 @@ const isAgentControlEdge = (dependency = {}) =>
 const isAgentBridgeNode = (node = {}) =>
   nodeSubtype(node) === "agent-bridge";
 
+const dependencyEventChannels = (dependency = {}) =>
+  [
+    dependency.channel,
+    dependency.sourcePort,
+    dependency.targetPort,
+    dependency.metadata?.sourcePort,
+    dependency.metadata?.targetPort,
+    ...(dependency.channels || []),
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+
+const dependencyMatchesRuntimeEventChannel = (dependency = {}, eventChannel = "") => {
+  const channel = String(eventChannel || "").trim();
+  if (!channel) return true;
+  const candidates = dependencyEventChannels(dependency);
+  return candidates.includes("all") || candidates.includes(channel);
+};
+
+const runtimeEventVisualActive = (event = {}, windowMs = EDGE_ACTIVITY_WINDOW_MS) => {
+  const created = Date.parse(event.createdAt || "");
+  const visualUntil = Date.parse(event.meta?.visualUntil || event.payload?.visualUntil || "");
+  if (!Number.isFinite(created)) return false;
+  return Date.now() - created <= windowMs || (Number.isFinite(visualUntil) && Date.now() <= visualUntil);
+};
+
 const edgeRecentEvent = (dependency = {}) =>
   filteredRuntimeEvents()
     .filter((event) => {
-      const created = Date.parse(event.createdAt || "");
-      if (!Number.isFinite(created) || Date.now() - created > EDGE_ACTIVITY_WINDOW_MS) return false;
+      if (!runtimeEventVisualActive(event)) return false;
       if (event.meta?.dependencyId && event.meta.dependencyId === dependency.id) return true;
-      if (event.sourceNodeId === dependency.sourceNodeId) return !event.channel || event.channel === dependency.channel;
-      if (event.targetNodeId === dependency.targetNodeId) return !event.channel || event.channel === dependency.channel;
+      if (event.sourceNodeId === dependency.sourceNodeId) return dependencyMatchesRuntimeEventChannel(dependency, event.channel);
+      if (event.targetNodeId === dependency.targetNodeId) return dependencyMatchesRuntimeEventChannel(dependency, event.channel);
       return false;
     })
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] || null;
@@ -723,6 +749,22 @@ const drawFlowEdges = () => {
     }
     ctx.setLineDash([]);
 
+    if (isLive) {
+      const particles = isAgentControl ? [0.18, 0.5, 0.82] : [0.24, 0.58, 0.9];
+      particles.forEach((base, particleIndex) => {
+        const t = (base + (state.edgePhase / 64)) % 1;
+        const particle = bezierPoint(from, to, t, offset, bezierOptions);
+        const radius = isBus ? 4.8 : 3.8;
+        ctx.beginPath();
+        ctx.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = rgba(rgb, particleIndex === 0 ? 0.98 : 0.78);
+        ctx.shadowColor = rgba(rgb, 0.78);
+        ctx.shadowBlur = 14;
+        ctx.fill();
+      });
+      ctx.shadowBlur = 0;
+    }
+
     ctx.fillStyle = rgba(rgb, 1);
     ctx.strokeStyle = "rgba(3, 9, 14, 0.95)";
     ctx.lineWidth = 2;
@@ -821,7 +863,7 @@ const renderFlowEdges = () => {
 };
 
 const nodeRuntimeBanner = (node = {}, live = null) => {
-  if (!live || nodeCategory(node) !== "ai-agents") return null;
+  if (!live) return null;
   const status = String(live.status || "").toLowerCase();
   const phase = String(live.phase || "").toLowerCase();
   const isOrchestrator = nodeSubtype(node) === "orchestrator";
@@ -830,12 +872,20 @@ const nodeRuntimeBanner = (node = {}, live = null) => {
     if (completedAt && Date.now() - completedAt > 5000) return null;
     return { tone: "complete", icon: "check_circle", label: "Task complete" };
   }
-  if (status !== "orchestrating" && status !== "busy") return null;
+  if (status === "error") return { tone: "error", icon: "error", label: "Runtime error" };
+  if (status === "overloaded") return { tone: "error", icon: "priority_high", label: "Overloaded" };
+  if (status === "queued") return { tone: "waiting", icon: "pending", label: "Queued" };
+  if (phase === "received") return { tone: "live", icon: "input", label: "Input received" };
+  if (phase === "preparing") return { tone: "planning", icon: "tune", label: "Preparing input" };
   if (phase === "planning") return { tone: "planning", icon: "hub", label: isOrchestrator ? "Planning route" : "Planning" };
-  if (phase === "waiting") return { tone: "waiting", icon: isOrchestrator ? "hub" : "psychology", label: live.targetLabel ? `Waiting for ${live.targetLabel}` : "Waiting for AI" };
+  if (phase === "thinking") return { tone: "thinking", icon: "psychology", label: live.targetLabel || "Thinking" };
+  if (phase === "waiting") return { tone: "waiting", icon: isOrchestrator ? "hub" : "hourglass_top", label: live.targetLabel ? `Waiting for ${live.targetLabel}` : "Waiting" };
   if (phase === "executing" || phase === "run_node") return { tone: "executing", icon: "bolt", label: live.targetLabel ? `Running ${live.targetLabel}` : "Running node" };
   if (phase === "sending" || phase === "send_result") return { tone: "sending", icon: "send", label: live.targetLabel ? `Sending to ${live.targetLabel}` : "Sending result" };
-  return { tone: "thinking", icon: isOrchestrator ? "hub" : "psychology", label: isOrchestrator ? "Orchestrating" : "Thinking" };
+  if (phase === "emitting") return { tone: "sending", icon: "send", label: live.targetLabel || "Emitting result" };
+  if (status === "orchestrating") return { tone: "thinking", icon: "hub", label: isOrchestrator ? "Orchestrating" : "Coordinating" };
+  if (status === "busy") return { tone: "executing", icon: "sync", label: "Processing" };
+  return { tone: "live", icon: graphIcon(node), label: live.count > 1 ? `${live.count} live events` : "Live event" };
 };
 
 const renderNodeRuntimeBanner = (node = {}, live = null) => {
@@ -6397,6 +6447,7 @@ const renderStatusWorkerPanel = () =>
       ["Connected", state.runtimeWorker.connected ? "yes" : "no"],
       ["Mode", state.runtimeWorker.mode || "none"],
       ["Status", state.runtimeWorker.status || "idle"],
+      ["Version", state.runtimeWorker.version || "N/D"],
       ["Workspace", state.runtimeWorker.workspaceId || state.filters.workspaceId || "workspace_global"],
       ["Worker nodes", state.runtimeWorker.nodes || 0],
       ["Worker edges", state.runtimeWorker.dependencies || 0],

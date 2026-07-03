@@ -144,6 +144,7 @@ const state = {
   liveBus: {
     available: false,
     connected: false,
+    workspaceId: "",
     count: 0,
     lastAt: "",
     lastChannel: "",
@@ -216,7 +217,7 @@ const summarizeRuntimePayloadForUi = (payload) => {
     preview: text.slice(0, RUNTIME_PAYLOAD_UI_BYTES),
   };
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    ["id", "documentId", "collectionId", "queryId", "title", "channel", "runId"].forEach((key) => {
+    ["id", "documentId", "collectionId", "queryId", "title", "channel", "runId", "phase", "targetLabel", "inputChannel", "visualUntil"].forEach((key) => {
       if (payload[key] !== undefined) summary[key] = payload[key];
     });
   }
@@ -250,7 +251,7 @@ const LIVE_TEST_TIMEOUT_MS = 10000;
 const AI_DIRECT_TEST_TIMEOUT_MS = 120000;
 const AI_PROCESSING_VISUAL_TIMEOUT_MS = 300000;
 const MIN_TEST_ANIMATION_MS = 3000;
-const EDGE_ACTIVITY_WINDOW_MS = 3000;
+const EDGE_ACTIVITY_WINDOW_MS = 12000;
 const [getUpdatedAtState, setUpdatedAtSignal] = flowReactive.signal(state.updatedAt);
 const [getLoadingState, setLoadingSignal] = flowReactive.signal(state.loading);
 const [getErrorState, setErrorSignal] = flowReactive.signal(state.error);
@@ -406,6 +407,19 @@ const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId, options 
   }
   const status = window.TrackerLensRuntimeWorker.status?.() || {};
   const active = (status.workspaces || []).find((workspace) => workspace.workspaceId === id);
+  if (forceRefresh && window.TrackerLensRuntimeWorker.restart) {
+    const restarted = window.TrackerLensRuntimeWorker.restart({ workspaceId: id, refreshMs: 5000 });
+    state.runtimeWorker = {
+      ...state.runtimeWorker,
+      available: Boolean(status.available || restarted),
+      connected: Boolean(status.connected || restarted),
+      mode: status.mode || state.runtimeWorker.mode || "worker",
+      status: restarted ? "restarting" : status.status || "idle",
+      workspaceId: id,
+      error: status.error || "",
+    };
+    return Boolean(restarted);
+  }
   if (forceRefresh && window.TrackerLensRuntimeWorker.refresh) {
     window.TrackerLensRuntimeWorker.refresh(id);
   }
@@ -1176,10 +1190,8 @@ const loadRuntime = async (options = {}) => {
 
 const runtimeEventBus = () => {
   if (!window.TrackerLensEventBus?.get) return null;
-  return window.TrackerLensEventBus.get("flow-map", {
-    eventStore: null,
-    channelRegistry: null,
-  });
+  const workspaceId = normalizeRuntimeWorkspaceId(state.filters.workspaceId || state.runtime.flows[0]?.workspaceId || "workspace_global");
+  return window.TrackerLensEventBus.get(workspaceId);
 };
 
 const workspaceEventBus = (workspaceId = state.filters.workspaceId || "workspace_global") => {
@@ -1221,7 +1233,9 @@ const filteredRuntimeEvents = () =>
 
 const mergeRuntimeEvent = (event = {}) => {
   if (!event.id) return false;
-  if (state.runtime.events.some((item) => item.id === event.id)) return false;
+  if (state.runtime.events.some((item) => item.id === event.id)) {
+    return false;
+  }
   const safeEvent = sanitizeRuntimeEventForUi(event);
   state.runtime.events = [safeEvent, ...state.runtime.events].slice(0, RUNTIME_EVENT_UI_LIMIT);
   updateAiProcessingFromEvent(safeEvent);
@@ -1453,6 +1467,7 @@ const updateLiveClasses = (graph, activity) => {
     element.classList.toggle("is-orchestrating", live?.status === "orchestrating");
     element.classList.toggle("is-task-complete", live?.status === "complete");
     element.classList.toggle("is-busy", live?.status === "busy");
+    element.classList.toggle("is-waiting", live?.phase === "waiting" || live?.phase === "thinking");
     element.classList.toggle("is-queued", live?.status === "queued");
     element.classList.toggle("is-overloaded", live?.status === "overloaded");
     element.classList.toggle("is-error", live?.status === "error" || live?.status === "overloaded");
@@ -1496,12 +1511,20 @@ const connectLiveEventBus = () => {
     state.liveBus.lastChannel = "recovery";
     return;
   }
+  const workspaceId = normalizeRuntimeWorkspaceId(state.filters.workspaceId || state.runtime.flows[0]?.workspaceId || "workspace_global");
+  if (state.liveBusUnsubscribe && state.liveBus.workspaceId && state.liveBus.workspaceId !== workspaceId) {
+    state.liveBusUnsubscribe();
+    state.liveBusUnsubscribe = null;
+    state.liveBus.connected = false;
+    state.liveBus.workspaceId = "";
+  }
   if (state.liveBusUnsubscribe) return;
   const bus = runtimeEventBus();
   if (!bus?.on) {
     state.liveBus.connected = false;
     return;
   }
+  state.liveBus.workspaceId = workspaceId;
   state.liveBusUnsubscribe = bus.on("*", (payload, event) => {
     state.liveBus.connected = true;
     state.liveBus.count += 1;
@@ -1779,11 +1802,15 @@ const nodePosition = (node, index) => {
   return normalizeFlowPosition(graphModelApi().nodePosition({ node, index, overrides: state.nodePositions }));
 };
 
-const recentActivity = (graph) => graphModelApi().recentActivity({
-  graph,
-  events: filteredRuntimeEvents(),
-  windowMs: EDGE_ACTIVITY_WINDOW_MS,
-});
+const recentActivity = (graph) => {
+  const events = filteredRuntimeEvents();
+  const activity = graphModelApi().recentActivity({
+    graph,
+    events,
+    windowMs: EDGE_ACTIVITY_WINDOW_MS,
+  });
+  return activity;
+};
 
 const filterByActivity = (graph, activity) => graphModelApi().filterByActivity({ graph, activity, filter: state.filters.activity });
 

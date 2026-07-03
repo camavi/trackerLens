@@ -926,7 +926,10 @@ textarea.tl-flow-menu-input {
 }
 
 .tl-flow-node.is-live {
-  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18), 0 0 28px rgba(34, 197, 94, 0.12);
+  border-color: rgba(var(--node-rgb, 34, 197, 94), 0.72);
+  box-shadow:
+    0 0 0 1px rgba(var(--node-rgb, 34, 197, 94), 0.2),
+    0 0 30px rgba(var(--node-rgb, 34, 197, 94), 0.18);
 }
 
 .tl-flow-node.is-ai-processing {
@@ -962,16 +965,16 @@ textarea.tl-flow-menu-input {
   align-items: center;
   gap: 7px;
   padding: 4px 7px;
-  color: rgba(254, 243, 199, 0.96);
-  border: 1px solid rgba(255, 199, 44, 0.42);
+  color: rgba(var(--node-rgb, 214, 226, 235), 0.96);
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.46);
   border-radius: 7px;
   background:
-    linear-gradient(90deg, rgba(255, 199, 44, 0.2), rgba(34, 211, 238, 0.12)),
+    linear-gradient(90deg, rgba(var(--node-rgb, 214, 226, 235), 0.22), rgba(34, 211, 238, 0.1)),
     rgba(5, 11, 16, 0.96);
   box-shadow:
-    0 0 0 1px rgba(255, 199, 44, 0.1),
+    0 0 0 1px rgba(var(--node-rgb, 214, 226, 235), 0.12),
     0 12px 28px rgba(0, 0, 0, 0.28),
-    0 0 24px rgba(255, 199, 44, 0.18);
+    0 0 24px rgba(var(--node-rgb, 214, 226, 235), 0.2);
   backdrop-filter: blur(10px);
   pointer-events: none;
 }
@@ -991,12 +994,23 @@ textarea.tl-flow-menu-input {
 }
 
 .tl-flow-node-runtime-banner>.cms-icon {
+  color: currentColor;
+  filter: drop-shadow(0 0 8px rgba(var(--node-rgb, 214, 226, 235), 0.5));
+}
+
+.tl-flow-node-runtime-banner.is-planning,
+.tl-flow-node-runtime-banner.is-waiting,
+.tl-flow-node-runtime-banner.is-thinking {
   color: #fde68a;
-  filter: drop-shadow(0 0 8px rgba(255, 199, 44, 0.5));
+  border-color: rgba(255, 199, 44, 0.48);
+  background:
+    linear-gradient(90deg, rgba(255, 199, 44, 0.22), rgba(var(--node-rgb, 214, 226, 235), 0.1)),
+    rgba(5, 11, 16, 0.96);
 }
 
 .tl-flow-node-runtime-banner.is-executing,
-.tl-flow-node-runtime-banner.is-sending {
+.tl-flow-node-runtime-banner.is-sending,
+.tl-flow-node-runtime-banner.is-live {
   color: #ecfeff;
   border-color: rgba(34, 211, 238, 0.5);
   box-shadow:
@@ -1006,8 +1020,25 @@ textarea.tl-flow-menu-input {
 }
 
 .tl-flow-node-runtime-banner.is-executing>.cms-icon,
-.tl-flow-node-runtime-banner.is-sending>.cms-icon {
+.tl-flow-node-runtime-banner.is-sending>.cms-icon,
+.tl-flow-node-runtime-banner.is-live>.cms-icon {
   color: #a5f3fc;
+}
+
+.tl-flow-node-runtime-banner.is-error {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.58);
+  background:
+    linear-gradient(90deg, rgba(248, 113, 113, 0.2), rgba(255, 199, 44, 0.08)),
+    rgba(5, 11, 16, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(248, 113, 113, 0.16),
+    0 12px 28px rgba(0, 0, 0, 0.28),
+    0 0 24px rgba(248, 113, 113, 0.24);
+}
+
+.tl-flow-node-runtime-banner.is-error>.cms-icon {
+  color: #fca5a5;
 }
 
 .tl-flow-node-runtime-banner.is-complete {
@@ -1047,6 +1078,7 @@ textarea.tl-flow-menu-input {
 }
 
 .tl-flow-node.is-busy,
+.tl-flow-node.is-waiting,
 .tl-flow-node.is-queued {
   border-color: rgba(255, 199, 44, 0.72);
   box-shadow: 0 0 0 1px rgba(255, 199, 44, 0.18), 0 0 24px rgba(255, 199, 44, 0.14);
@@ -1235,6 +1267,10 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
 
 .tl-flow-node.is-event-active {
   animation: tl-node-event-pulse 1.2s ease-out 3;
+}
+
+.tl-flow-node.is-live.is-event-active {
+  animation: tl-node-live-breathe 1.35s ease-in-out infinite;
 }
 
 .tl-flow-node.is-ai-processing.is-event-active {
@@ -1796,6 +1832,25 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
 
   100% {
     box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22), 0 0 10px rgba(var(--node-rgb, 214, 226, 235), 0.08);
+  }
+}
+
+@keyframes tl-node-live-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 18px 38px rgba(0, 0, 0, 0.22),
+      0 0 0 1px rgba(var(--node-rgb, 34, 197, 94), 0.2),
+      0 0 22px rgba(var(--node-rgb, 34, 197, 94), 0.18);
+    filter: saturate(1);
+  }
+
+  50% {
+    box-shadow:
+      0 18px 38px rgba(0, 0, 0, 0.22),
+      0 0 0 1px rgba(var(--node-rgb, 34, 197, 94), 0.36),
+      0 0 42px rgba(var(--node-rgb, 34, 197, 94), 0.32);
+    filter: saturate(1.18);
   }
 }
 

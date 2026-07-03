@@ -87,6 +87,28 @@ window.TrackerLensRuntimeGraphModel = (() => {
       .filter(Boolean)
       .map(String);
 
+  const dependencyChannels = (dependency = {}) =>
+    [
+      dependency.channel,
+      dependency.sourcePort,
+      dependency.targetPort,
+      dependency.metadata?.sourcePort,
+      dependency.metadata?.targetPort,
+      ...(dependency.channels || []),
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).trim())
+      .filter(Boolean);
+
+  const dependencyMatchesEventChannel = (dependency = {}, eventChannel = "") => {
+    const channel = String(eventChannel || "").trim();
+    if (!channel) return true;
+    const candidates = dependencyChannels(dependency);
+    if (!candidates.length) return false;
+    if (candidates.includes("all")) return true;
+    return candidates.includes(channel);
+  };
+
   const visualForNode = (node = null) => {
     const label = node?.metadata?.paletteLabel || node?.label || "";
     return paletteVisuals[label] || {};
@@ -195,7 +217,9 @@ window.TrackerLensRuntimeGraphModel = (() => {
 
     events.forEach((event) => {
       const created = Date.parse(event.createdAt);
-      if (Number.isNaN(created) || now - created > windowMs) return;
+      const visualUntil = Date.parse(event.meta?.visualUntil || event.payload?.visualUntil || "");
+      if (Number.isNaN(created)) return;
+      if (now - created > windowMs && (!Number.isFinite(visualUntil) || now > visualUntil)) return;
       const eventChannel = event.channel || "";
       const matchedDependencies = (graph.dependencies || []).filter((dependency) => {
         if (event.meta?.dependencyId && dependency.id === event.meta.dependencyId) return true;
@@ -208,10 +232,10 @@ window.TrackerLensRuntimeGraphModel = (() => {
               (dependency.sourceNodeId === executedNodeId && dependency.targetNodeId === orchestratorId));
         }
         if (event.sourceNodeId && dependency.sourceNodeId === event.sourceNodeId) {
-          return !eventChannel || dependency.channel === eventChannel;
+          return dependencyMatchesEventChannel(dependency, eventChannel);
         }
         if (event.targetNodeId && dependency.targetNodeId === event.targetNodeId) {
-          return !eventChannel || dependency.channel === eventChannel;
+          return dependencyMatchesEventChannel(dependency, eventChannel);
         }
         return false;
       });
@@ -224,7 +248,7 @@ window.TrackerLensRuntimeGraphModel = (() => {
       ].filter(Boolean);
 
       (graph.nodes || []).forEach((node) => {
-        if (related.includes(node.id) || nodeChannels(node).includes(event.channel)) {
+        if (related.includes(node.id)) {
           const current = nodeActivity.get(node.id) || { count: 0, status: "ok", lastAt: event.createdAt };
           const type = String(event.eventType || "").toLowerCase();
           const orchestrating = type.startsWith("orchestrator_") && !type.includes("done") && !type.includes("result");
@@ -243,9 +267,9 @@ window.TrackerLensRuntimeGraphModel = (() => {
           nodeActivity.set(node.id, {
             count: current.count + 1,
             status: isNewer ? nextStatus : current.status || nextStatus,
-            phase: isNewer ? (event.payload?.phase || event.meta?.plannerStep || (complete ? "complete" : "")) : current.phase || "",
+            phase: isNewer ? (event.meta?.phase || event.payload?.phase || event.meta?.plannerStep || (complete ? "complete" : "")) : current.phase || "",
             eventType: isNewer ? event.eventType || "" : current.eventType || "",
-            targetLabel: isNewer ? event.payload?.targetLabel || "" : current.targetLabel || "",
+            targetLabel: isNewer ? (event.meta?.targetLabel || event.payload?.targetLabel || "") : current.targetLabel || "",
             lastAt: Date.parse(current.lastAt) > created ? current.lastAt : event.createdAt,
           });
         }

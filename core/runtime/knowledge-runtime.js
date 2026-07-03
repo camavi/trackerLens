@@ -755,6 +755,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
       dependency.metadata?.output,
       dependency.metadata?.input,
     ].filter((channel) => channel && channel !== "all"));
+  const dependencyUsesAllChannel = (dependency = {}) =>
+    [
+      dependency.channel,
+      dependency.sourcePort,
+      dependency.targetPort,
+      dependency.output,
+      dependency.input,
+      dependency.metadata?.channel,
+      dependency.metadata?.sourcePort,
+      dependency.metadata?.targetPort,
+      dependency.metadata?.output,
+      dependency.metadata?.input,
+    ].some((channel) => String(channel || "") === "all");
+  const dependencyAcceptsChannel = (dependency = {}, eventChannel = "") =>
+    dependencyUsesAllChannel(dependency) || dependencyChannels(dependency).includes(String(eventChannel || ""));
   const nodeInputs = (node = {}, dependencies = []) => {
     const incomingDependencies = nodeIncomingDependencies(node, dependencies);
     const incoming = incomingDependencies
@@ -773,8 +788,60 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const sourceNodeId = String(event?.sourceNodeId || "");
     return incomingDependencies.some((dependency) =>
       String(dependency.sourceNodeId || "") === sourceNodeId &&
-      dependencyChannels(dependency).includes(eventChannel)
+      dependencyAcceptsChannel(dependency, eventChannel)
     );
+  };
+  const dependencyForRuntimeEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
+    const eventChannel = String(event?.channel || "");
+    const sourceNodeId = String(event?.sourceNodeId || "");
+    return nodeIncomingDependencies(node, dependencies).find((dependency) =>
+      String(dependency.sourceNodeId || "") === sourceNodeId &&
+      dependencyAcceptsChannel(dependency, eventChannel)
+    ) || null;
+  };
+  const runtimeVisualUntil = (durationMs = 12000) =>
+    new Date(Date.now() + Math.max(3000, Number(durationMs) || 12000)).toISOString();
+  const emitKnowledgeRuntimeActivity = async ({
+    bus,
+    workspaceId = "workspace_global",
+    runtime = {},
+    node = {},
+    event = {},
+    runId = "",
+    subtype = "",
+    status = "busy",
+    phase = "processing",
+    label = "",
+    durationMs = 9000,
+  } = {}) => {
+    if (!bus?.emit || !node?.id) return null;
+    const dependency = dependencyForRuntimeEvent({ node, event, dependencies: runtime.dependencies || [] });
+    const visualUntil = runtimeVisualUntil(durationMs);
+    return bus.emit("knowledge.runtime.activity", {
+      nodeId: node.id,
+      phase,
+      targetLabel: label || node.label || node.id,
+      inputChannel: event?.channel || "",
+      visualUntil,
+    }, {
+      workspaceId,
+      eventType: "knowledge_runtime_activity",
+      sourceNodeId: event?.sourceNodeId || dependency?.sourceNodeId || "",
+      targetNodeId: node.id,
+      status,
+      meta: {
+        knowledgeRuntime: node.id,
+        runtimeActivityVisual: true,
+        dependencyId: dependency?.id || "",
+        inputEventId: event?.id || "",
+        inputChannel: event?.channel || "",
+        runId,
+        subtype,
+        phase,
+        targetLabel: label || node.label || node.id,
+        visualUntil,
+      },
+    }).catch(() => null);
   };
   const hasGraphSourceDependency = (node = {}, dependencies = []) =>
     nodeIncomingDependencies(node, dependencies)
@@ -4985,6 +5052,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
 
     async handleEvent({ node, payload, event }) {
+      if (event?.meta?.runtimeActivityVisual) return;
       if (!node?.id || event?.sourceNodeId === node.id || event?.meta?.knowledgeRuntime === node.id) return;
       if (!acceptsDependencyEvent({ node, event, dependencies: this.runtime?.dependencies || [] })) {
         await this.log({
@@ -5004,6 +5072,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const subtype = nodeSubtype(node);
       const runId = event?.meta?.runId || payload?.runId || "";
       try {
+        await emitKnowledgeRuntimeActivity({
+          bus: this.bus,
+          workspaceId: this.workspaceId,
+          runtime: this.runtime,
+          node,
+          event,
+          runId,
+          subtype,
+          status: "busy",
+          phase: "processing",
+          label: "Processing input",
+          durationMs: 12000,
+        });
         let outputChannel = nodeOutput(node, config, "knowledge.output");
         let result = null;
         if (subtype === "document-store" || subtype === "text-knowledge" || subtype === "workspace-memory" || subtype === "conversation-memory") {
@@ -5033,6 +5114,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               inputChannel: event?.channel || "",
               runId,
               subtype,
+              visualUntil: runtimeVisualUntil(),
             },
           });
           outputChannel = nodeOutput(node, config, "knowledge.dictionary.updated");
@@ -5054,6 +5136,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               inputChannel: event?.channel || "",
               runId,
               subtype,
+              visualUntil: runtimeVisualUntil(),
             },
           });
           outputChannel = nodeOutput(node, config, "knowledge.events.updated");
@@ -5077,6 +5160,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 inputChannel: event?.channel || "",
                 runId,
                 subtype,
+                visualUntil: runtimeVisualUntil(),
               },
             });
           }
@@ -5104,12 +5188,73 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 inputChannel: event?.channel || "",
                 runId,
                 subtype,
+                visualUntil: runtimeVisualUntil(),
               },
             });
           }
           outputChannel = nodeOutput(node, config, "knowledge.semantic.relations");
         } else if (subtype === "knowledge-graph-builder-agent") {
-          result = await buildKnowledgeGraphWithAi({ workspaceId: this.workspaceId, node, payload, event, config });
+          await emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "received",
+            label: "Input received",
+            durationMs: 30000,
+          });
+          await emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "thinking",
+            label: config.providerProfile || config.provider || config.model ? "Thinking with LLM" : "Building graph",
+            durationMs: 180000,
+          });
+          let waitingHeartbeat = 0;
+          const emitWaitingHeartbeat = () => emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "thinking",
+            label: config.providerProfile || config.provider || config.model ? "Thinking with LLM" : "Building graph",
+            durationMs: 30000,
+          });
+          waitingHeartbeat = setInterval(() => {
+            emitWaitingHeartbeat().catch(() => null);
+          }, 2000);
+          try {
+            result = await buildKnowledgeGraphWithAi({ workspaceId: this.workspaceId, node, payload, event, config });
+          } finally {
+            clearInterval(waitingHeartbeat);
+          }
+          await emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "emitting",
+            label: "Emitting graph proposal",
+            durationMs: 30000,
+          });
           await this.bus.emit("knowledge.graph.proposed", {
             documentId: result.documentId,
             collectionId: result.collectionId,
@@ -5130,6 +5275,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               inputChannel: event?.channel || "",
               runId,
               subtype,
+              visualUntil: runtimeVisualUntil(),
             },
           });
           if (result.semanticRelations?.length) {
@@ -5150,6 +5296,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 inputChannel: event?.channel || "",
                 runId,
                 subtype,
+                visualUntil: runtimeVisualUntil(),
               },
             });
           }
@@ -5216,6 +5363,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               inputChannel: event?.channel || "",
               runId,
               subtype,
+              visualUntil: runtimeVisualUntil(),
             },
           });
           outputChannel = nodeOutput(node, config, "knowledge.rag.context");
@@ -5234,8 +5382,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
             inputChannel: event?.channel || "",
             runId,
             subtype,
+            visualUntil: runtimeVisualUntil(),
           },
         });
+        if (subtype === "knowledge-graph-builder-agent") {
+          await emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "complete",
+            phase: "complete",
+            label: "Task complete",
+            durationMs: 9000,
+          });
+        }
         await this.log({
           node,
           message: `Knowledge emitted ${outputChannel}: ${node.label || node.id}`,

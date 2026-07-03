@@ -58,6 +58,7 @@ window.TrackerLensRuntimeWorker?.subscribe?.((status = {}) => {
     connected: Boolean(status.connected),
     mode: status.mode || "none",
     status: active?.status || status.status || "idle",
+    version: status.version || "",
     error: active?.error || status.error || "",
     workspaceId: active?.workspaceId || status.workspaceId || state.filters.workspaceId || "",
     nodes: active?.nodes || status.nodes || 0,

@@ -1,10 +1,16 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.165-knowledge-events-ai-5";
+const RUNTIME_WORKER_VERSION = "0.1.177-flow-agent-clean-1";
 const ports = new Set();
 const workspaces = new Map();
 
 const post = (message = {}) => {
+  if (!ports.size && typeof self.postMessage === "function") {
+    try {
+      self.postMessage({ version: RUNTIME_WORKER_VERSION, ...message });
+      return;
+    } catch (_) {}
+  }
   ports.forEach((port) => {
     try {
       port.postMessage({ version: RUNTIME_WORKER_VERSION, ...message });
@@ -22,14 +28,14 @@ const loadRuntimeScripts = () => {
     "dependency-manager.js",
     "channel-registry.js",
     "event-log-store.js",
-    "event-bus.js?v=kg-20260626-graph-query-rank-4",
+    "event-bus.js?v=kg-20260703-flow-agent-clean-1",
     "runtime-graph-store.js",
     "runtime-snapshot-store.js",
     "node-execution-controller.js",
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260626-knowledge-events-ai-4",
+    "knowledge-runtime.js?v=kg-20260703-flow-agent-clean-1",
     "ai-agent-runtime.js?v=kg-20260626-knowledge-events-ai-5",
     "orchestrator-agent-runtime.js"
   );
@@ -121,6 +127,7 @@ const stopWorkspace = (workspaceId = "workspace_global") => {
 
 const status = () => ({
   type: "runtime-worker:status",
+  version: RUNTIME_WORKER_VERSION,
   status: "ready",
   workspaces: Array.from(workspaces.values()).map((workspace) => ({
     workspaceId: workspace.workspaceId,
@@ -151,6 +158,12 @@ const handleMessage = async (message = {}, port = null) => {
       port?.postMessage?.(status());
       return;
     }
+    if (message.type === "runtime-worker:shutdown") {
+      Array.from(workspaces.keys()).forEach(stopWorkspace);
+      ports.clear();
+      self.close?.();
+      return;
+    }
     if (message.type === "runtime-worker:status") {
       port?.postMessage?.(status());
     }
@@ -169,4 +182,6 @@ self.onconnect = (event) => {
   port.postMessage(status());
 };
 
-self.onmessage = (message) => handleMessage(message.data || {}, self);
+self.onmessage = (message) => {
+  handleMessage(message.data || {}, self);
+};

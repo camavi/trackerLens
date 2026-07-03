@@ -1,7 +1,9 @@
 window.TrackerLensRuntimeWorker = (() => {
+  const WORKER_VERSION = "kg-20260703-flow-agent-clean-1";
   let worker = null;
   let port = null;
   let connected = false;
+  let restartSeq = 0;
   let lastStatus = {
     available: false,
     connected: false,
@@ -31,6 +33,7 @@ window.TrackerLensRuntimeWorker = (() => {
       updateStatus({
         available: true,
         status: message.status || "ready",
+        version: message.version || lastStatus.version || "",
         workspaces: message.workspaces || lastStatus.workspaces || [],
         workspaceId: message.workspaceId || lastStatus.workspaceId || "",
         nodes: message.nodes ?? lastStatus.nodes,
@@ -49,17 +52,38 @@ window.TrackerLensRuntimeWorker = (() => {
     }
   };
 
-  const connect = () => {
+  const workerUrl = () => `core/runtime/runtime-worker.js?v=${WORKER_VERSION}&r=${restartSeq}`;
+
+  const disconnect = () => {
+    try {
+      port?.postMessage?.({ type: "runtime-worker:shutdown" });
+    } catch (_) {}
+    try {
+      port?.close?.();
+    } catch (_) {}
+    try {
+      worker?.terminate?.();
+    } catch (_) {}
+    worker = null;
+    port = null;
+    connected = false;
+  };
+
+  const connect = (options = {}) => {
+    if (options.restart) {
+      restartSeq += 1;
+      disconnect();
+    }
     if (port) return true;
     try {
       if ("SharedWorker" in window) {
-        worker = new SharedWorker("core/runtime/runtime-worker.js?v=kg-20260626-knowledge-events-ai-5");
+        worker = new SharedWorker(workerUrl());
         port = worker.port;
         lastStatus.mode = "shared-worker";
         port.onmessage = (event) => handleMessage(event.data || {});
         port.start?.();
       } else if ("Worker" in window) {
-        worker = new Worker("core/runtime/runtime-worker.js?v=kg-20260626-knowledge-events-ai-5");
+        worker = new Worker(workerUrl());
         port = worker;
         lastStatus.mode = "worker";
         port.onmessage = (event) => handleMessage(event.data || {});
@@ -89,6 +113,12 @@ window.TrackerLensRuntimeWorker = (() => {
   const refresh = (workspaceId = "workspace_global") =>
     post({ type: "runtime-worker:refresh", workspaceId });
 
+  const restart = ({ workspaceId = "workspace_global", refreshMs = 5000 } = {}) => {
+    if (!connect({ restart: true }) || !port?.postMessage) return false;
+    port.postMessage({ type: "runtime-worker:start", workspaceId, refreshMs });
+    return true;
+  };
+
   const stop = (workspaceId = "workspace_global") =>
     post({ type: "runtime-worker:stop", workspaceId });
 
@@ -108,6 +138,7 @@ window.TrackerLensRuntimeWorker = (() => {
     connect,
     start,
     refresh,
+    restart,
     stop,
     status,
     subscribe,
