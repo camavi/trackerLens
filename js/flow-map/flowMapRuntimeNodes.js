@@ -553,6 +553,16 @@ const configFieldDefinitions = (node = {}) => {
     ]);
   }
   if (category === "knowledge") {
+    if (["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype)) {
+      return [
+        { key: "title", label: "Title", placeholder: "Knowledge Document" },
+        { key: "sourceType", label: "Source type", type: "select", options: ["manual", "channel", "json", "markdown"] },
+        { key: "language", label: "Language", placeholder: "auto, it, en, es, fr, de" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "replayAllDocuments", label: "Replay all documents", type: "checkbox", defaultValue: false },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.document.created" },
+      ];
+    }
     if (subtype === "embedding-generator" || subtype === "vector-memory") {
       return [
         { key: "providerProfile", label: "Provider profile", placeholder: "local-hash, local_ollama, local_lm_studio" },
@@ -623,6 +633,7 @@ const configFieldDefinitions = (node = {}) => {
     if (subtype === "knowledge-graph") {
       return [
         { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"] },
+        { key: "autoClearGraph", label: "Auto clear snapshots", type: "checkbox", defaultValue: false },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "topEntities", label: "Top entities", placeholder: "12" },
@@ -673,6 +684,7 @@ const configFieldDefinitions = (node = {}) => {
         { key: "includeEvidence", label: "Include evidence", type: "checkbox", defaultValue: true },
         { key: "includeIsolated", label: "Include isolated entities", type: "checkbox", defaultValue: false },
         { key: "preferLatestDocument", label: "Use latest document", type: "checkbox", defaultValue: true },
+        { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"], defaultValue: "document" },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
@@ -3153,8 +3165,192 @@ const cleanupNodeTreeConnections = async (nodes = []) => {
   return connectionIds;
 };
 
-const performDraftNodeDelete = async (node, closeDialog = null) => {
+const runtimeKnowledgeTableName = (key = "", fallback = "") =>
+  window.tlConfig?.TABLES?.[key] || fallback;
+
+const isRuntimeKnowledgeDocumentStoreNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
+
+const readRuntimeKnowledgeStore = async (storeName = "") => {
+  if (!storeName) return [];
+  if (window.TrackerLensKnowledgeRuntime?.listStore) {
+    return window.TrackerLensKnowledgeRuntime.listStore(storeName).catch(() => []);
+  }
+  if (!window.indexedDB) return [];
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  return new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve([]);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve([]);
+        return;
+      }
+      const transaction = db.transaction(storeName, "readonly");
+      const store = transaction.objectStore(storeName);
+      const all = store.getAll();
+      all.onsuccess = () => {
+        db.close();
+        resolve(Array.isArray(all.result) ? all.result : []);
+      };
+      all.onerror = () => {
+        db.close();
+        resolve([]);
+      };
+    };
+  });
+};
+
+const deleteRuntimeKnowledgeStoreRecords = async (storeName = "", ids = []) => {
+  const safeIds = [...new Set((ids || []).filter(Boolean))];
+  if (!storeName || !safeIds.length) return 0;
+  if (window.TrackerLensKnowledgeRuntime?.deleteRecords) {
+    await window.TrackerLensKnowledgeRuntime.deleteRecords(storeName, safeIds);
+    return safeIds.length;
+  }
+  if (!window.indexedDB) return 0;
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  return new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve(0);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve(0);
+        return;
+      }
+      const transaction = db.transaction(storeName, "readwrite");
+      const store = transaction.objectStore(storeName);
+      safeIds.forEach((id) => store.delete(id));
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(safeIds.length);
+      };
+      transaction.onerror = () => {
+        db.close();
+        resolve(0);
+      };
+    };
+  });
+};
+
+const knowledgeDocumentStoreImpactForDelete = async (node = {}) => {
+  const empty = {
+    documents: [],
+    documentIds: [],
+    chunks: [],
+    embeddings: [],
+    entities: [],
+    relations: [],
+    dictionary: [],
+    sources: [],
+    metrics: [],
+    hasGraphMapping: false,
+  };
+  if (!node?.id || !isRuntimeKnowledgeDocumentStoreNode(node)) return empty;
+  const stores = {
+    documents: runtimeKnowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents"),
+    chunks: runtimeKnowledgeTableName("TL_KNOWLEDGE_CHUNKS", "tl_knowledge_chunks"),
+    embeddings: runtimeKnowledgeTableName("TL_KNOWLEDGE_EMBEDDINGS", "tl_knowledge_embeddings"),
+    entities: runtimeKnowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: runtimeKnowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    dictionary: runtimeKnowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
+    sources: runtimeKnowledgeTableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
+    metrics: runtimeKnowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+  };
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeConfigObject(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const [documents, chunks, embeddings, entities, relations, dictionary, sources, metrics] = await Promise.all([
+    readRuntimeKnowledgeStore(stores.documents),
+    readRuntimeKnowledgeStore(stores.chunks),
+    readRuntimeKnowledgeStore(stores.embeddings),
+    readRuntimeKnowledgeStore(stores.entities),
+    readRuntimeKnowledgeStore(stores.relations),
+    readRuntimeKnowledgeStore(stores.dictionary),
+    readRuntimeKnowledgeStore(stores.sources),
+    readRuntimeKnowledgeStore(stores.metrics),
+  ]);
+  const scopedDocuments = (documents || [])
+    .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
+    .filter((document) => document.metadata?.nodeId === node.id || document.sourceId === `upload_${node.id}` || document.sourceId === `live_${node.id}` || document.sourceId === node.id)
+    .filter((document) => !collectionId || document.metadata?.collectionId === collectionId);
+  const documentIds = new Set(scopedDocuments.map((document) => document.id).filter(Boolean));
+  if (!documentIds.size) return empty;
+  const scopedChunks = (chunks || [])
+    .filter((chunk) => (chunk.workspaceId || "workspace_global") === workspaceId)
+    .filter((chunk) => documentIds.has(chunk.documentId));
+  const chunkIds = new Set(scopedChunks.map((chunk) => chunk.id).filter(Boolean));
+  const scopedEntities = (entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => documentIds.has(entity.documentId) || chunkIds.has(entity.chunkId));
+  const entityIds = new Set(scopedEntities.map((entity) => entity.id).filter(Boolean));
+  const scopedEmbeddings = (embeddings || [])
+    .filter((embedding) => (embedding.workspaceId || "workspace_global") === workspaceId)
+    .filter((embedding) => documentIds.has(embedding.documentId) || chunkIds.has(embedding.chunkId));
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) =>
+      documentIds.has(relation.documentId) ||
+      chunkIds.has(relation.chunkId) ||
+      entityIds.has(relation.sourceEntityId) ||
+      entityIds.has(relation.targetEntityId)
+    );
+  const scopedDictionary = (dictionary || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => documentIds.has(entry.documentId) || chunkIds.has(entry.chunkId));
+  const scopedSources = (sources || [])
+    .filter((source) => (source.workspaceId || "workspace_global") === workspaceId)
+    .filter((source) => documentIds.has(source.documentId));
+  const scopedMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => documentIds.has(metric.value?.documentId));
+  return {
+    stores,
+    documents: scopedDocuments,
+    documentIds: [...documentIds],
+    chunks: scopedChunks,
+    embeddings: scopedEmbeddings,
+    entities: scopedEntities,
+    relations: scopedRelations,
+    dictionary: scopedDictionary,
+    sources: scopedSources,
+    metrics: scopedMetrics,
+    hasGraphMapping: Boolean(scopedChunks.length || scopedEmbeddings.length || scopedEntities.length || scopedRelations.length || scopedDictionary.length || scopedSources.length || scopedMetrics.length),
+  };
+};
+
+const cleanupKnowledgeDocumentStoreGraphMapping = async ({ node = {}, impact = null } = {}) => {
+  const scoped = impact || await knowledgeDocumentStoreImpactForDelete(node);
+  if (!scoped?.hasGraphMapping || !scoped.stores) return { chunks: 0, embeddings: 0, entities: 0, relations: 0, dictionary: 0, sources: 0, metrics: 0 };
+  await Promise.all([
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.relations, scoped.relations.map((relation) => relation.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.entities, scoped.entities.map((entity) => entity.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.dictionary, scoped.dictionary.map((entry) => entry.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.embeddings, scoped.embeddings.map((embedding) => embedding.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.chunks, scoped.chunks.map((chunk) => chunk.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.sources, scoped.sources.map((source) => source.id)),
+    deleteRuntimeKnowledgeStoreRecords(scoped.stores.metrics, scoped.metrics.map((metric) => metric.id)),
+  ]);
+  return {
+    chunks: scoped.chunks.length,
+    embeddings: scoped.embeddings.length,
+    entities: scoped.entities.length,
+    relations: scoped.relations.length,
+    dictionary: scoped.dictionary.length,
+    sources: scoped.sources.length,
+    metrics: scoped.metrics.length,
+  };
+};
+
+const performDraftNodeDelete = async (node, closeDialog = null, options = {}) => {
   if (!node?.id) return;
+  const knowledgeCleanup = options.cleanupKnowledgeGraphMapping
+    ? await cleanupKnowledgeDocumentStoreGraphMapping({ node, impact: options.knowledgeImpact })
+    : null;
   state.lastDeletedNode = deletedNodeSnapshot(node);
   const deletedConnectionIds = await cleanupNodeConnections(node);
   await window.TrackerLensRuntimeGraphStore?.deleteRuntimeNodeReferences?.({
@@ -3179,6 +3375,7 @@ const performDraftNodeDelete = async (node, closeDialog = null) => {
       nodeType: node.type || "",
       dependencies: state.lastDeletedNode?.dependencies?.length || 0,
       connections: deletedConnectionIds.length,
+      knowledgeGraphMappingCleanup: knowledgeCleanup,
     },
   });
 
@@ -3253,7 +3450,7 @@ const restoreLastDeletedNode = async () => {
   }
 };
 
-const requestDraftNodeDelete = (node) => {
+const requestDraftNodeDelete = async (node) => {
   if (!node?.id) return;
   const dependencies = selectedDependencies(node);
   const summary = dependencySummary(node, dependencies);
@@ -3265,11 +3462,15 @@ const requestDraftNodeDelete = (node) => {
     if (tree.ids.has(dependency.sourceNodeId) || tree.ids.has(dependency.targetNodeId)) treeDependencyIds.add(dependency.id);
   });
   const draft = isDraftNode(node);
+  const knowledgeImpact = await knowledgeDocumentStoreImpactForDelete(node);
+  const hasKnowledgeGraphMapping = knowledgeImpact.hasGraphMapping;
   const dialog = _.Dialog({
     class: "tl-flow-edge-delete-dialog",
     panelClass: "tl-flow-edge-delete-panel",
     size: "md",
-    title: embeddedFlowMapAlias
+    title: hasKnowledgeGraphMapping
+      ? "Document Store con Knowledge Graph"
+      : embeddedFlowMapAlias
       ? "Eliminare questo alias Flow Map?"
       : dependencies.length
         ? `${draft ? "Questo draft" : "Questo nodo"} ha dependency runtime`
@@ -3279,7 +3480,9 @@ const requestDraftNodeDelete = (node) => {
     closeButton: true,
     content: () => _.div(
       { class: "tl-flow-edge-delete-body" },
-      _.p(embeddedFlowMapAlias
+      _.p(hasKnowledgeGraphMapping
+        ? "Questo Document Store ha documenti gia trasformati in chunk, entities, relations o snapshot del Knowledge Graph. Puoi cancellare solo il nodo oppure cancellare anche la mappatura generata."
+        : embeddedFlowMapAlias
         ? "Verranno rimossi solo questo nodo virtuale e i suoi collegamenti. Il Flow Map sorgente non verra modificato."
         : dependencies.length
           ? "Questo nodo e usato nel runtime. La cancellazione pulira anche dependency, channel registry, flow references ed event logs collegati."
@@ -3288,6 +3491,10 @@ const requestDraftNodeDelete = (node) => {
       _.div(_.span("Type"), _.strong(node.type || "runtime")),
       _.div(_.span("Workspace"), _.strong(node.workspaceId || "global")),
       _.div(_.span("Dependencies"), _.strong(`${dependencies.length} total · ${summary.incoming} in · ${summary.outgoing} out`)),
+      hasKnowledgeGraphMapping ? _.div(_.span("Documents"), _.strong(String(knowledgeImpact.documents.length))) : null,
+      hasKnowledgeGraphMapping ? _.div(_.span("Graph mapping"), _.strong(`${knowledgeImpact.chunks.length} chunks · ${knowledgeImpact.entities.length} entities · ${knowledgeImpact.relations.length} relations`)) : null,
+      hasKnowledgeGraphMapping && knowledgeImpact.dictionary.length ? _.div(_.span("Dictionary"), _.strong(`${knowledgeImpact.dictionary.length} entries`)) : null,
+      hasKnowledgeGraphMapping && knowledgeImpact.metrics.length ? _.div(_.span("Snapshots"), _.strong(`${knowledgeImpact.metrics.length} records`)) : null,
       childCount && !embeddedFlowMapAlias ? _.div(_.span("Children tree"), _.strong(`${childCount} children · ${treeDependencyIds.size} linked dependencies`)) : null,
       dependencies.length ? _.section(
         { class: "tl-flow-delete-dependencies" },
@@ -3301,12 +3508,32 @@ const requestDraftNodeDelete = (node) => {
         })
       ) : null
     ),
-    actions: ({ close }) => _.Toolbar(
-      { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      childCount && !embeddedFlowMapAlias ? btn({ class: "is-danger", onclick: () => performDraftNodeTreeDelete(node, close) }, icon("delete_sweep", "sm"), "Force Delete All Children") : null,
-      btn({ class: "is-danger", onclick: () => performDraftNodeDelete(node, close) }, icon("delete", "sm"), embeddedFlowMapAlias ? "Delete Alias" : dependencies.length ? "Force Delete" : draft ? "Delete Draft" : "Delete Node")
-    ),
+    actions: ({ close }) => hasKnowledgeGraphMapping
+      ? _.div(
+        { class: "tl-flow-kdoc-delete-actions" },
+        _.div(
+          { class: "tl-flow-kdoc-delete-actions-main" },
+          btn({ class: "is-ghost", onclick: close }, "Cancel"),
+          btn({
+            class: "tl-flow-delete-node-only",
+            onclick: () => performDraftNodeDelete(node, close),
+          }, icon("delete", "sm"), "Delete Node Only")
+        ),
+        _.div(
+          { class: "tl-flow-kdoc-delete-actions-danger" },
+          childCount && !embeddedFlowMapAlias ? btn({ class: "is-danger", onclick: () => performDraftNodeTreeDelete(node, close) }, icon("delete_sweep", "sm"), "Force Delete All Children") : null,
+          btn({
+            class: "is-danger tl-flow-delete-node-graph",
+            onclick: () => performDraftNodeDelete(node, close, { cleanupKnowledgeGraphMapping: true, knowledgeImpact }),
+          }, icon("delete_sweep", "sm"), "Delete Node + Graph Mapping")
+        )
+      )
+      : _.Toolbar(
+        { align: "end", gap: 8 },
+        btn({ onclick: close }, "Cancel"),
+        childCount && !embeddedFlowMapAlias ? btn({ class: "is-danger", onclick: () => performDraftNodeTreeDelete(node, close) }, icon("delete_sweep", "sm"), "Force Delete All Children") : null,
+        btn({ class: "is-danger", onclick: () => performDraftNodeDelete(node, close) }, icon("delete", "sm"), embeddedFlowMapAlias ? "Delete Alias" : dependencies.length ? "Force Delete" : draft ? "Delete Draft" : "Delete Node")
+      ),
   });
   dialog.open();
 };

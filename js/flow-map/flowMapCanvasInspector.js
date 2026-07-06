@@ -1201,6 +1201,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     loadKnowledgeInspectorDocument(node);
     const documentState = state.knowledgeInspectorDocuments[node.id] || { loading: true, count: 0 };
     const documentCount = Number(documentState.count || 0);
+    const replayAllDocuments = documentStoreReplayAllEnabledForNode(node);
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
@@ -1224,6 +1225,24 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openKnowledgeDocumentsDialog(node);
         },
       }, icon("folder_open", "sm"), documentState.loading ? "Documents..." : `${documentCount} Document${documentCount === 1 ? "" : "s"}`),
+      _.label(
+        {
+          class: "tl-flow-kdoc-replay-toggle",
+          title: replayAllDocuments ? "Replay all enabled documents on next Play" : "Replay only enabled documents not processed yet",
+          onPointerDown: stopNodeControlEvent,
+          onclick: stopNodeControlEvent,
+        },
+        _.span("Replay all documents"),
+        _.Toggle({
+          class: "tl-flow-inline-toggle",
+          checked: replayAllDocuments,
+          color: replayAllDocuments ? "success" : "secondary",
+          dense: true,
+          onPointerDown: stopNodeControlEvent,
+          onclick: stopNodeControlEvent,
+          onChange: (checked) => persistInlineRuntimeNodeConfig({ node, patch: { replayAllDocuments: Boolean(checked) } }),
+        })
+      ),
       ...knowledgeUploadProgressNodes(node),
       renderInlineNodeSettings(node),
       _.span(
@@ -1248,6 +1267,16 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openKnowledgeGraphViewDialog(node);
         },
       }, icon("account_tree", "sm"), "View Graph"),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Knowledge Graph",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeGraphClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Graph"),
       renderInlineNodeSettings(node),
       _.span(
         { class: "tl-flow-node-metrics" },
@@ -2620,6 +2649,42 @@ const deleteKnowledgeInspectorStoreRecords = async (storeName = "", ids = []) =>
   });
 };
 
+const putKnowledgeInspectorStoreRecord = async (storeName = "", record = {}) => {
+  if (!storeName || !record?.id) return null;
+  if (window.TrackerLensKnowledgeRuntime?.putRecord) {
+    return window.TrackerLensKnowledgeRuntime.putRecord(storeName, record);
+  }
+  if (!window.indexedDB) return null;
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  return new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve(null);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.close();
+          resolve(null);
+          return;
+        }
+        const transaction = db.transaction(storeName, "readwrite");
+        const write = transaction.objectStore(storeName).put(record);
+        write.onsuccess = () => {
+          db.close();
+          resolve(record);
+        };
+        write.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      } catch (_) {
+        db.close();
+        resolve(null);
+      }
+    };
+  });
+};
+
 const knowledgeTableName = (key = "", fallback = "") =>
   window.tlConfig?.TABLES?.[key] || fallback;
 
@@ -2627,6 +2692,19 @@ const cmsInputValue = (value) => value?.target?.value ?? value?.currentTarget?.v
 
 const isKnowledgeDocumentStoreNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
+
+const documentStoreReplayAllEnabledForNode = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  return config.replayAllDocuments === true ||
+    config.replayAllDocuments === "true" ||
+    config.emitAllDocuments === true ||
+    config.emitAllDocuments === "true";
+};
+
+const isKnowledgeDocumentEnabled = (document = {}) => {
+  const values = [document?.enabled, document?.metadata?.enabled].filter((value) => value !== undefined && value !== null && value !== "");
+  return !values.some((value) => value === false || String(value).toLowerCase() === "false" || String(value) === "0");
+};
 
 const isKnowledgeDictionaryBuilderNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-dictionary-builder";
@@ -2714,6 +2792,7 @@ const knowledgePayloadForUploadedFile = ({ file, text = "", node = {} } = {}) =>
       fileName: file?.name || "",
       fileSize: Number(file?.size || 0),
       mimeType,
+      enabled: true,
       uploadedAt: new Date().toISOString(),
       uploadNodeId: node.id || "",
     },
@@ -3049,6 +3128,35 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
   };
 };
 
+const setKnowledgeDocumentEnabled = async ({ node = {}, document = null, enabled = true } = {}) => {
+  if (!node?.id || !document?.id) return null;
+  const storeName = knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents");
+  const updated = {
+    ...document,
+    enabled: Boolean(enabled),
+    metadata: {
+      ...(document.metadata && typeof document.metadata === "object" ? document.metadata : {}),
+      enabled: Boolean(enabled),
+      disabledAt: enabled ? "" : new Date().toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  const saved = await putKnowledgeInspectorStoreRecord(storeName, updated);
+  if (!saved) throw new Error("Knowledge document update failed");
+  await loadKnowledgeInspectorDocument(node, { force: true });
+  await recordFlowAction({
+    workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+    nodeId: node.id,
+    message: `Knowledge document ${enabled ? "enabled" : "disabled"}: ${document.metadata?.fileName || document.title || document.id}`,
+    context: {
+      action: "knowledge-document-enabled-toggle",
+      documentId: document.id,
+      enabled: Boolean(enabled),
+    },
+  });
+  return saved;
+};
+
 const requestKnowledgeDocumentDelete = ({ node = {}, document = null, onDeleted = null } = {}) => {
   if (!node?.id || !document?.id) return;
   const meta = document.metadata || {};
@@ -3361,6 +3469,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
     search: "",
     selectedId: data.documents[0]?.id || "",
   };
+  const enabledDocumentCount = () => data.documents.filter(isKnowledgeDocumentEnabled).length;
   let host = null;
   const rerender = () => {
     if (!host) return;
@@ -3391,7 +3500,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
           },
         }),
         btn({
-          class: "is-ghost is-compact",
+          class: "is-ghost is-compact tl-kdoc-action-refresh",
           onclick: async () => {
             const refreshed = await knowledgeDocumentRecordsForNode(node);
             data.documents = refreshed.documents;
@@ -3402,7 +3511,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
           },
         }, icon("sync", "sm"), "Refresh"),
         btn({
-          class: "is-ghost is-compact",
+          class: "is-primary is-compact tl-kdoc-action-upload",
           onclick: () => requestKnowledgeDocumentUpload(node, {
             onComplete: async () => {
               const refreshed = await knowledgeDocumentRecordsForNode(node);
@@ -3423,15 +3532,20 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
             ? visible.map((document) => {
               const meta = document.metadata || {};
               const chunks = data.chunksByDocument.get(document.id) || [];
+              const enabled = isKnowledgeDocumentEnabled(document);
               return _.button({
                 type: "button",
-                class: `tl-kdoc-view-item${document.id === selected?.id ? " is-selected" : ""}`,
+                class: `tl-kdoc-view-item${document.id === selected?.id ? " is-selected" : ""}${enabled ? "" : " is-disabled"}`,
                 onclick: () => {
                   model.selectedId = document.id;
                   rerender();
                 },
               },
-              _.strong(meta.fileName || document.title || document.id),
+              _.div(
+                { class: "tl-kdoc-view-item-head" },
+                _.strong(meta.fileName || document.title || document.id),
+                _.em({ class: `tl-kdoc-state-pill ${enabled ? "is-enabled" : "is-disabled"}` }, enabled ? "enabled" : "disabled")
+              ),
               _.span(document.title || "Untitled document"),
               _.small(`${chunks.length} chunks · ${meta.collectionId || "all"} · ${document.createdAt ? formatShortDate(document.createdAt) : "N/D"}`));
             })
@@ -3442,6 +3556,30 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
           selected
             ? [
               _.h3(selectedMeta.fileName || selected.title || "Document"),
+              _.div(
+                _.span("Replay"),
+                _.Toggle({
+                  checked: isKnowledgeDocumentEnabled(selected),
+                  color: isKnowledgeDocumentEnabled(selected) ? "success" : "secondary",
+                  onChange: async (checked) => {
+                    try {
+                      const updated = await setKnowledgeDocumentEnabled({
+                        node,
+                        document: selected,
+                        enabled: Boolean(checked),
+                      });
+                      if (updated) {
+                        const index = data.documents.findIndex((document) => document.id === updated.id);
+                        if (index >= 0) data.documents[index] = updated;
+                        model.selectedId = updated.id;
+                      }
+                    } catch (error) {
+                      console.warn("Knowledge document toggle failed", error);
+                    }
+                    rerender();
+                  },
+                })
+              ),
               _.div(_.span("Document ID"), _.strong(selected.id || "N/D")),
               _.div(_.span("Title"), _.strong(selected.title || "N/D")),
               _.div(_.span("File"), _.strong(selectedMeta.fileName || "N/D")),
@@ -3453,19 +3591,19 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
               _.div(
                 { class: "tl-kdoc-view-detail-actions" },
                 btn({
-                  class: "is-ghost is-compact",
+                  class: "is-ghost is-compact tl-kdoc-action-copy",
                   onclick: () => copyRuntimeValue(selected),
                 }, icon("content_copy", "sm"), "Copy Document"),
                 selectedChunks.length ? btn({
-                  class: "is-ghost is-compact",
+                  class: "is-ghost is-compact tl-kdoc-action-copy",
                   onclick: () => copyRuntimeValue(selectedChunks),
                 }, icon("content_copy", "sm"), "Copy Chunks") : null,
                 String(selected.text || "").length > 1800 ? btn({
-                  class: "is-ghost is-compact",
+                  class: "is-ghost is-compact tl-kdoc-action-view",
                   onclick: () => openKnowledgeDocumentFullTextDialog(selected),
                 }, icon("article", "sm"), "View Full Document") : null,
                 btn({
-                  class: "is-danger is-compact",
+                  class: "is-danger is-compact tl-kdoc-action-delete",
                   onclick: () => requestKnowledgeDocumentDelete({
                     node,
                     document: selected,
@@ -3491,7 +3629,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
     panelClass: "tl-kdoc-view-panel",
     size: "lg",
     title: node.label || "Knowledge Documents",
-    subtitle: `${data.documents.length} uploaded document${data.documents.length === 1 ? "" : "s"}`,
+    subtitle: `${data.documents.length} uploaded document${data.documents.length === 1 ? "" : "s"} · ${enabledDocumentCount()} enabled`,
     icon: "folder_open",
     closeButton: true,
     content: () => {
@@ -3501,7 +3639,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
     },
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(data.documents) }, icon("content_copy", "sm"), "Copy List"),
+      btn({ class: "tl-kdoc-action-copy", onclick: () => copyRuntimeValue(data.documents) }, icon("content_copy", "sm"), "Copy List"),
       btn({ class: "is-primary", onclick: close }, "Close")
     ),
   });
@@ -3759,16 +3897,26 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
     const config = nodeRuntimeConfig(node);
     const collectionId = String(config.collectionId || "").trim();
     const configuredDocumentId = String(config.documentId || "").trim();
+    const rawConfiguredGraphScope = String(config.graphScope || "").toLowerCase();
+    const configuredGraphScope = rawConfiguredGraphScope === "document" && !configuredDocumentId && collectionId
+      ? "collection"
+      : rawConfiguredGraphScope;
     const graphMetrics = (metrics || [])
       .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
       .filter((metric) => metric.metric === "knowledge.graph.snapshot")
       .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
       .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+    const latestMetric = graphMetrics[0] || null;
+    const metricGraphScope = String(latestMetric?.value?.graphScope || "").toLowerCase();
+    const aggregateGraph = ["collection", "workspace", "all"].includes(configuredGraphScope || metricGraphScope);
     const documentsWithSnapshots = new Set(graphMetrics.map((metric) => metric.value?.documentId).filter(Boolean));
-    const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
+    const documentId = aggregateGraph
+      ? ""
+      : configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
       ? configuredDocumentId
-      : graphMetrics[0]?.value?.documentId || configuredDocumentId;
+      : latestMetric?.value?.documentId || configuredDocumentId;
     const documentMismatch = Boolean(
+      !aggregateGraph &&
       configuredDocumentId &&
       documentId &&
       configuredDocumentId !== documentId &&
@@ -3806,7 +3954,9 @@ const loadKnowledgeInspectorGraph = async (node = {}, { force = false } = {}) =>
         topEntities,
         configuredDocumentId,
         effectiveDocumentId: documentId,
-        latestSnapshotDocumentId: graphMetrics[0]?.value?.documentId || "",
+        latestSnapshotDocumentId: latestMetric?.value?.documentId || "",
+        latestSnapshotDocumentIds: latestMetric?.value?.documentIds || [],
+        graphScope: configuredGraphScope || metricGraphScope || (aggregateGraph ? "collection" : "document"),
         documentMismatch,
         collectionId,
         workspaceId,
@@ -3933,16 +4083,26 @@ const collectKnowledgeGraphData = async (node = {}) => {
   const config = nodeRuntimeConfig(node);
   const collectionId = String(config.collectionId || "").trim();
   const configuredDocumentId = String(config.documentId || "").trim();
+  const rawConfiguredGraphScope = String(config.graphScope || "").toLowerCase();
+  const configuredGraphScope = rawConfiguredGraphScope === "document" && !configuredDocumentId && collectionId
+    ? "collection"
+    : rawConfiguredGraphScope;
   const allGraphMetrics = (metrics || [])
     .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
     .filter((metric) => metric.metric === "knowledge.graph.snapshot")
     .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
     .sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+  const latestMetric = allGraphMetrics[0] || null;
+  const metricGraphScope = String(latestMetric?.value?.graphScope || "").toLowerCase();
+  const aggregateGraph = ["collection", "workspace", "all"].includes(configuredGraphScope || metricGraphScope);
   const documentsWithSnapshots = new Set(allGraphMetrics.map((metric) => metric.value?.documentId).filter(Boolean));
-  const documentId = configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
+  const documentId = aggregateGraph
+    ? ""
+    : configuredDocumentId && documentsWithSnapshots.has(configuredDocumentId)
     ? configuredDocumentId
-    : allGraphMetrics[0]?.value?.documentId || configuredDocumentId;
+    : latestMetric?.value?.documentId || configuredDocumentId;
   const documentMismatch = Boolean(
+    !aggregateGraph &&
     configuredDocumentId &&
     documentId &&
     configuredDocumentId !== documentId &&
@@ -3968,7 +4128,9 @@ const collectKnowledgeGraphData = async (node = {}) => {
     collectionId,
     documentId,
     configuredDocumentId,
-    latestSnapshotDocumentId: allGraphMetrics[0]?.value?.documentId || "",
+    latestSnapshotDocumentId: latestMetric?.value?.documentId || "",
+    latestSnapshotDocumentIds: latestMetric?.value?.documentIds || [],
+    graphScope: configuredGraphScope || metricGraphScope || (aggregateGraph ? "collection" : "document"),
     documentMismatch,
     workspaceId,
   };
@@ -3977,6 +4139,112 @@ const collectKnowledgeGraphData = async (node = {}) => {
 const isKnowledgeGraphSampleDocumentFallback = (configuredDocumentId = "", effectiveDocumentId = "") =>
   String(configuredDocumentId || "").startsWith("knowledge_graph_sample_document_") &&
   /^kdoc_/i.test(String(effectiveDocumentId || ""));
+
+const clearKnowledgeGraphIndexForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  const rawGraphScope = String(config.graphScope || "").toLowerCase();
+  const graphScope = rawGraphScope === "document" && !documentId && collectionId
+    ? "collection"
+    : rawGraphScope || (documentId ? "document" : collectionId ? "collection" : "workspace");
+  if (window.TrackerLensKnowledgeRuntime?.clearGraphIndex) {
+    return window.TrackerLensKnowledgeRuntime.clearGraphIndex({ workspaceId, collectionId, documentId, graphScope });
+  }
+  const stores = {
+    entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+  };
+  const [entities, relations, metrics] = await Promise.all([
+    readKnowledgeInspectorStore(stores.entities),
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.metrics),
+  ]);
+  const scopedEntities = (entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+    .filter((entity) => graphScope !== "document" || !documentId || entity.documentId === documentId);
+  const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+  const documentIds = new Set(scopedEntities.map((entity) => entity.documentId).filter(Boolean));
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) =>
+      entityIds.has(relation.sourceEntityId) ||
+      entityIds.has(relation.targetEntityId) ||
+      (graphScope === "document" && documentId && relation.documentId === documentId) ||
+      (graphScope !== "document" && documentIds.has(relation.documentId))
+    )
+    .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId);
+  const scopedMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .filter((metric) => graphScope !== "document" || !documentId || metric.value?.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((relation) => relation.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.entities, scopedEntities.map((entity) => entity.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((metric) => metric.id)),
+  ]);
+  return {
+    entities: scopedEntities.length,
+    relations: scopedRelations.length,
+    snapshots: scopedMetrics.length,
+    documentIds: [...documentIds],
+    graphScope,
+    collectionId,
+    documentId: graphScope === "document" ? documentId : "",
+  };
+};
+
+const requestKnowledgeGraphClear = (node = {}) => {
+  if (!node?.id) return;
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  const rawGraphScope = String(config.graphScope || "").toLowerCase();
+  const graphScope = rawGraphScope === "document" && !documentId && collectionId
+    ? "collection"
+    : rawGraphScope || (documentId ? "document" : collectionId ? "collection" : "workspace");
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title: "Clear Knowledge graph index?",
+    subtitle: node.label || node.id,
+    icon: "delete_sweep",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      _.p("Verranno rimossi entità, relazioni e snapshot del grafo per questo scope. Documenti, chunk, dictionary, eventi ed embedding restano intatti."),
+      _.div(_.span("Scope"), _.strong(graphScope || "document")),
+      _.div(_.span("Collection"), _.strong(collectionId || "all")),
+      _.div(_.span("Document"), _.strong(graphScope === "document" ? documentId || "all" : "all"))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        class: "is-danger",
+        onclick: async () => {
+          const result = await clearKnowledgeGraphIndexForNode(node);
+          await recordFlowAction({
+            workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+            nodeId: node.id,
+            message: `Knowledge graph index cleared: ${node.label || node.id}`,
+            context: { action: "knowledge-graph-clear-index", ...(result || {}) },
+          });
+          close();
+          await loadKnowledgeInspectorGraph(node, { force: true });
+          mount({ preserveScroll: true });
+        },
+      }, icon("delete_sweep", "sm"), "Clear Graph")
+    ),
+  });
+  dialog.open();
+};
 
 const knowledgeGraphExportData = (graphData = {}, { includeIsolated = false } = {}) => {
   const relations = graphData.relations || [];
@@ -5319,7 +5587,11 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 _.div(_.span("Configured document"), _.strong(graphData.configuredDocumentId || "all")),
                 _.div(_.span("Latest snapshot document"), _.strong(graphData.latestSnapshotDocumentId || "N/D")),
                 _.div(_.span("Viewing document"), _.strong(graphData.documentId || "all")),
-                _.div(_.span("Document status"), _.strong(graphData.configuredDocumentId && graphData.documentId && graphData.configuredDocumentId !== graphData.documentId ? "using latest snapshot" : "configured"))
+                _.div(_.span("Document status"), _.strong(graphData.graphScope && graphData.graphScope !== "document"
+                  ? graphData.graphScope
+                  : graphData.configuredDocumentId && graphData.documentId && graphData.configuredDocumentId !== graphData.documentId
+                    ? "using latest snapshot"
+                    : "configured"))
               ),
               analytics.repeatedEvidence.length
                 ? _.section(
@@ -5423,7 +5695,8 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
   const configuredDocumentId = graph.configuredDocumentId || String(config.documentId || "").trim();
   const effectiveDocumentId = graph.effectiveDocumentId || latestMetric?.value?.documentId || configuredDocumentId || "";
   const latestSnapshotDocumentId = graph.latestSnapshotDocumentId || latestMetric?.value?.documentId || "";
-  const documentMismatch = Boolean(
+  const graphScope = graph.graphScope || latestMetric?.value?.graphScope || config.graphScope || "document";
+  const documentMismatch = graphScope === "document" && Boolean(
     graph.documentMismatch ||
     (
       configuredDocumentId &&
@@ -5441,6 +5714,7 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
     configuredDocumentId,
     effectiveDocumentId,
     latestSnapshotDocumentId,
+    graphScope,
     documentMismatch,
   };
   return _.section(
@@ -5456,7 +5730,7 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
       ["Configured document", configuredDocumentId || "all"],
       ["Latest snapshot document", latestSnapshotDocumentId || "N/D"],
       ["Viewing document", effectiveDocumentId || "all"],
-      ["Document status", documentMismatch ? "using latest snapshot" : "configured"],
+      ["Document status", graphScope !== "document" ? graphScope : documentMismatch ? "using latest snapshot" : "configured"],
     ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
     graph.error ? _.p({ class: "tl-flow-muted" }, graph.error) : null,
     _.div(
@@ -5474,7 +5748,12 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
           class: "is-ghost is-compact",
           title: "Refresh Knowledge graph",
           onclick: () => loadKnowledgeInspectorGraph(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, icon("sync", "sm"), "Refresh"),
+        btn({
+          class: "is-danger is-compact",
+          title: "Clear Knowledge graph index",
+          onclick: () => requestKnowledgeGraphClear(node),
+        }, icon("delete_sweep", "sm"), "Clear Graph")
       )
     ),
     graph.topEntities?.length

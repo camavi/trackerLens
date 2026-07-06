@@ -18,6 +18,17 @@ Knowledge Dictionary Runtime foundation.
 
 ## Latest Completed Work
 
+Document Store multi-document replay and document enable controls are implemented:
+
+- Document Store/Text Knowledge/Memory document replay now syncs disabled documents by removing their derived records on Play, then emits enabled stored documents incrementally by default; the `Replay all documents` toggle is available directly on the node and in settings, and forces all enabled documents to be sent again.
+- Uploaded Knowledge documents now persist enabled metadata by default; the Documents dialog can toggle each document enabled/disabled without deleting it, and disabled documents remain visible but are excluded from replay.
+- Documents dialog actions now have distinct colored treatments for upload, refresh, copy, view and delete, plus enabled/disabled state pills in the document list.
+- Knowledge Graph and Graph Query now support real collection/workspace graph scopes: collection/workspace scope aggregates entities, relations and snapshots across all scoped documents instead of falling back to the latest document; new Knowledge Graph Test presets default the graph/query nodes to collection scope.
+- Knowledge Graph nodes expose a manual `Clear Graph` index action for scoped entities/relations/snapshots and an `Auto clear snapshots` config toggle that clears only old graph snapshots once per run without deleting freshly extracted entities.
+- Knowledge Graph/Graph Query now normalize saved legacy configs where `graphScope=document` but `documentId` is empty: if a `collectionId` exists, the effective scope becomes `collection`, preventing old sample nodes from collapsing back to the latest document.
+- Disabled Knowledge documents are non-destructive when toggled, blocked from future replay, and pruned from derived chunks/entities/relations/graph mappings on the next Document Store Play.
+- Deleting a Document Store with existing derived knowledge now opens a dedicated confirmation dialog: users can delete only the node or also clear the generated graph mapping for that node's documents.
+
 Knowledge Graph multilingual quality baseline is complete:
 
 - Knowledge runtime now has language profiles for Italian, Spanish, English, French and German with language-specific stop words and weak sentence-start tokens.

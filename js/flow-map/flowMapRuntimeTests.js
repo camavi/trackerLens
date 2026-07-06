@@ -437,7 +437,7 @@ const knowledgeDocumentPayloadFromConfig = (node = {}, runId = "") => {
   };
 };
 
-const latestKnowledgeDocumentForNode = async ({ node = {}, workspaceId = "" } = {}) => {
+const knowledgeDocumentsForNode = async ({ node = {}, workspaceId = "" } = {}) => {
   const knowledge = window.TrackerLensKnowledgeRuntime;
   const storeName = knowledge?.STORES?.documents || "tl_knowledge_documents";
   const records = knowledge?.listStore
@@ -446,68 +446,239 @@ const latestKnowledgeDocumentForNode = async ({ node = {}, workspaceId = "" } = 
   return (records || [])
     .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
     .filter((document) => document.metadata?.nodeId === node.id || document.sourceId === `upload_${node.id}` || document.sourceId === `live_${node.id}` || document.sourceId === node.id)
-    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""));
 };
 
+const isKnowledgeDocumentReplayEnabled = (document = {}) => {
+  const values = [document?.enabled, document?.metadata?.enabled].filter((value) => value !== undefined && value !== null && value !== "");
+  return !values.some((value) => value === false || String(value).toLowerCase() === "false" || String(value) === "0");
+};
+
+const knowledgeDocumentReplayAllEnabled = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  return config.replayAllDocuments === true ||
+    config.replayAllDocuments === "true" ||
+    config.emitAllDocuments === true ||
+    config.emitAllDocuments === "true";
+};
+
+const knowledgeDocumentDerivedRecords = async ({ workspaceId = "", documentIds = [] } = {}) => {
+  const ids = new Set((documentIds || []).filter(Boolean).map(String));
+  if (!ids.size) return { chunks: [], embeddings: [], entities: [], relations: [], dictionary: [], sources: [], metrics: [] };
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  const stores = knowledge?.STORES || {};
+  const read = async (storeName) => {
+    if (!storeName) return [];
+    return knowledge?.listStore
+      ? await knowledge.listStore(storeName).catch(() => [])
+      : await readKnowledgeRuntimeRecords(storeName);
+  };
+  const [chunks, embeddings, entities, relations, dictionary, sources, metrics] = await Promise.all([
+    read(stores.chunks || "tl_knowledge_chunks"),
+    read(stores.embeddings || "tl_knowledge_embeddings"),
+    read(stores.entities || "tl_knowledge_entities"),
+    read(stores.relations || "tl_knowledge_relations"),
+    read(stores.dictionary || "tl_knowledge_dictionary"),
+    read(stores.sources || "tl_knowledge_sources"),
+    read(stores.metrics || "tl_knowledge_metrics"),
+  ]);
+  const byWorkspaceId = (record = {}) => (record.workspaceId || "workspace_global") === workspaceId;
+  const scopedChunks = (chunks || []).filter(byWorkspaceId).filter((chunk) => ids.has(chunk.documentId));
+  const chunkIds = new Set(scopedChunks.map((chunk) => chunk.id));
+  const scopedEntities = (entities || [])
+    .filter(byWorkspaceId)
+    .filter((entity) => ids.has(entity.documentId) || chunkIds.has(entity.chunkId));
+  const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+  const scopedEmbeddings = (embeddings || [])
+    .filter(byWorkspaceId)
+    .filter((embedding) => ids.has(embedding.documentId) || chunkIds.has(embedding.chunkId));
+  const scopedRelations = (relations || [])
+    .filter(byWorkspaceId)
+    .filter((relation) =>
+      ids.has(relation.documentId) ||
+      chunkIds.has(relation.chunkId) ||
+      entityIds.has(relation.sourceEntityId) ||
+      entityIds.has(relation.targetEntityId)
+    );
+  const scopedDictionary = (dictionary || [])
+    .filter(byWorkspaceId)
+    .filter((entry) => ids.has(entry.documentId) || chunkIds.has(entry.chunkId));
+  const scopedSources = (sources || [])
+    .filter(byWorkspaceId)
+    .filter((source) => ids.has(source.documentId));
+  const scopedMetrics = (metrics || [])
+    .filter(byWorkspaceId)
+    .filter((metric) => ids.has(metric.value?.documentId));
+  return {
+    chunks: scopedChunks,
+    embeddings: scopedEmbeddings,
+    entities: scopedEntities,
+    relations: scopedRelations,
+    dictionary: scopedDictionary,
+    sources: scopedSources,
+    metrics: scopedMetrics,
+  };
+};
+
+const deleteKnowledgeDocumentDerivedRecordsForIds = async ({ workspaceId = "", documentIds = [] } = {}) => {
+  const knowledge = window.TrackerLensKnowledgeRuntime;
+  if (!knowledge?.deleteRecords) return { chunks: 0, embeddings: 0, entities: 0, relations: 0, dictionary: 0, sources: 0, metrics: 0 };
+  const stores = knowledge.STORES || {};
+  const records = await knowledgeDocumentDerivedRecords({ workspaceId, documentIds });
+  await Promise.all([
+    knowledge.deleteRecords(stores.relations || "tl_knowledge_relations", records.relations.map((item) => item.id)),
+    knowledge.deleteRecords(stores.entities || "tl_knowledge_entities", records.entities.map((item) => item.id)),
+    knowledge.deleteRecords(stores.dictionary || "tl_knowledge_dictionary", records.dictionary.map((item) => item.id)),
+    knowledge.deleteRecords(stores.embeddings || "tl_knowledge_embeddings", records.embeddings.map((item) => item.id)),
+    knowledge.deleteRecords(stores.chunks || "tl_knowledge_chunks", records.chunks.map((item) => item.id)),
+    knowledge.deleteRecords(stores.sources || "tl_knowledge_sources", records.sources.map((item) => item.id)),
+    knowledge.deleteRecords(stores.metrics || "tl_knowledge_metrics", records.metrics.map((item) => item.id)),
+  ]);
+  return {
+    chunks: records.chunks.length,
+    embeddings: records.embeddings.length,
+    entities: records.entities.length,
+    relations: records.relations.length,
+    dictionary: records.dictionary.length,
+    sources: records.sources.length,
+    metrics: records.metrics.length,
+  };
+};
+
+const knowledgeDocumentsNeedingReplay = async ({ node = {}, workspaceId = "", documents = [] } = {}) => {
+  if (knowledgeDocumentReplayAllEnabled(node)) return documents;
+  const ids = documents.map((document) => document.id).filter(Boolean);
+  const records = await knowledgeDocumentDerivedRecords({ workspaceId, documentIds: ids });
+  const processedIds = new Set([
+    ...records.chunks.map((item) => item.documentId),
+    ...records.entities.map((item) => item.documentId),
+    ...records.relations.map((item) => item.documentId),
+    ...records.dictionary.map((item) => item.documentId),
+  ].filter(Boolean));
+  return documents.filter((document) => !processedIds.has(document.id));
+};
+
+const knowledgeReplayPayloadForDocument = ({ document = {}, node = {}, runId = "" } = {}) => ({
+  document,
+  documentId: document.id,
+  title: document.title || node.label || "Knowledge Document",
+  text: document.text,
+  mimeType: document.mimeType || document.metadata?.mimeType || "text/plain",
+  sourceType: "live-test-replay",
+  collectionId: document.metadata?.collectionId || nodeRuntimeConfig(node).collectionId || "",
+  metadata: {
+    ...(document.metadata && typeof document.metadata === "object" ? document.metadata : {}),
+    replayedFromDocumentId: document.id || "",
+    liveTestRunId: runId,
+  },
+  __test: true,
+  runId,
+  emittedAt: new Date().toISOString(),
+});
+
 const executeKnowledgeDocumentNode = async ({ node, workspaceId, runId } = {}) => {
-  const latest = await latestKnowledgeDocumentForNode({ node, workspaceId });
-  const hasStoredDocument = Boolean(latest?.id && latest?.text);
-  const payload = hasStoredDocument
-    ? {
-      document: latest,
-      documentId: latest.id,
-      title: latest.title || node.label || "Knowledge Document",
-      text: latest.text,
-      mimeType: latest.mimeType || latest.metadata?.mimeType || "text/plain",
-      sourceType: "live-test-replay",
-      collectionId: latest.metadata?.collectionId || nodeRuntimeConfig(node).collectionId || "",
-      metadata: {
-        ...(latest.metadata && typeof latest.metadata === "object" ? latest.metadata : {}),
-        replayedFromDocumentId: latest.id || "",
-        liveTestRunId: runId,
-      },
-      __test: true,
-      runId,
-      emittedAt: new Date().toISOString(),
-    }
-    : knowledgeDocumentPayloadFromConfig(node, runId);
-  if (!String(payload.documentId || payload.text || payload.document || "").trim()) {
-    throw new Error(`${node.label || node.id} non ha un documento da rilanciare. Usa Upload Document o inserisci document/text nel Config.`);
+  const storedDocuments = (await knowledgeDocumentsForNode({ node, workspaceId })).filter((document) => document?.id && document?.text);
+  const enabledDocuments = storedDocuments.filter(isKnowledgeDocumentReplayEnabled);
+  const disabledDocuments = storedDocuments.filter((document) => !isKnowledgeDocumentReplayEnabled(document));
+  const disabledCleanup = await deleteKnowledgeDocumentDerivedRecordsForIds({
+    workspaceId,
+    documentIds: disabledDocuments.map((document) => document.id),
+  });
+  const replayDocuments = await knowledgeDocumentsNeedingReplay({ node, workspaceId, documents: enabledDocuments });
+  const hasStoredDocument = Boolean(storedDocuments.length);
+  if (hasStoredDocument && !enabledDocuments.length) {
+    throw new Error(`${node.label || node.id} non ha documenti abilitati da rilanciare. Abilita almeno un documento.`);
   }
-  const channel = hasStoredDocument ? knowledgeDocumentOutputChannel(node) : knowledgeDocumentInputChannel(node);
-  const eventType = hasStoredDocument ? "flow_live_knowledge_document_replay" : "flow_live_knowledge_document";
-  const sourceNodeId = hasStoredDocument ? node.id : `live_${node.id}`;
-  const bus = workspaceEventBus(workspaceId);
-  const event = bus?.emit
-    ? await bus.emit(channel, payload, {
+  if (hasStoredDocument && !replayDocuments.length) {
+    await recordFlowAction({
       workspaceId,
-      flowId: flowIdForWorkspace(workspaceId),
-      eventType,
-      sourceNodeId,
-      targetNodeId: hasStoredDocument ? "" : node.id,
-      status: "ok",
-      latencyMs: 1,
-      meta: { live: true, runId, origin: "live-test", rootNodeId: node.id },
-    })
-    : await mergeTestEvent({
-      workspaceId,
-      channel,
-      eventType,
-      sourceNodeId,
-      targetNodeId: hasStoredDocument ? "" : node.id,
-      payload,
-      status: "ok",
-      latencyMs: 1,
-      meta: { live: true, runId, origin: "live-test", rootNodeId: node.id },
+      nodeId: node.id,
+      message: `Knowledge document replay skipped: ${node.label || node.id}`,
+      context: {
+        action: "flow-map-knowledge-document-live-test-skipped",
+        runId,
+        reason: "enabled-documents-already-processed",
+        enabledDocumentIds: enabledDocuments.map((document) => document.id),
+        disabledDocumentIds: disabledDocuments.map((document) => document.id),
+        disabledCleanup,
+      },
     });
-  mergeRuntimeEvent(event);
+    return { channels: [], payload: { skipped: true, reason: "enabled-documents-already-processed", count: 0 } };
+  }
+  const payloads = hasStoredDocument
+    ? replayDocuments.map((document) => knowledgeReplayPayloadForDocument({ document, node, runId }))
+    : [knowledgeDocumentPayloadFromConfig(node, runId)];
+  const primaryPayload = payloads[0] || {};
+  if (!String(primaryPayload.documentId || primaryPayload.text || primaryPayload.document || "").trim()) {
+    throw new Error(hasStoredDocument
+      ? `${node.label || node.id} non ha documenti abilitati da rilanciare. Abilita almeno un documento o inserisci document/text nel Config.`
+      : `${node.label || node.id} non ha un documento da rilanciare. Usa Upload Document o inserisci document/text nel Config.`);
+  }
+  const channel = enabledDocuments.length ? knowledgeDocumentOutputChannel(node) : knowledgeDocumentInputChannel(node);
+  const eventType = enabledDocuments.length ? "flow_live_knowledge_document_replay" : "flow_live_knowledge_document";
+  const sourceNodeId = enabledDocuments.length ? node.id : `live_${node.id}`;
+  const bus = workspaceEventBus(workspaceId);
+  const emittedEvents = [];
+  for (const [index, payload] of payloads.entries()) {
+    const event = bus?.emit
+      ? await bus.emit(channel, payload, {
+        workspaceId,
+        flowId: flowIdForWorkspace(workspaceId),
+        eventType,
+        sourceNodeId,
+        targetNodeId: enabledDocuments.length ? "" : node.id,
+        status: "ok",
+        latencyMs: 1,
+        meta: {
+          live: true,
+          runId,
+          origin: "live-test",
+          rootNodeId: node.id,
+          replayIndex: index,
+          replayCount: payloads.length,
+        },
+      })
+      : await mergeTestEvent({
+        workspaceId,
+        channel,
+        eventType,
+        sourceNodeId,
+        targetNodeId: enabledDocuments.length ? "" : node.id,
+        payload,
+        status: "ok",
+        latencyMs: 1,
+        meta: {
+          live: true,
+          runId,
+          origin: "live-test",
+          rootNodeId: node.id,
+          replayIndex: index,
+          replayCount: payloads.length,
+        },
+      });
+    if (event) {
+      emittedEvents.push(event);
+      mergeRuntimeEvent(event);
+    }
+  }
   await recordFlowAction({
     workspaceId,
     nodeId: node.id,
     message: `Knowledge document live test: ${node.label || node.id}`,
-    context: { action: "flow-map-knowledge-document-live-test", runId, channel, replayedDocumentId: latest?.id || "", payloadPreview: compactPayloadPreview(payload, 220) },
+    context: {
+      action: "flow-map-knowledge-document-live-test",
+      runId,
+      channel,
+      replayedDocumentIds: replayDocuments.map((document) => document.id),
+      skippedProcessedDocumentIds: enabledDocuments.filter((document) => !replayDocuments.some((item) => item.id === document.id)).map((document) => document.id),
+      replayAllDocuments: knowledgeDocumentReplayAllEnabled(node),
+      disabledDocumentCount: Math.max(0, storedDocuments.length - enabledDocuments.length),
+      disabledCleanup,
+      emittedCount: emittedEvents.length,
+      payloadPreview: compactPayloadPreview(primaryPayload, 220),
+    },
   });
-  return { channels: [channel], payload };
+  return { channels: [channel], payload: payloads.length === 1 ? primaryPayload : { documents: payloads, count: payloads.length } };
 };
 
 const executeCustomFormNode = async ({ node, workspaceId, runId, graph } = {}) => {
@@ -3192,11 +3363,12 @@ const runKnowledgeGraphSampleTest = async () => {
     icon: "hub",
     subtype: "knowledge-graph",
     category: "knowledge",
-    settingsSchema: { graphScope: "workspace|document", outputChannel: "string" },
+    settingsSchema: { graphScope: "workspace|document|collection", autoClearGraph: "boolean", outputChannel: "string" },
     paletteLabel: "Knowledge Graph",
     config: {
-      graphScope: "document",
-      documentId: graphDocumentId,
+      graphScope: "collection",
+      autoClearGraph: false,
+      documentId: "",
       collectionId,
       maxRelations: 160,
       outputChannel: "knowledge.graph.updated",
@@ -3246,7 +3418,7 @@ const runKnowledgeGraphSampleTest = async () => {
     icon: "manage_search",
     subtype: "graph-query",
     category: "knowledge",
-    settingsSchema: { query: "string", depth: "number", topK: "number", maxRelations: "number", maxEvidence: "number", relationTypes: "string", includeEvidence: "boolean", collectionId: "string", documentId: "string", outputChannel: "string" },
+    settingsSchema: { query: "string", depth: "number", topK: "number", maxRelations: "number", maxEvidence: "number", relationTypes: "string", includeEvidence: "boolean", graphScope: "workspace|document|collection", collectionId: "string", documentId: "string", outputChannel: "string" },
     paletteLabel: "Graph Query",
     config: {
       depth: 2,
@@ -3255,9 +3427,10 @@ const runKnowledgeGraphSampleTest = async () => {
       maxEvidence: 3,
       maxContextChars: 3200,
       includeEvidence: true,
-      preferLatestDocument: true,
+      graphScope: "collection",
+      preferLatestDocument: false,
       collectionId,
-      documentId: graphDocumentId,
+      documentId: "",
       outputChannel: "knowledge.graph.context",
     },
   });

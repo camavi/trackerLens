@@ -1,5 +1,6 @@
 window.TrackerLensKnowledgeRuntime = (() => {
   const instances = new Map();
+  const graphAutoClearRuns = new Set();
   const DB_NAME = window.tlConfig?.DB_NAME || "TrackersLens";
 
   const tableName = (key, fallback) => window.tlConfig?.TABLES?.[key] || fallback;
@@ -200,6 +201,57 @@ window.TrackerLensKnowledgeRuntime = (() => {
       deleteRecords(STORES.entities, staleEntities.map((entity) => entity.id)),
     ]);
     return { entities: staleEntities.length, relations: staleRelations.length };
+  };
+
+  const clearGraphIndex = async ({ workspaceId, collectionId = "", documentId = "", graphScope = "" } = {}) => {
+    const scope = String(graphScope || (documentId ? "document" : collectionId ? "collection" : "workspace")).toLowerCase();
+    const [entities, relations, metrics] = await Promise.all([
+      listStore(STORES.entities),
+      listStore(STORES.relations),
+      listStore(STORES.metrics),
+    ]);
+    const scopedEntities = byWorkspace(entities, workspaceId)
+      .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+      .filter((entity) => scope !== "document" || !documentId || entity.documentId === documentId);
+    const scopedEntityIds = new Set(scopedEntities.map((entity) => entity.id));
+    const scopedDocumentIds = new Set(scopedEntities.map((entity) => entity.documentId).filter(Boolean));
+    const scopedRelations = byWorkspace(relations, workspaceId)
+      .filter((relation) =>
+        scopedEntityIds.has(relation.sourceEntityId) ||
+        scopedEntityIds.has(relation.targetEntityId) ||
+        (scope === "document" && documentId && relation.documentId === documentId) ||
+        (scope !== "document" && scopedDocumentIds.has(relation.documentId))
+      )
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId);
+    const scopedMetrics = byWorkspace(metrics, workspaceId)
+      .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+      .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+      .filter((metric) => scope !== "document" || !documentId || metric.value?.documentId === documentId);
+    await Promise.all([
+      deleteRecords(STORES.relations, scopedRelations.map((relation) => relation.id)),
+      deleteRecords(STORES.entities, scopedEntities.map((entity) => entity.id)),
+      deleteRecords(STORES.metrics, scopedMetrics.map((metric) => metric.id)),
+    ]);
+    return {
+      entities: scopedEntities.length,
+      relations: scopedRelations.length,
+      snapshots: scopedMetrics.length,
+      documentIds: [...scopedDocumentIds],
+      graphScope: scope,
+      collectionId,
+      documentId: scope === "document" ? documentId : "",
+    };
+  };
+
+  const clearGraphSnapshots = async ({ workspaceId, collectionId = "", documentId = "", graphScope = "" } = {}) => {
+    const scope = String(graphScope || (documentId ? "document" : collectionId ? "collection" : "workspace")).toLowerCase();
+    const metrics = await listStore(STORES.metrics);
+    const scopedMetrics = byWorkspace(metrics, workspaceId)
+      .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+      .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+      .filter((metric) => scope !== "document" || !documentId || metric.value?.documentId === documentId);
+    await deleteRecords(STORES.metrics, scopedMetrics.map((metric) => metric.id));
+    return { snapshots: scopedMetrics.length, graphScope: scope, collectionId, documentId: scope === "document" ? documentId : "" };
   };
 
   const deleteDictionaryEntries = async ({ workspaceId, documentId = "", chunkIds = [] } = {}) => {
@@ -1077,6 +1129,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ...(payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {}),
         inputChannel: event?.channel || "",
         nodeId: node?.id || "",
+        enabled: payload?.metadata?.enabled !== false,
         language,
         languageDetected: !normalizeLanguage(preferredLanguage),
         collectionId: preferPayloadScope
@@ -4430,15 +4483,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
-  const buildKnowledgeGraphSnapshot = async ({ workspaceId, payload = {}, config = {} } = {}) => {
+  const buildKnowledgeGraphSnapshot = async ({ workspaceId, node = {}, payload = {}, event, config = {} } = {}) => {
     const [entities, relations] = await Promise.all([
       listStore(STORES.entities),
       listStore(STORES.relations),
     ]);
     const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
     const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const rawGraphScope = String(payload?.graphScope || config.graphScope || "").toLowerCase();
+    const graphScope = rawGraphScope === "document" && !configuredDocumentId && collectionId
+      ? "collection"
+      : rawGraphScope || (configuredDocumentId ? "document" : collectionId ? "collection" : "workspace");
+    const aggregateDocuments = graphScope === "collection" || graphScope === "workspace" || graphScope === "all";
     const preferLatestDocument = payload?.preferLatestDocument === true || payload?.preferLatestDocument === "true" ||
       config.preferLatestDocument === true || config.preferLatestDocument === "true";
+    const autoClearGraph = config.autoClearGraph === true || config.autoClearGraph === "true" || payload?.autoClearGraph === true || payload?.autoClearGraph === "true";
+    if (autoClearGraph) {
+      const runId = event?.meta?.runId || payload?.runId || event?.id || uniqueId("graph_run");
+      const clearKey = `${workspaceId}:${node?.id || "knowledge-graph"}:${runId}`;
+      if (!graphAutoClearRuns.has(clearKey)) {
+        graphAutoClearRuns.add(clearKey);
+        if (graphAutoClearRuns.size > 500) graphAutoClearRuns.delete(graphAutoClearRuns.values().next().value);
+        await clearGraphSnapshots({ workspaceId, collectionId, documentId: configuredDocumentId, graphScope });
+      }
+    }
     const workspaceEntities = byWorkspace(entities, workspaceId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId);
     const latestDocumentEntity = [...workspaceEntities]
@@ -4447,20 +4515,25 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const configuredDocumentHasEntities = configuredDocumentId
       ? workspaceEntities.some((entity) => entity.documentId === configuredDocumentId)
       : false;
-    const documentId = configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
+    const documentId = aggregateDocuments
+      ? ""
+      : configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
       ? configuredDocumentId
       : latestDocumentEntity?.documentId || configuredDocumentId;
-    const documentStatus = configuredDocumentId && documentId && configuredDocumentId !== documentId
-      ? "using latest document"
-      : configuredDocumentId
-        ? "configured"
-        : "all";
+    const documentStatus = aggregateDocuments
+      ? graphScope
+      : configuredDocumentId && documentId && configuredDocumentId !== documentId
+        ? "using latest document"
+        : configuredDocumentId
+          ? "configured"
+          : "all";
     const scopedEntities = workspaceEntities
       .filter((entity) => !documentId || entity.documentId === documentId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
       .filter((entity) => !isWeakEntityLabelForLanguage(entity.label, entity.source, { ...config, language: entity.metadata?.language || config.language || "" }))
       .filter((entity) => entity.source === "seed" || !isEntityStopWord(entity.label, { ...config, language: entity.metadata?.language || config.language || "" }));
     const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+    const documentIds = unique(scopedEntities.map((entity) => entity.documentId).filter(Boolean));
     const scopedRelations = byWorkspace(relations, workspaceId)
       .filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId))
       .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId);
@@ -4483,6 +4556,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       workspaceId,
       collectionId,
       documentId,
+      documentIds,
+      graphScope,
+      documentStatus,
       entityCount: scopedEntities.length,
       relationCount: scopedRelations.length,
       semanticRelationCount,
@@ -4501,6 +4577,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         semanticRelationCount: snapshot.semanticRelationCount,
         collectionId,
         documentId,
+        documentIds,
+        graphScope,
+        documentStatus,
       },
       createdAt: snapshot.createdAt,
     });
@@ -4607,6 +4686,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!cleanQuery) throw new Error("Query Knowledge Graph vuota");
     const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
     const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const rawGraphScope = String(payload?.graphScope || config.graphScope || "").toLowerCase();
+    const graphScope = rawGraphScope === "document" && !configuredDocumentId && collectionId
+      ? "collection"
+      : rawGraphScope || (configuredDocumentId ? "document" : collectionId ? "collection" : "workspace");
+    const aggregateDocuments = graphScope === "collection" || graphScope === "workspace" || graphScope === "all";
     const preferLatestDocument = payload?.preferLatestDocument === true || payload?.preferLatestDocument === "true" ||
       config.preferLatestDocument === true || config.preferLatestDocument === "true";
     const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
@@ -4636,14 +4720,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const configuredDocumentHasEntities = configuredDocumentId
       ? workspaceEntities.some((entity) => entity.documentId === configuredDocumentId)
       : false;
-    const documentId = configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
+    const documentId = aggregateDocuments
+      ? ""
+      : configuredDocumentId && configuredDocumentHasEntities && !preferLatestDocument
       ? configuredDocumentId
       : latestDocumentEntity?.documentId || configuredDocumentId;
-    const documentStatus = configuredDocumentId && documentId && configuredDocumentId !== documentId
-      ? "using latest document"
-      : configuredDocumentId
-        ? "configured"
-        : "all";
+    const documentStatus = aggregateDocuments
+      ? graphScope
+      : configuredDocumentId && documentId && configuredDocumentId !== documentId
+        ? "using latest document"
+        : configuredDocumentId
+          ? "configured"
+          : "all";
     const scopedEntities = workspaceEntities
       .filter((entity) => !documentId || entity.documentId === documentId)
       .filter((entity) => !isWeakEntityLabelForLanguage(entity.label, entity.source, { ...config, language: entity.metadata?.language || config.language || "" }))
@@ -4927,6 +5015,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         collectionId,
         configuredDocumentId,
         documentId,
+        documentIds: unique(scopedEntities.map((entity) => entity.documentId).filter(Boolean)),
+        graphScope,
         documentStatus,
         depth,
         relationTypes,
@@ -5166,7 +5256,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           }
           outputChannel = nodeOutput(node, config, "knowledge.entity.created");
         } else if (subtype === "knowledge-graph") {
-          result = await buildKnowledgeGraphSnapshot({ workspaceId: this.workspaceId, payload, config });
+          result = await buildKnowledgeGraphSnapshot({ workspaceId: this.workspaceId, node, payload, event, config });
           outputChannel = nodeOutput(node, config, "knowledge.graph.updated");
         } else if (subtype === "semantic-relation-enricher") {
           result = await enrichSemanticRelations({ workspaceId: this.workspaceId, node, payload, event, config });
@@ -5440,6 +5530,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     getRecord,
     putRecord,
     deleteRecords,
+    clearGraphIndex,
+    clearGraphSnapshots,
     createDocument,
     createChunks,
     createEmbeddings,
