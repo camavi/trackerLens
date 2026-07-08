@@ -1562,6 +1562,92 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
   padding: 5px;
 }
 
+.tl-flow-node-inline-config.is-kdoc,
+.tl-flow-node-inline-config.is-knowledge-config,
+.tl-flow-node-inline-config.is-runtime-config {
+  gap: 6px;
+  padding: 6px;
+  user-select: none;
+}
+
+.tl-flow-node-inline-config.is-knowledge-config,
+.tl-flow-node-inline-config.is-runtime-config {
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.2);
+}
+
+.tl-flow-kdoc-config-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.tl-flow-kdoc-config-chip {
+  min-width: 0;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 5px;
+  row-gap: 1px;
+  padding: 5px 6px;
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.18);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(var(--node-rgb, 214, 226, 235), 0.12), rgba(2, 6, 12, 0.16)),
+    rgba(2, 6, 12, 0.3);
+}
+
+.tl-flow-kdoc-config-chip>.cms-icon {
+  grid-row: 1 / 3;
+  color: rgba(var(--node-rgb, 214, 226, 235), 0.86);
+}
+
+.tl-flow-kdoc-config-chip strong,
+.tl-flow-kdoc-config-chip em,
+.tl-flow-kdoc-config-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-kdoc-config-chip strong {
+  color: rgba(226, 232, 240, 0.64);
+  font-size: 8px;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.tl-flow-kdoc-config-chip em {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.1;
+}
+
+.tl-flow-kdoc-config-title {
+  min-width: 0;
+  min-height: 25px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  color: rgba(226, 232, 240, 0.9);
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.14);
+  border-radius: 7px;
+  background: rgba(2, 6, 12, 0.26);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.tl-flow-kdoc-config-title>.cms-icon {
+  color: rgba(var(--node-rgb, 214, 226, 235), 0.78);
+}
+
 .tl-flow-node-media-drop {
   margin: 0;
   display: grid;

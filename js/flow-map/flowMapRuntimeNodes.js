@@ -415,7 +415,8 @@ const configFieldDefinitions = (node = {}) => {
   const subtype = nodeSubtype(node);
   const category = nodeCategory(node);
   const schema = node.metadata?.settingsSchema || node.metadata?.manifest?.settingsSchema || {};
-  const schemaFields = runtimeContractSchemaFields(schema);
+  const schemaFields = runtimeContractSchemaFields(schema)
+    .filter((field) => !(category === "dev" && subtype === "preview" && field.key === "mode"));
   const mergeSchemaFields = (fields = []) => [
     ...fields,
     ...schemaFields.filter((field) => !fields.some((item) => item.key === field.key)),
@@ -1052,6 +1053,308 @@ const clearPreviewNodePayload = (node = {}) => {
   markPreviewNodeClean(node, { remount: true });
 };
 
+const previewValueText = (value, mode = "auto") => {
+  if (mode === "raw") return typeof value === "string" ? value : prettyRuntimeValue(value);
+  if (mode === "json") {
+    if (typeof value === "string") {
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch (_) {
+        return value;
+      }
+    }
+    return prettyRuntimeValue(value);
+  }
+  return typeof value === "string" ? value : prettyRuntimeValue(value);
+};
+
+const escapePreviewHtml = (value = "") =>
+  String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[char]));
+
+const highlightedJsonLineHtml = (line = "") => {
+  const tokenRegex = /("(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+  let html = "";
+  let cursor = 0;
+  let match = tokenRegex.exec(line);
+  while (match) {
+    const token = match[0];
+    if (match.index > cursor) html += escapePreviewHtml(line.slice(cursor, match.index));
+    let className = "tl-json-number is-int";
+    if (/^"/.test(token)) className = /:\s*$/.test(token) ? "tl-json-key" : "tl-json-string";
+    else if (/true|false/.test(token)) className = "tl-json-boolean";
+    else if (/null/.test(token)) className = "tl-json-null";
+    else if (/[.eE]/.test(token)) className = "tl-json-number is-float";
+    html += `<span class="${className}">${escapePreviewHtml(token)}</span>`;
+    cursor = match.index + token.length;
+    match = tokenRegex.exec(line);
+  }
+  if (cursor < line.length) html += escapePreviewHtml(line.slice(cursor));
+  return html;
+};
+
+const highlightedJsonHtml = (text = "") =>
+  String(text ?? "").split("\n").map((line) =>
+    `<span class="tl-code-line"><span class="tl-code-line-content">${highlightedJsonLineHtml(line)}</span></span>`
+  ).join("");
+
+const countPreviewMatches = (text = "", query = "") => {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return 0;
+  let count = 0;
+  let index = 0;
+  const haystack = String(text || "").toLowerCase();
+  while (index < haystack.length) {
+    const found = haystack.indexOf(needle, index);
+    if (found < 0) break;
+    count += 1;
+    index = found + Math.max(1, needle.length);
+  }
+  return count;
+};
+
+const applyPreviewSearchMarks = (root, query = "", activeIndex = 0) => {
+  const needle = String(query || "").trim();
+  if (!root || !needle) return 0;
+  const lowerNeedle = needle.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  let matchIndex = 0;
+  textNodes.forEach((textNode) => {
+    const text = textNode.nodeValue || "";
+    const lowerText = text.toLowerCase();
+    let cursor = 0;
+    let found = lowerText.indexOf(lowerNeedle, cursor);
+    if (found < 0) return;
+    const fragment = document.createDocumentFragment();
+    while (found >= 0) {
+      if (found > cursor) fragment.appendChild(document.createTextNode(text.slice(cursor, found)));
+      const mark = document.createElement("mark");
+      mark.className = `tl-preview-search-hit${matchIndex === activeIndex ? " is-active" : ""}`;
+      mark.textContent = text.slice(found, found + needle.length);
+      fragment.appendChild(mark);
+      matchIndex += 1;
+      cursor = found + needle.length;
+      found = lowerText.indexOf(lowerNeedle, cursor);
+    }
+    if (cursor < text.length) fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    textNode.parentNode?.replaceChild(fragment, textNode);
+  });
+  return matchIndex;
+};
+
+const previewCodeBlock = ({ text = "", mode = "auto", query = "", activeMatch = 0 } = {}) => {
+  const pre = document.createElement("pre");
+  const jsonLike = mode === "json" || (mode === "auto" && /^[\s]*[{\[]/.test(text));
+  pre.className = `tl-flow-preview-full-code is-${mode}${jsonLike ? " is-json" : ""}`;
+  pre.innerHTML = jsonLike ? highlightedJsonHtml(text) : escapePreviewHtml(text);
+  applyPreviewSearchMarks(pre, query, activeMatch);
+  window.setTimeout(() => {
+    pre.querySelector(".tl-preview-search-hit.is-active")?.scrollIntoView?.({ block: "center", inline: "nearest" });
+  }, 0);
+  return pre;
+};
+
+const previewGraphSourceValue = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return value;
+  }
+};
+
+const previewGraphKind = (value) => {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value;
+};
+
+const previewGraphSummary = (value) => {
+  if (Array.isArray(value)) return `${value.length} items`;
+  if (value && typeof value === "object") return `${Object.keys(value).length} keys`;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : String(Number(value.toFixed?.(4) ?? value));
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  return String(value);
+};
+
+const buildPreviewGraphTree = (value, { maxNodes = 360 } = {}) => {
+  let count = 0;
+  let truncated = false;
+  const seen = new WeakSet();
+  const build = (entryValue, key = "ROOT", path = "root", depth = 0) => {
+    count += 1;
+    const isCircular = entryValue && typeof entryValue === "object" && seen.has(entryValue);
+    const node = {
+      id: path,
+      key,
+      kind: isCircular ? "circular" : previewGraphKind(entryValue),
+      summary: isCircular ? "[Circular]" : previewGraphSummary(entryValue),
+      depth,
+      children: [],
+    };
+    if (isCircular) return node;
+    if (count >= maxNodes) {
+      truncated = true;
+      return node;
+    }
+    if (entryValue && typeof entryValue === "object") {
+      seen.add(entryValue);
+      const entries = Array.isArray(entryValue)
+        ? entryValue.map((item, index) => [`[${index}]`, item])
+        : Object.entries(entryValue);
+      for (const [childKey, childValue] of entries) {
+        if (count >= maxNodes) {
+          truncated = true;
+          break;
+        }
+        node.children.push(build(childValue, childKey, `${path}.${String(childKey).replace(/[^\w-]/g, "_")}`, depth + 1));
+      }
+    }
+    return node;
+  };
+  return { root: build(previewGraphSourceValue(value)), truncated, count };
+};
+
+const layoutPreviewGraphTree = (root) => {
+  const nodeWidth = 184;
+  const nodeHeight = 42;
+  const levelGap = 236;
+  const rowGap = 62;
+  let row = 0;
+  let maxDepth = 0;
+  const visit = (node) => {
+    maxDepth = Math.max(maxDepth, node.depth);
+    if (!node.children.length) {
+      node.x = 64 + node.depth * levelGap;
+      node.y = 56 + row * rowGap;
+      row += 1;
+      return node.y;
+    }
+    const childYs = node.children.map(visit);
+    node.x = 64 + node.depth * levelGap;
+    node.y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
+    return node.y;
+  };
+  visit(root);
+  return {
+    width: Math.max(760, 128 + maxDepth * levelGap + nodeWidth),
+    height: Math.max(460, 112 + Math.max(1, row) * rowGap),
+    nodeWidth,
+    nodeHeight,
+  };
+};
+
+const drawPreviewGraph = (canvas, tree, layout, query = "") => {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = Math.ceil(layout.width * dpr);
+  canvas.height = Math.ceil(layout.height * dpr);
+  canvas.style.width = `${layout.width}px`;
+  canvas.style.height = `${layout.height}px`;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, layout.width, layout.height);
+  const needle = String(query || "").trim().toLowerCase();
+  const matches = (node) => needle && `${node.key} ${node.summary} ${node.kind}`.toLowerCase().includes(needle);
+  const ellipsize = (text, max) => {
+    const value = String(text ?? "");
+    return value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value;
+  };
+  const roundedRect = (x, y, width, height, radius) => {
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(x, y, width, height, radius);
+      return;
+    }
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+  };
+  const walk = (node, callback) => {
+    callback(node);
+    node.children.forEach((child) => walk(child, callback));
+  };
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = "rgba(74, 222, 128, 0.52)";
+  walk(tree, (node) => {
+    node.children.forEach((child) => {
+      const startX = node.x + layout.nodeWidth;
+      const startY = node.y + layout.nodeHeight / 2;
+      const endX = child.x;
+      const endY = child.y + layout.nodeHeight / 2;
+      const control = Math.max(52, (endX - startX) * 0.48);
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.bezierCurveTo(startX + control, startY, endX - control, endY, endX, endY);
+      ctx.stroke();
+    });
+  });
+  walk(tree, (node) => {
+    const x = node.x;
+    const y = node.y;
+    const active = matches(node);
+    const accent = node.kind === "object" || node.kind === "array" ? "#6ee7b7" : "#67e8f9";
+    ctx.save();
+    ctx.shadowColor = active ? "rgba(250, 204, 21, 0.52)" : "rgba(14, 165, 233, 0.16)";
+    ctx.shadowBlur = active ? 18 : 8;
+    ctx.fillStyle = active ? "rgba(45, 35, 10, 0.96)" : "rgba(15, 23, 42, 0.94)";
+    ctx.strokeStyle = active ? "rgba(250, 204, 21, 0.86)" : "rgba(129, 140, 248, 0.52)";
+    ctx.lineWidth = active ? 1.6 : 1;
+    ctx.beginPath();
+    roundedRect(x, y, layout.nodeWidth, layout.nodeHeight, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(x + 12, y + 13, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillStyle = "#c084fc";
+    ctx.fillText(ellipsize(node.key, 22), x + 24, y + 16);
+    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillStyle = node.kind === "number" ? "#fbbf24" : node.kind === "string" ? "#f0abfc" : "rgba(226, 232, 240, 0.88)";
+    ctx.fillText(ellipsize(node.summary, 24), x + 24, y + 32);
+    ctx.fillStyle = "rgba(148, 163, 184, 0.72)";
+    ctx.textAlign = "right";
+    ctx.fillText(node.kind, x + layout.nodeWidth - 10, y + 16);
+    ctx.restore();
+  });
+};
+
+const renderPreviewGraphCanvas = ({ value, query = "" } = {}) => {
+  const { root, truncated, count } = buildPreviewGraphTree(value);
+  const layout = layoutPreviewGraphTree(root);
+  const shell = document.createElement("div");
+  shell.className = "tl-flow-preview-graph-shell";
+  const meta = document.createElement("div");
+  meta.className = "tl-flow-preview-graph-meta";
+  meta.textContent = truncated ? `Graph view · ${count}+ nodes · truncated` : `Graph view · ${count} nodes`;
+  const scroller = document.createElement("div");
+  scroller.className = "tl-flow-preview-graph-scroll";
+  const canvas = document.createElement("canvas");
+  canvas.className = "tl-flow-preview-graph-canvas";
+  scroller.appendChild(canvas);
+  shell.append(meta, scroller);
+  window.requestAnimationFrame(() => drawPreviewGraph(canvas, root, layout, query));
+  return shell;
+};
+
 const previewTextForRecord = (record = null, mode = "auto", maxChars = 2000) => {
   if (!record) return "Nessun payload dati ricevuto.\nI pulse di routing/test sono ignorati dal Preview.";
   const payload = record.payload;
@@ -1068,21 +1371,139 @@ const previewTextForRecord = (record = null, mode = "auto", maxChars = 2000) => 
   const mappingText = record.mapping
     ? `Mapping: ${record.mapping.mode || "pass-through"} · ${mappingStatus}${record.mappingDependencyId ? ` · ${record.mappingDependencyId}` : ""}\n\n`
     : "";
-  const asRaw = typeof payload === "string" ? payload : prettyRuntimeValue(payload);
-  const text = mode === "raw" && typeof payload !== "string"
-    ? String(payload)
-    : asRaw;
+  const text = previewValueText(payload, mode);
   const originalText = hasOriginalPayload
-    ? `\n\nOriginal payload:\n${typeof originalPayload === "string" ? originalPayload : prettyRuntimeValue(originalPayload)}`
+    ? `\n\nOriginal payload:\n${previewValueText(originalPayload, mode)}`
     : "";
   const fullText = `${warningText}${mappingText}Mapped payload:\n${text}${originalText}`;
   return fullText.length > maxChars ? `${fullText.slice(0, maxChars)}\n...` : fullText;
 };
 
+const openPreviewPayloadDialog = (node = {}) => {
+  const record = previewRecordForNode(node);
+  if (!record) return;
+  const config = nodeRuntimeConfig(node);
+  const mode = String(config.previewMode || config.mode || "auto").toLowerCase();
+  const tabs = [
+    { id: "mapped", label: "Mapped", value: record.payload },
+    { id: "graph", label: "Graph", value: record.payload, view: "graph" },
+    record.originalPayload !== undefined && record.originalPayload !== null
+      ? { id: "original", label: "Original", value: record.originalPayload }
+      : null,
+    { id: "raw", label: "Raw", value: record.rawPayload ?? record.payload, mode: "raw" },
+  ].filter(Boolean);
+  let activeTab = tabs[0]?.id || "mapped";
+  let searchQuery = "";
+  let activeMatch = 0;
+  const active = () => tabs.find((tab) => tab.id === activeTab) || tabs[0];
+  const renderBody = () => {
+    const tab = active();
+    const isGraphView = tab.view === "graph";
+    const text = previewValueText(tab.value, isGraphView ? "json" : (tab.mode || mode));
+    const matchCount = countPreviewMatches(text, searchQuery);
+    if (!matchCount) activeMatch = 0;
+    else activeMatch = Math.max(0, Math.min(activeMatch, matchCount - 1));
+    const restoreSearchFocus = () => {
+      window.setTimeout(() => {
+        const input = document.querySelector(`[data-preview-search-input="${escapeSelectorValue(node.id)}"]`);
+        if (!input) return;
+        input.focus?.();
+        input.setSelectionRange?.(input.value.length, input.value.length);
+      }, 0);
+    };
+    const refreshDialogBody = ({ focusSearch = false } = {}) => {
+      const host = document.querySelector(`[data-preview-dialog-body="${escapeSelectorValue(node.id)}"]`);
+      if (host) host.replaceChildren(renderBody());
+      if (focusSearch) restoreSearchFocus();
+    };
+    return _.div(
+      { class: "tl-flow-preview-dialog-body" },
+      _.div(
+        { class: "tl-flow-preview-dialog-tabs" },
+        ...tabs.map((tabItem) => btn({
+          class: tabItem.id === activeTab ? "is-active" : "",
+          onclick: () => {
+            activeTab = tabItem.id;
+            activeMatch = 0;
+            refreshDialogBody();
+          },
+        }, tabItem.label))
+      ),
+      _.div(
+        { class: "tl-flow-preview-searchbar" },
+        _.label(
+          { class: "tl-flow-preview-search" },
+          icon("search", "sm"),
+          _.input({
+            "data-preview-search-input": node.id,
+            value: searchQuery,
+            placeholder: "Search payload",
+            "aria-label": "Search payload",
+            autocomplete: "off",
+            oninput: (event) => {
+              searchQuery = event.currentTarget.value;
+              activeMatch = 0;
+              refreshDialogBody({ focusSearch: true });
+            },
+            onkeydown: (event) => {
+              event.stopPropagation();
+              if (event.key === "Enter" && matchCount) {
+                event.preventDefault();
+                activeMatch = event.shiftKey
+                  ? (activeMatch - 1 + matchCount) % matchCount
+                  : (activeMatch + 1) % matchCount;
+                refreshDialogBody({ focusSearch: true });
+              }
+            },
+          })
+        ),
+        _.span({ class: "tl-flow-preview-search-count" }, searchQuery ? `${matchCount ? activeMatch + 1 : 0}/${matchCount}` : "0/0"),
+        btn({
+          class: "tl-flow-preview-search-nav",
+          title: "Previous match",
+          disabled: !matchCount,
+          onclick: () => {
+            activeMatch = (activeMatch - 1 + matchCount) % matchCount;
+            refreshDialogBody();
+          },
+        }, icon("keyboard_arrow_up", "sm")),
+        btn({
+          class: "tl-flow-preview-search-nav",
+          title: "Next match",
+          disabled: !matchCount,
+          onclick: () => {
+            activeMatch = (activeMatch + 1) % matchCount;
+            refreshDialogBody();
+          },
+        }, icon("keyboard_arrow_down", "sm"))
+      ),
+      isGraphView
+        ? renderPreviewGraphCanvas({ value: tab.value, query: searchQuery })
+        : previewCodeBlock({ text, mode: tab.mode || mode, query: searchQuery, activeMatch })
+    );
+  };
+  const dialog = _.Dialog({
+    class: "tl-flow-preview-dialog",
+    panelClass: "tl-flow-config-panel tl-flow-preview-dialog-panel",
+    size: "lg",
+    title: `${node.label || "Preview"} payload`,
+    subtitle: `${record.channel || "runtime"} · ${record.eventType || "event"} · ${formatShortDate(record.createdAt)}`,
+    icon: "visibility",
+    closeButton: true,
+    content: () => _.div({ "data-preview-dialog-body": node.id }, renderBody()),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(active()?.value) }, icon("content_copy", "sm"), "Copy"),
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
 const renderPreviewNodePanel = (node = {}) => {
   const config = nodeRuntimeConfig(node);
   const record = previewRecordForNode(node);
-  const mode = String(config.previewMode || "auto").toLowerCase();
+  const mode = String(config.previewMode || config.mode || "auto").toLowerCase();
   const maxChars = Math.max(200, Math.min(12000, Number(config.maxChars || 2000)));
   return _.div(
     { class: "tl-flow-node-preview", "data-flow-preview-panel": node.id },
@@ -1096,6 +1517,16 @@ const renderPreviewNodePanel = (node = {}) => {
         { class: "tl-flow-node-preview-actions" },
         record ? copyRuntimeButton(record.payload, "Copy preview payload") : null,
         record?.originalPayload !== undefined && record.originalPayload !== null ? copyRuntimeButton(record.originalPayload, "Copy original payload") : null,
+        record ? btn({
+          class: "tl-flow-copy-btn",
+          title: "View full preview payload",
+          onPointerDown: stopNodeControlEvent,
+          onclick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openPreviewPayloadDialog(node);
+          },
+        }, icon("open_in_full", "sm")) : null,
         record ? btn({
           class: "tl-flow-copy-btn is-clear",
           title: "Clear preview payload",
@@ -1265,6 +1696,392 @@ const mediaInlineHiddenKeys = (subtype = "") => {
   return new Set();
 };
 
+const isKnowledgeDocumentStoreSubtype = (subtype = "") =>
+  ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(String(subtype || "").toLowerCase());
+
+const shortInlineConfigValue = (value = "", fallback = "all") => {
+  const clean = String(value || "").trim();
+  if (!clean) return fallback;
+  return clean.length > 28 ? `${clean.slice(0, 13)}...${clean.slice(-8)}` : clean;
+};
+
+const renderKnowledgeDocumentStoreInlineConfig = (node, config = {}) => {
+  const row = ({ iconName = "settings", label = "", value = "", title = "" } = {}) =>
+    _.span(
+      { class: "tl-flow-kdoc-config-chip", title: title || `${label}: ${value || "all"}` },
+      icon(iconName, "sm"),
+      _.strong(label),
+      _.em(shortInlineConfigValue(value))
+    );
+  return _.div(
+    { class: "tl-flow-node-inline-config is-kdoc", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
+    _.div(
+      { class: "tl-flow-kdoc-config-grid" },
+      row({ iconName: "folder", label: "Collection", value: config.collectionId || "", title: `Collection: ${config.collectionId || "all"}` }),
+      row({ iconName: "translate", label: "Language", value: config.language || "auto" }),
+      row({ iconName: "input", label: "Source", value: config.sourceType || "channel" }),
+      row({ iconName: "outbox", label: "Output", value: config.outputChannel || config.output || "knowledge.document.created" })
+    ),
+    config.title ? _.div(
+      { class: "tl-flow-kdoc-config-title", title: config.title },
+      icon("article", "sm"),
+      _.span(shortInlineConfigValue(config.title, "Knowledge Document"))
+    ) : null
+  );
+};
+
+const boolInlineConfigValue = (value, yes = "yes", no = "no") =>
+  value === true || value === "true" || value === 1 || value === "1" ? yes : no;
+
+const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
+  const output = config.outputChannel || config.output || "";
+  const rows = {
+    "chunk-processor": [
+      { iconName: "article", label: "Strategy", value: config.strategy || "fixed" },
+      { iconName: "data_object", label: "Size", value: config.chunkSize || "900" },
+      { iconName: "tune", label: "Overlap", value: config.chunkOverlap || "120" },
+      { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.chunk.created" },
+    ],
+    "embedding-generator": [
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.provider || "local" },
+      { iconName: "memory", label: "Model", value: config.model || "local-hash" },
+      { iconName: "data_object", label: "Dims", value: config.dimensions || "96" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.embedding.created" },
+    ],
+    "vector-memory": [
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.provider || "local" },
+      { iconName: "memory", label: "Model", value: config.model || "local-hash" },
+      { iconName: "data_object", label: "Dims", value: config.dimensions || "96" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.embedding.created" },
+    ],
+    "rag-search": [
+      { iconName: "search", label: "Query", value: config.query || "event query" },
+      { iconName: "tune", label: "Top K", value: config.topK || "5" },
+      { iconName: "speed", label: "Threshold", value: config.similarityThreshold ?? "0.08" },
+      { iconName: "article", label: "Context", value: config.maxContextTokens || "1200" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.rag.context" },
+    ],
+    "entity-extractor": [
+      { iconName: "tune", label: "Mode", value: config.extractionMode || "strict" },
+      { iconName: "memory", label: "Dict", value: boolInlineConfigValue(config.useDictionarySeeds ?? true, "seeds", "off") },
+      { iconName: "data_object", label: "Entities", value: config.maxEntities || "24" },
+      { iconName: "hub", label: "Relations", value: config.maxRelations || "36" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.entity.created" },
+    ],
+    "knowledge-dictionary-builder": [
+      { iconName: "filter_alt", label: "Scope", value: config.scope || "document" },
+      { iconName: "translate", label: "Language", value: config.language || "auto" },
+      { iconName: "data_object", label: "Terms", value: config.maxTerms || "120" },
+      { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.dictionary.updated" },
+    ],
+    "knowledge-event-builder": [
+      { iconName: "timeline", label: "Mode", value: config.extractionMode || "rules" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || "rules" },
+      { iconName: "data_object", label: "Events", value: config.maxEvents || "80" },
+      { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.events.updated" },
+    ],
+    "knowledge-graph": [
+      { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },
+      { iconName: "account_tree", label: "Entities", value: config.topEntities || "12" },
+      { iconName: "hub", label: "Relations", value: config.maxRelations || "120" },
+      { iconName: "tune", label: "Auto clear", value: boolInlineConfigValue(config.autoClearGraph || config.autoClearSnapshots) },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.graph.updated" },
+    ],
+    "semantic-relation-enricher": [
+      { iconName: "psychology", label: "Mode", value: config.enrichmentMode || "rules" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || "rules" },
+      { iconName: "hub", label: "Relations", value: config.maxRelations || "48" },
+      { iconName: "speed", label: "Confidence", value: config.confidenceThreshold ?? "0.55" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.semantic.relations" },
+    ],
+    "knowledge-graph-builder-agent": [
+      { iconName: "auto_awesome", label: "Provider", value: config.providerProfile || config.provider || "local" },
+      { iconName: "memory", label: "Model", value: config.model || "local-model" },
+      { iconName: "article", label: "Chunks", value: config.maxChunks || "6" },
+      { iconName: "hub", label: "Relations", value: config.maxRelations || "48" },
+      { iconName: "speed", label: "Confidence", value: config.confidenceThreshold ?? "0.65" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.graph.proposed" },
+    ],
+    "graph-query": [
+      { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },
+      { iconName: "search", label: "Query", value: config.query || "event query" },
+      { iconName: "tune", label: "Depth", value: config.depth || "1" },
+      { iconName: "data_object", label: "Top K", value: config.topK || "12" },
+      { iconName: "article", label: "Evidence", value: config.maxEvidence || "6" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
+    ],
+  }[subtype] || [];
+  if (config.documentId) {
+    return [
+      { iconName: "article", label: "Document", value: config.documentId },
+      ...rows,
+    ];
+  }
+  return rows;
+};
+
+const renderKnowledgeInlineConfig = (node, config = {}) => {
+  const subtype = nodeSubtype(node);
+  const rows = knowledgeInlineConfigRows(subtype, config);
+  if (!rows.length) return null;
+  return _.div(
+    { class: "tl-flow-node-inline-config is-knowledge-config", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
+    _.div(
+      { class: "tl-flow-kdoc-config-grid" },
+      ...rows.map((item) => _.span(
+        { class: "tl-flow-kdoc-config-chip", title: `${item.label}: ${item.value || "all"}` },
+        icon(item.iconName || "settings", "sm"),
+        _.strong(item.label),
+        _.em(shortInlineConfigValue(item.value))
+      ))
+    )
+  );
+};
+
+const runtimeInlineConfigRows = (node = {}, config = {}) => {
+  const subtype = nodeSubtype(node);
+  const category = nodeCategory(node);
+  const emit = config.emitChannel || config.outputChannel || config.output || "";
+  if (category === "sources") {
+    if (subtype === "task") {
+      return [
+        { iconName: "article", label: "Goal", value: config.objective || "task" },
+        { iconName: "tune", label: "Priority", value: config.priority || "normal" },
+        { iconName: "speed", label: "Max", value: config.maxIterations || "5" },
+        { iconName: "hub", label: "Emit", value: emit || "task" },
+      ];
+    }
+    if (subtype === "manual-json") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "raw" },
+        { iconName: "data_object", label: "Payload", value: config.json || "JSON" },
+      ];
+    }
+    if (subtype === "text-input" || subtype === "manual-input") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "raw" },
+        { iconName: "article", label: "Text", value: config.text || "manual text" },
+      ];
+    }
+    if (subtype === "image-source") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "image" },
+        { iconName: "article", label: "Image", value: config.imageUrl || config.imageFileName || "upload" },
+        { iconName: "article", label: "Alt", value: config.alt || "none" },
+      ];
+    }
+    if (subtype === "audio-source") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "audio" },
+        { iconName: "article", label: "Audio", value: config.audioUrl || config.audioFileName || "upload" },
+        { iconName: "article", label: "Notes", value: config.transcript || "none" },
+      ];
+    }
+    if (subtype === "file-source") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "file" },
+        { iconName: "article", label: "File", value: config.fileName || "upload" },
+        { iconName: "data_object", label: "MIME", value: config.mimeType || "auto" },
+      ];
+    }
+    if (subtype === "files-source") {
+      return [
+        { iconName: "hub", label: "Emit", value: emit || "files" },
+        { iconName: "folder", label: "Batch", value: config.batchLabel || "import" },
+        { iconName: "data_object", label: "Files", value: config.filesJson || config.files || "array" },
+      ];
+    }
+    return [
+      { iconName: "tune", label: "Method", value: config.method || (subtype === "websocket" ? "WS" : "GET") },
+      { iconName: "hub", label: "Source", value: config.endpoint || config.url || config.source || subtype || "source" },
+      { iconName: "speed", label: "Poll", value: config.intervalMs || "manual" },
+      { iconName: "hub", label: "Emit", value: emit || "raw" },
+    ];
+  }
+  if (category === "processors") {
+    if (subtype === "condition") {
+      return [
+        { iconName: "filter_alt", label: "Field", value: config.conditionField || config.field || "payload.value" },
+        { iconName: "tune", label: "Op", value: config.conditionOperator || config.operator || ">" },
+        { iconName: "data_object", label: "Value", value: config.conditionValue || config.value || "set" },
+        { iconName: "hub", label: "Routes", value: `${config.trueOutput || "true"} / ${config.falseOutput || "false"}` },
+      ];
+    }
+    if (subtype === "filter") {
+      return [
+        { iconName: "filter_alt", label: "Path", value: config.filterPath || "payload.status" },
+        { iconName: "tune", label: "Op", value: config.filterOperator || "==" },
+        { iconName: "data_object", label: "Value", value: config.filterValue || "active" },
+      ];
+    }
+    if (subtype === "transform" || subtype === "map" || subtype === "formatter") {
+      return [
+        { iconName: "tune", label: "Expr", value: config.expression || "payload" },
+        { iconName: "hub", label: "Output", value: config.output || "output" },
+      ];
+    }
+    if (["throttle", "debounce"].includes(subtype)) {
+      return [
+        { iconName: "speed", label: "Window", value: config.windowMs || "1000" },
+        { iconName: "tune", label: "Mode", value: config.strategy || "latest" },
+      ];
+    }
+    if (["merge", "split", "reduce", "aggregator"].includes(subtype)) {
+      return [
+        { iconName: "tune", label: "Strategy", value: config.strategy || subtype },
+        { iconName: "data_object", label: "Window", value: config.windowSize || "100" },
+      ];
+    }
+    if (subtype === "validator") {
+      return [
+        { iconName: "data_object", label: "Schema", value: config.schema || "required" },
+        { iconName: "hub", label: "Routes", value: "valid / invalid" },
+      ];
+    }
+    return [
+      { iconName: "tune", label: "Mode", value: config.mode || subtype || "processor" },
+      { iconName: "data_object", label: "Config", value: config.config || config.parser || config.path || "default" },
+    ];
+  }
+  if (category === "ai-agents") {
+    if (subtype === "orchestrator") {
+      return [
+        { iconName: "hub", label: "Mode", value: config.executionMode || "on_event" },
+        { iconName: "speed", label: "Steps", value: config.maxSteps || config.maxIterations || "6" },
+        { iconName: "tune", label: "Allow", value: config.allowedNodeTypes || "runtime" },
+      ];
+    }
+    return [
+      { iconName: "tune", label: "Provider", value: config.provider || "local" },
+      { iconName: "memory", label: "Model", value: config.model || "model" },
+      { iconName: "article", label: "Prompt", value: config.prompt || "default" },
+      { iconName: "data_object", label: "Expect", value: config.assertValue || config.expectedOutput || "none" },
+    ];
+  }
+  if (category === "actions") {
+    if (subtype === "runtime-trigger") {
+      return [
+        { iconName: "bolt", label: "Emit", value: config.targetChannel || emit || "trigger" },
+        { iconName: "data_object", label: "Payload", value: config.template || "event" },
+      ];
+    }
+    if (subtype === "telegram") {
+      return [
+        { iconName: "hub", label: "Chat", value: config.chatId || "not set" },
+        { iconName: "hub", label: "Target", value: config.target || "Telegram API" },
+        { iconName: "tune", label: "Retry", value: config.retryPolicy || "none" },
+      ];
+    }
+    if (subtype === "whatsapp") {
+      return [
+        { iconName: "hub", label: "To", value: config.to || "not set" },
+        { iconName: "hub", label: "Target", value: config.target || "provider" },
+        { iconName: "tune", label: "Retry", value: config.retryPolicy || "none" },
+      ];
+    }
+    if (subtype === "http-write") {
+      return [
+        { iconName: "tune", label: "Method", value: config.method || "POST" },
+        { iconName: "hub", label: "Target", value: config.target || "URL" },
+        { iconName: "data_object", label: "Payload", value: config.template || "event" },
+      ];
+    }
+    return [
+      { iconName: "hub", label: "Target", value: config.target || subtype || "action" },
+      { iconName: "data_object", label: "Payload", value: config.template || "event" },
+      { iconName: "tune", label: "Retry", value: config.retryPolicy || "none" },
+    ];
+  }
+  if (category === "storage") {
+    return [
+      { iconName: "storage", label: "Store", value: config.storeName || config.bucket || subtype || "store" },
+      { iconName: "data_object", label: "Key", value: config.keyPath || "id" },
+      { iconName: "speed", label: "Keep", value: config.retention || "default" },
+    ];
+  }
+  if (category === "dev") {
+    return [
+      { iconName: "visibility", label: "Mode", value: config.previewMode || config.mode || "auto" },
+      { iconName: "data_object", label: "Max", value: config.maxChars || "2000" },
+    ];
+  }
+  return [];
+};
+
+const renderRuntimeChipInlineConfig = (node, config = {}) => {
+  const rows = runtimeInlineConfigRows(node, config);
+  if (!rows.length) return null;
+  const subtype = nodeSubtype(node);
+  return _.div(
+    { class: "tl-flow-node-inline-config is-runtime-config", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
+    mediaSourceDropSpec(subtype) ? renderMediaSourceDropzone(node, config) : null,
+    _.div(
+      { class: "tl-flow-kdoc-config-grid" },
+      ...rows.map((item) => _.span(
+        { class: "tl-flow-kdoc-config-chip", title: `${item.label}: ${item.value || "all"}` },
+        icon(item.iconName || "settings", "sm"),
+        _.strong(item.label),
+        _.em(shortInlineConfigValue(item.value))
+      ))
+    ),
+    subtype === "telegram" ? btn({
+      class: "tl-flow-inline-editor-btn",
+      title: "Send Telegram test message",
+      onPointerDown: stopNodeControlEvent,
+      onclick: (event) => testTelegramActionNode(node, event),
+    }, icon("send", "sm"), "Test") : null
+  );
+};
+
+const fallbackInlineFieldValue = (node = {}, config = {}, definition = {}) => {
+  const defaults = runtimeNodeConfigDefaults(node);
+  const value = config[definition.key] ?? defaults[definition.key] ?? definition.defaultValue ?? "";
+  if (definition.type === "checkbox" || definition.type === "boolean" || definition.type === "toggle") {
+    return boolInlineConfigValue(value);
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return definition.label || definition.key || "object";
+    }
+  }
+  return value || definition.placeholder || definition.label || definition.key || "default";
+};
+
+const renderFallbackInlineConfig = (node, config = {}, fields = []) => {
+  const subtype = nodeSubtype(node);
+  const visibleFields = fields.filter((definition) => !mediaInlineHiddenKeys(subtype).has(definition.key)).slice(0, 6);
+  if (!visibleFields.length) return null;
+  return _.div(
+    { class: "tl-flow-node-inline-config is-runtime-config is-fallback", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
+    mediaSourceDropSpec(subtype) ? renderMediaSourceDropzone(node, config) : null,
+    _.div(
+      { class: "tl-flow-kdoc-config-grid" },
+      ...visibleFields.map((definition) => _.span(
+        { class: "tl-flow-kdoc-config-chip", title: `${definition.label}: ${fallbackInlineFieldValue(node, config, definition)}` },
+        icon(definition.type === "checkbox" ? "tune" : definition.type === "select" ? "filter_alt" : "data_object", "sm"),
+        _.strong(definition.label || definition.key),
+        _.em(shortInlineConfigValue(fallbackInlineFieldValue(node, config, definition), "default"))
+      ))
+    )
+  );
+};
+
 const renderInlineNodeSettings = (node) => {
   if (!isInlineConfigNode(node) || node.metadata?.library) return null;
   if (isCustomRuntimeNode(node)) return renderCustomRuntimeNodeInlineForm(node);
@@ -1288,66 +2105,16 @@ const renderInlineNodeSettings = (node) => {
   const config = defaults.configObject || {};
   const fields = inlineConfigFields(node).slice(0, 3);
   const subtype = nodeSubtype(node);
-  const hiddenInlineKeys = mediaInlineHiddenKeys(subtype);
-  const renderedFields = fields.filter((definition) => !hiddenInlineKeys.has(definition.key));
-  const saveField = (definition, event) => {
-    const value = definition.type === "checkbox" ? event.currentTarget.checked : event.currentTarget.value;
-    persistInlineRuntimeNodeConfig({ node, patch: { [definition.key]: value } });
-  };
-  const control = (definition) => {
-    const value = config[definition.key] ?? defaults[definition.key] ?? "";
-    const common = {
-      "aria-label": definition.label,
-      title: definition.label,
-      onPointerDown: stopNodeControlEvent,
-      onclick: stopNodeControlEvent,
-      onchange: (event) => saveField(definition, event),
-    };
-    if (definition.type === "select") {
-      return _.select(
-        { ...common, class: "tl-flow-inline-select", value },
-        ...(definition.options || []).map((option) => _.option({ value: option, selected: option === value }, option))
-      );
-    }
-    if (["checkbox", "boolean", "toggle"].includes(definition.type)) {
-      return _.Toggle({
-        class: "tl-flow-inline-toggle",
-        checked: Boolean(value),
-        color: "success",
-        dense: true,
-        onPointerDown: stopNodeControlEvent,
-        onclick: stopNodeControlEvent,
-        onChange: (checked) => persistInlineRuntimeNodeConfig({ node, patch: { [definition.key]: Boolean(checked) } }),
-      });
-    }
-    return _.input({
-      ...common,
-      class: "tl-flow-inline-input",
-      value,
-      placeholder: definition.placeholder || "",
-      autocomplete: "off",
-      onkeydown: (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") event.currentTarget.blur();
-      },
-    });
-  };
-
-  return _.div(
-    { class: "tl-flow-node-inline-config", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
-    mediaSourceDropSpec(subtype) ? renderMediaSourceDropzone(node, config) : null,
-    ...renderedFields.map((definition) => _.label(
-      { class: `tl-flow-inline-row is-${definition.type || "text"}` },
-      _.span({ class: "tl-flow-inline-label" }, definition.label),
-      control(definition)
-    )),
-    subtype === "telegram" ? btn({
-      class: "tl-flow-inline-editor-btn",
-      title: "Send Telegram test message",
-      onPointerDown: stopNodeControlEvent,
-      onclick: (event) => testTelegramActionNode(node, event),
-    }, icon("send", "sm"), "Test") : null
-  );
+  if (nodeCategory(node) === "knowledge" && isKnowledgeDocumentStoreSubtype(subtype)) {
+    return renderKnowledgeDocumentStoreInlineConfig(node, config);
+  }
+  if (nodeCategory(node) === "knowledge") {
+    const knowledgeConfig = renderKnowledgeInlineConfig(node, config);
+    if (knowledgeConfig) return knowledgeConfig;
+  }
+  const runtimeChipConfig = renderRuntimeChipInlineConfig(node, config);
+  if (runtimeChipConfig) return runtimeChipConfig;
+  return renderFallbackInlineConfig(node, config, fields);
 };
 
 const customConfigValue = (config = {}, field = {}) => {
@@ -2882,7 +3649,9 @@ const requestRuntimeNodeConfig = (node) => {
     if (targetInput) targetInput.value = url;
   };
   const configField = (definition) => {
-    const value = defaults[definition.key] ?? defaults.configObject?.[definition.key] ?? definition.defaultValue ?? "";
+    const value = defaults[definition.key] ?? defaults.configObject?.[definition.key] ??
+      (definition.key === "previewMode" ? defaults.configObject?.mode : undefined) ??
+      definition.defaultValue ?? "";
     if (definition.type === "checkbox") {
       const inputId = `${formId}-${definition.key}`;
       return _.div(
