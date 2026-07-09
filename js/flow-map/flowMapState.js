@@ -1699,7 +1699,7 @@ const FLOW_NODE_ICON_OPTIONS = (() => {
 })();
 
 const FLOW_COMPONENT_ICON_OPTIONS = [
-  { value: "", label: "CMSwift default", icon: "auto_awesome" },
+  { value: "", icon: "auto_awesome" },
   ...FLOW_NODE_ICON_OPTIONS,
 ];
 
