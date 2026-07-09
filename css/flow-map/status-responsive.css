@@ -481,7 +481,7 @@
   left: 96px;
   right: 24px;
   top: 72px;
-  z-index: 20;
+  z-index: 70;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 28px;
   align-items: center;
@@ -506,10 +506,13 @@
   white-space: nowrap;
 }
 
-.tl-flow-error-close {
+.tl-flow-error-close.cms-btn {
   display: inline-grid;
   width: 28px;
+  min-width: 28px;
   height: 28px;
+  min-height: 28px;
+  padding: 0;
   place-items: center;
   color: rgba(254, 226, 226, 0.92);
   border: 1px solid rgba(254, 202, 202, 0.22);
@@ -518,7 +521,7 @@
   cursor: pointer;
 }
 
-.tl-flow-error-close:hover {
+.tl-flow-error-close.cms-btn:hover {
   color: #fff;
   border-color: rgba(254, 202, 202, 0.46);
   background: rgba(127, 29, 29, 0.58);

@@ -237,6 +237,7 @@ const renderCanvasNodeMenu = () =>
     const menu = state.contextMenu;
     if (!menu || menu.type !== "canvas") return null;
     const visiblePalette = filteredNodePalette();
+    const pendingSource = menu.pendingLink?.sourceId ? nodeById(menu.pendingLink.sourceId) : null;
     return (
       _.div(
         {
@@ -263,7 +264,9 @@ const renderCanvasNodeMenu = () =>
             _.div(
               { class: "tl-flow-context-head" },
               _.strong("Add Node"),
-              _.span("Insert a runtime node on this canvas point")
+              _.span(pendingSource
+                ? `Insert and connect from ${pendingSource.label || pendingSource.id}`
+                : "Insert a runtime node on this canvas point")
             ),
             _.Input({
               class: "tl-flow-node-menu-search",
@@ -6938,16 +6941,17 @@ const renderShell = () =>
       state.error ? _.div(
         { class: "tl-flow-error", role: "alert" },
         _.span({ class: "tl-flow-error-message" }, state.error),
-        _.button(
-          {
-            type: "button",
-            class: "tl-flow-error-close",
-            title: "Chiudi errore",
-            "aria-label": "Chiudi errore",
-            onclick: () => clearFlowMapError({ remount: true }),
+        btn({
+          class: "tl-flow-error-close",
+          dense: true,
+          title: "Chiudi errore",
+          "aria-label": "Chiudi errore",
+          onClick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            clearFlowMapError({ remount: true });
           },
-          icon("close", "sm")
-        )
+        }, icon("close", "sm"))
       ) : null,
       _.div(
         { class: "tl-flow-grid" },

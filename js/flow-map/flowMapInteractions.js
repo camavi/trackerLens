@@ -94,12 +94,12 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
       flowPosition,
     });
     state.paletteDragItem = null;
-    return;
+    return null;
   }
   if (isExistingLibraryPaletteItem(item) && !item.url) {
     openExistingLibraryDialog(item, { flowPosition });
     state.paletteDragItem = null;
-    return;
+    return null;
   }
   const workspaceId = await ensureRuntimeWorkspaceScope();
   const node = await window.TrackerLensRuntimeGraphStore?.createDraftNode?.({
@@ -137,6 +137,7 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
     });
   }
   await loadRuntime();
+  return node || null;
 };
 
 const isExistingLibraryPaletteItem = (item = {}) =>
@@ -1699,6 +1700,20 @@ const canConnectNodes = (source, target, sourcePort = "", targetPort = "") => {
   return connectionValidation(source, target, sourcePort || "all", targetPort || "all").ok;
 };
 
+const bestCompatibleTargetPortForLink = (source, target, sourcePortName = "all") => {
+  if (!source?.id || !target?.id) return "all";
+  const sourcePort = sourcePortName || "all";
+  const targetPorts = nodePorts(target, "in");
+  if (!targetPorts.length) return "all";
+  const targetChannel = channelForPortConnection(source, target, sourcePort, "");
+  const preferred = targetPorts.find((port) => port.name === targetChannel);
+  if (preferred && connectionValidation(source, target, sourcePort, preferred.name).ok) return preferred.name;
+  const allPort = targetPorts.find((port) => port.name === "all");
+  if (allPort && connectionValidation(source, target, sourcePort, allPort.name).ok) return allPort.name;
+  const compatible = targetPorts.find((port) => connectionValidation(source, target, sourcePort, port.name).ok);
+  return compatible?.name || preferred?.name || allPort?.name || targetPorts[0]?.name || "all";
+};
+
 const compatiblePortTargets = (source, sourcePortName = "all") =>
   state.runtime.nodes
     .filter((target) => target.id !== source?.id)
@@ -1798,6 +1813,17 @@ const completePortLinkDrag = async (interaction, event) => {
   state.linkingSourceId = "";
   state.linkingPort = "";
   clearLinkDomState();
+  if (source && !target) {
+    openCanvasNodeMenuAtPointer({
+      event,
+      canvas: interaction.canvas,
+      pendingLink: {
+        sourceId: source.id,
+        sourcePort: interaction.sourcePort || "all",
+      },
+    });
+    return;
+  }
   if (!source || !target || !canConnectNodes(source, target, interaction.sourcePort, targetPort)) {
     const validation = source && target ? connectionValidation(source, target, interaction.sourcePort, targetPort) : null;
     state.error = !source
@@ -2205,12 +2231,8 @@ const cancelNodePointerInteractionForContextMenu = () => {
   state.interaction = null;
 };
 
-const openCanvasContextMenu = (event) => {
-  if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap, .tl-flow-context-menu")) return;
-  const canvas = event.currentTarget?.closest?.(".tl-flow-canvas") || event.currentTarget;
-  if (!canvas) return;
-  event.preventDefault();
-  event.stopPropagation();
+const openCanvasNodeMenuAtPointer = ({ event, canvas, pendingLink = null } = {}) => {
+  if (!event || !canvas) return;
   const point = pointerPercent(event, canvas);
   state.contextMenu = {
     type: "canvas",
@@ -2221,8 +2243,23 @@ const openCanvasContextMenu = (event) => {
       y: flowCoordinate(point.y),
       width: FLOW_NODE_DEFAULT_WIDTH,
     },
+    pendingLink: pendingLink?.sourceId
+      ? {
+        sourceId: pendingLink.sourceId,
+        sourcePort: pendingLink.sourcePort || "all",
+      }
+      : null,
   };
   mount({ preserveScroll: true });
+};
+
+const openCanvasContextMenu = (event) => {
+  if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap, .tl-flow-context-menu")) return;
+  const canvas = event.currentTarget?.closest?.(".tl-flow-canvas") || event.currentTarget;
+  if (!canvas) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openCanvasNodeMenuAtPointer({ event, canvas });
 };
 
 const openNodeContextMenu = (event, node) => {
@@ -2251,9 +2288,29 @@ const createContextMenuNode = async (item) => {
   const menu = state.contextMenu;
   if (!item || menu?.type !== "canvas") return;
   const flowPosition = menu.flowPosition || { x: "0px", y: "0px", width: FLOW_NODE_DEFAULT_WIDTH };
+  const pendingLink = menu.pendingLink?.sourceId
+    ? {
+      sourceId: menu.pendingLink.sourceId,
+      sourcePort: menu.pendingLink.sourcePort || "all",
+    }
+    : null;
   closeContextMenu();
   mount({ preserveScroll: true });
-  await createDraftNodeAtFlowPosition({ item, flowPosition });
+  const createdNode = await createDraftNodeAtFlowPosition({ item, flowPosition });
+  if (!pendingLink || !createdNode?.id) return;
+  const source = nodeById(pendingLink.sourceId);
+  const target = nodeById(createdNode.id) || createdNode;
+  if (!source?.id || !target?.id) {
+    state.error = "Nodo creato, ma collegamento non creato: nodo sorgente o target non trovato.";
+    setErrorSignal?.(state.error);
+    mount({ preserveScroll: true });
+    return;
+  }
+  const targetPort = bestCompatibleTargetPortForLink(source, target, pendingLink.sourcePort);
+  await createRuntimeLink(source, target, {
+    sourcePort: pendingLink.sourcePort || "all",
+    targetPort,
+  });
 };
 
 const runNodeContextAction = async (action, node) => {
