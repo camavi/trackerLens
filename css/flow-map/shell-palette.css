@@ -179,17 +179,16 @@ body {
 .tl-flow-grid {
   min-height: 0;
   display: grid;
-  grid-template-columns: 154px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) 28px;
   grid-template-areas:
-    "palette center"
-    "palette status";
+    "center"
+    "status";
   gap: 8px;
   padding: 8px;
   overflow: hidden;
 }
 
-.tl-flow-palette,
 .tl-flow-inspector,
 .tl-flow-overview,
 .tl-flow-events,
@@ -200,106 +199,13 @@ body {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
-.tl-flow-palette,
 .tl-flow-inspector {
   min-height: 0;
   overflow: auto;
-}
-
-.tl-flow-palette {
-  grid-area: palette;
-  padding: 12px;
-}
-
-.tl-flow-create-node-btn {
-  width: 100%;
-  min-height: 36px;
-  justify-content: center;
-  gap: 7px;
-  margin: 0 0 12px;
-  color: #ffe27a;
-  border: 1px solid rgba(250, 204, 21, 0.26);
-  border-radius: 7px;
-  background: rgba(250, 204, 21, 0.08);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.tl-flow-create-node-btn:hover {
-  color: #fff3b0;
-  border-color: rgba(250, 204, 21, 0.46);
-  background: rgba(250, 204, 21, 0.13);
-  box-shadow: 0 0 18px rgba(250, 204, 21, 0.12);
 }
 
 .tl-flow-panel-title {
   justify-content: space-between;
   margin-bottom: 12px;
   font-size: 13px;
-}
-
-.tl-flow-palette-search {
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 12px;
-  padding: 0 8px;
-  border: 1px solid rgba(214, 226, 235, 0.1);
-  border-radius: 7px;
-  background: rgba(3, 8, 12, 0.56);
-  color: rgba(214, 226, 235, 0.52);
-}
-
-.tl-flow-palette-search:focus-within {
-  border-color: rgba(56, 189, 248, 0.32);
-  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.08);
-}
-
-.tl-flow-palette-search input {
-  min-width: 0;
-  flex: 1;
-  border: 0;
-  outline: 0;
-  color: var(--tl-text);
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-}
-
-.tl-flow-palette-search input::placeholder {
-  color: rgba(214, 226, 235, 0.42);
-}
-
-.tl-flow-palette-search-clear {
-  width: 22px;
-  height: 22px;
-  min-height: 22px;
-  padding: 0;
-  color: rgba(214, 226, 235, 0.62);
-  border-color: transparent;
-  background: transparent;
-}
-
-.tl-flow-palette-empty {
-  min-height: 92px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 6px;
-  padding: 14px;
-  color: rgba(214, 226, 235, 0.58);
-  border: 1px dashed rgba(214, 226, 235, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.018);
-  text-align: center;
-}
-
-.tl-flow-palette-empty strong {
-  color: var(--tl-text);
-  font-size: 12px;
-}
-
-.tl-flow-palette-empty span:last-child {
-  font-size: 10px;
 }

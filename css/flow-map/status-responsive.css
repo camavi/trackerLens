@@ -539,9 +539,8 @@
   }
 
   .tl-flow-grid {
-    grid-template-rows: auto 680px 28px;
+    grid-template-rows: 680px 28px;
     grid-template-areas:
-      "palette"
       "center"
       "status";
     overflow: visible;

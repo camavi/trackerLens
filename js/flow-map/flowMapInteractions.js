@@ -1,6 +1,7 @@
 // Flow Map pointer interactions, selection, channel tools and dependency reports.
 // Extracted from js/flowMapView.js; loaded in order by flowMap.html.
 const beginPan = (event) => {
+  if (event.button !== 0 || event.ctrlKey) return;
   if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap")) return;
   const edge = edgeAtPointer(event);
   if (edge) {
@@ -87,77 +88,27 @@ const handleCanvasWheel = (event) => {
   updateCanvasViewportDom();
 };
 
-const beginPaletteDrag = (event, item) => {
-  state.paletteDragItem = item;
-  event.dataTransfer?.setData("application/x-trackerslens-node", JSON.stringify(item));
-  event.dataTransfer?.setData("text/plain", item.label);
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
-};
-
-const readPaletteDropItem = (event) => {
-  const raw = event.dataTransfer?.getData("application/x-trackerslens-node");
-  if (raw) {
-    try {
-      return JSON.parse(raw);
-    } catch (error) {
-      console.warn("Palette drag payload non valido", error);
-    }
-  }
-  return state.paletteDragItem;
-};
-
-const handleCanvasDragOver = (event) => {
-  if (!state.paletteDragItem && !event.dataTransfer?.types?.includes("application/x-trackerslens-node")) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-};
-
-const handleCanvasDrop = async (event) => {
-  const item = readPaletteDropItem(event);
-  if (!item) return;
-  event.preventDefault();
-  event.stopPropagation();
-  await createDraftNodeAtPoint({ item, canvas: event.currentTarget, event });
-};
-
-const createDraftNodeAtPoint = async ({ item, canvas, event }) => {
+const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
   if (isExistingFlowMapPaletteItem(item)) {
-    const point = pointerPercent(event, canvas);
     openExistingFlowMapDialog({
-      flowPosition: {
-        x: flowCoordinate(point.x),
-        y: flowCoordinate(point.y),
-        width: FLOW_NODE_DEFAULT_WIDTH,
-      },
+      flowPosition,
     });
     state.paletteDragItem = null;
     return;
   }
   if (isExistingLibraryPaletteItem(item) && !item.url) {
-    const point = pointerPercent(event, canvas);
-    openExistingLibraryDialog(item, {
-      flowPosition: {
-        x: flowCoordinate(point.x),
-        y: flowCoordinate(point.y),
-        width: FLOW_NODE_DEFAULT_WIDTH,
-      },
-    });
+    openExistingLibraryDialog(item, { flowPosition });
     state.paletteDragItem = null;
     return;
   }
   const workspaceId = await ensureRuntimeWorkspaceScope();
-  const point = pointerPercent(event, canvas);
   const node = await window.TrackerLensRuntimeGraphStore?.createDraftNode?.({
     workspaceId,
     type: item.nodeType || "node",
     label: item.label,
     inputs: item.inputs || item.manifest?.inputs || [],
     outputs: item.outputs || item.manifest?.outputs || [],
-    flowPosition: {
-      x: flowCoordinate(point.x),
-      y: flowCoordinate(point.y),
-      width: FLOW_NODE_DEFAULT_WIDTH,
-    },
+    flowPosition,
     channels: [channelForDraft()].filter(Boolean),
     metadata: {
       paletteLabel: item.label,
@@ -1590,60 +1541,9 @@ const openExistingLibraryDialog = async (item, options = {}) => {
   dialog.open();
 };
 
-const beginPalettePointer = (event, item) => {
-  if (event.button !== 0) return;
-  state.palettePointer = {
-    item,
-    startX: event.clientX,
-    startY: event.clientY,
-    moved: false,
-  };
-  document.addEventListener("pointermove", handlePalettePointerMove);
-  document.addEventListener("pointerup", endPalettePointer, { once: true });
-  document.addEventListener("pointercancel", cancelPalettePointer, { once: true });
-};
-
-const handlePalettePointerMove = (event) => {
-  const drag = state.palettePointer;
-  if (!drag) return;
-  const dx = Math.abs(event.clientX - drag.startX);
-  const dy = Math.abs(event.clientY - drag.startY);
-  if (dx > 6 || dy > 6) {
-    drag.moved = true;
-    state.paletteDragItem = drag.item;
-    document.body.classList.add("is-flow-palette-dragging");
-  }
-};
-
-const endPalettePointer = async (event) => {
-  const drag = state.palettePointer;
-  document.removeEventListener("pointermove", handlePalettePointerMove);
-  document.removeEventListener("pointercancel", cancelPalettePointer);
-  state.palettePointer = null;
-  document.body.classList.remove("is-flow-palette-dragging");
-
-  if (!drag?.moved) return;
-  state.suppressPaletteClick = true;
-  window.setTimeout(() => { state.suppressPaletteClick = false; }, 0);
-
-  const target = document.elementFromPoint(event.clientX, event.clientY);
-  const canvas = target?.closest?.(".tl-flow-canvas");
-  if (canvas) {
-    event.preventDefault();
-    await createDraftNodeAtPoint({ item: drag.item, canvas, event });
-  } else {
-    state.paletteDragItem = null;
-  }
-};
-
-const cancelPalettePointer = () => {
-  document.removeEventListener("pointermove", handlePalettePointerMove);
-  state.palettePointer = null;
-  state.paletteDragItem = null;
-  document.body.classList.remove("is-flow-palette-dragging");
-};
-
 const beginNodeDrag = (event, node, index) => {
+  if (event.button !== 0 || event.ctrlKey) return;
+  if (event.target.closest?.("button, input, textarea, select, a, [contenteditable='true'], .tl-flow-context-menu")) return;
   event.preventDefault();
   event.stopPropagation();
   bringNodeToFront(node.id);
@@ -2297,10 +2197,39 @@ const closeContextMenu = () => {
   state.contextMenu = null;
 };
 
+const cancelNodePointerInteractionForContextMenu = () => {
+  if (state.interaction?.type !== "node") return;
+  document.removeEventListener("pointermove", handlePointerMove);
+  document.removeEventListener("pointerup", endInteraction);
+  document.removeEventListener("pointercancel", endInteraction);
+  state.interaction = null;
+};
+
+const openCanvasContextMenu = (event) => {
+  if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap, .tl-flow-context-menu")) return;
+  const canvas = event.currentTarget?.closest?.(".tl-flow-canvas") || event.currentTarget;
+  if (!canvas) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const point = pointerPercent(event, canvas);
+  state.contextMenu = {
+    type: "canvas",
+    x: Math.max(12, Math.min(event.clientX, window.innerWidth - 360)),
+    y: Math.max(12, Math.min(event.clientY, window.innerHeight - 560)),
+    flowPosition: {
+      x: flowCoordinate(point.x),
+      y: flowCoordinate(point.y),
+      width: FLOW_NODE_DEFAULT_WIDTH,
+    },
+  };
+  mount({ preserveScroll: true });
+};
+
 const openNodeContextMenu = (event, node) => {
   if (!node?.id) return;
   event.preventDefault();
   event.stopPropagation();
+  cancelNodePointerInteractionForContextMenu();
   state.contextMenu = {
     type: "node",
     nodeId: node.id,
@@ -2316,6 +2245,15 @@ const openNodeContextMenu = (event, node) => {
     connectionId: "",
   });
   mount({ preserveScroll: true });
+};
+
+const createContextMenuNode = async (item) => {
+  const menu = state.contextMenu;
+  if (!item || menu?.type !== "canvas") return;
+  const flowPosition = menu.flowPosition || { x: "0px", y: "0px", width: FLOW_NODE_DEFAULT_WIDTH };
+  closeContextMenu();
+  mount({ preserveScroll: true });
+  await createDraftNodeAtFlowPosition({ item, flowPosition });
 };
 
 const runNodeContextAction = async (action, node) => {

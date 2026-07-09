@@ -178,10 +178,35 @@ const filteredNodePalette = () => {
 const paletteItemMatchesSearch = (item = {}, group = "", query = String(state.paletteSearch || "").trim().toLowerCase()) =>
   !query || paletteSearchText(item, group).includes(query);
 
+const nodeMenuCollapsedGroups = () => {
+  if (!state.nodeMenuCollapsedGroups) {
+    try {
+      state.nodeMenuCollapsedGroups = JSON.parse(localStorage.getItem("tl_flow_node_menu_collapsed_groups") || "{}") || {};
+    } catch (_) {
+      state.nodeMenuCollapsedGroups = {};
+    }
+  }
+  return state.nodeMenuCollapsedGroups;
+};
+
+const isNodeMenuGroupCollapsed = (title = "") =>
+  Boolean(nodeMenuCollapsedGroups()[title]);
+
+const toggleNodeMenuGroup = (title = "") => {
+  const collapsed = nodeMenuCollapsedGroups();
+  const nextCollapsed = !collapsed[title];
+  if (nextCollapsed) collapsed[title] = true;
+  else delete collapsed[title];
+  localStorage.setItem("tl_flow_node_menu_collapsed_groups", JSON.stringify(collapsed));
+  return nextCollapsed;
+};
+
 const applyPaletteSearchDom = () => {
   const query = String(state.paletteSearch || "").trim().toLowerCase();
   let visibleSections = 0;
   document.querySelectorAll("[data-flow-palette-section]").forEach((section) => {
+    const groupTitle = section.dataset.flowPaletteSection || "";
+    const collapsed = !query && isNodeMenuGroupCollapsed(groupTitle);
     let visibleItems = 0;
     section.querySelectorAll("[data-flow-palette-item]").forEach((item) => {
       const matched = !query || String(item.dataset.flowPaletteSearch || "").includes(query);
@@ -189,6 +214,11 @@ const applyPaletteSearchDom = () => {
       if (matched) visibleItems += 1;
     });
     section.hidden = visibleItems === 0;
+    section.classList.toggle("is-collapsed", collapsed);
+    const toggle = section.querySelector(".tl-flow-node-menu-section-toggle");
+    toggle?.setAttribute?.("aria-expanded", String(!collapsed));
+    const toggleIcon = toggle?.querySelector?.(".cms-icon");
+    if (toggleIcon) toggleIcon.textContent = collapsed ? "chevron_right" : "expand_more";
     if (visibleItems) visibleSections += 1;
   });
   const empty = document.querySelector("[data-flow-palette-empty]");
@@ -202,66 +232,96 @@ const setPaletteSearch = (value = "") => {
   applyPaletteSearchDom();
 };
 
-const renderPalette = () =>
+const renderCanvasNodeMenu = () =>
   (() => {
+    const menu = state.contextMenu;
+    if (!menu || menu.type !== "canvas") return null;
     const visiblePalette = filteredNodePalette();
     return (
-      _.aside(
-        { class: "tl-flow-palette" },
-        btn({
-          class: "tl-flow-create-node-btn",
-          onclick: () => openNodeBuilderDialog(),
-        }, icon("add_box", "sm"), "Create Node"),
-        _.div({ class: "tl-flow-panel-title" }, _.strong("Add Node"), btn({ "aria-label": "Collapse" }, icon("keyboard_arrow_up", "sm"))),
-        _.label(
-          { class: "tl-flow-palette-search" },
-          icon("search", "sm"),
-          _.input({
-            type: "search",
-            value: state.paletteSearch,
-            placeholder: "Search nodes",
-            "aria-label": "Search nodes",
-            autocomplete: "off",
-            oninput: (event) => setPaletteSearch(event.currentTarget.value),
-            onkeydown: (event) => event.stopPropagation(),
+      _.div(
+        {
+          class: "tl-flow-context-backdrop",
+          onclick: () => {
+            closeContextMenu();
+            mount({ preserveScroll: true });
+          },
+          oncontextmenu: (event) => {
+            event.preventDefault();
+            closeContextMenu();
+            mount({ preserveScroll: true });
+          },
+        },
+        _.div(
+          {
+            class: "tl-flow-context-menu tl-flow-node-menu",
+            style: { "--context-x": `${menu.x}px`, "--context-y": `${menu.y}px` },
             onclick: (event) => event.stopPropagation(),
-            onPointerDown: (event) => event.stopPropagation(),
-          }),
-          btn({
-            class: "tl-flow-palette-search-clear",
-            "data-flow-palette-search-clear": "true",
-            "aria-label": "Clear node search",
-            title: "Clear search",
-            hidden: !state.paletteSearch,
-            onclick: (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setPaletteSearch("");
-              const input = document.querySelector(".tl-flow-palette-search input");
-              if (input) input.value = "";
-              input?.focus?.();
-            },
-          }, icon("close", "sm"))
-        ),
+            onpointerdown: (event) => event.stopPropagation(),
+          },
+          _.div(
+            { class: "tl-flow-node-menu-sticky" },
+            _.div(
+              { class: "tl-flow-context-head" },
+              _.strong("Add Node"),
+              _.span("Insert a runtime node on this canvas point")
+            ),
+            _.Input({
+              class: "tl-flow-node-menu-search",
+              size: "sm",
+              label: "Search nodes",
+              type: "text",
+              value: state.paletteSearch,
+              clearable: true,
+              icon: "search",
+              autocomplete: "off",
+              onInput: (event) => setPaletteSearch(cmsInputValue(event)),
+              onKeydown: (event) => event.stopPropagation(),
+              onClick: (event) => event.stopPropagation(),
+              onPointerDown: (event) => event.stopPropagation(),
+            }),
+            btn({
+              class: "tl-flow-node-menu-create",
+              title: "Create custom node",
+              "aria-label": "Create custom node",
+              onclick: () => {
+                closeContextMenu();
+                mount({ preserveScroll: true });
+                window.setTimeout(() => openNodeBuilderDialog(), 0);
+              },
+            }, icon("add_box", "sm"))
+          ),
         ...nodePalette.map(([title, items]) => {
           const hasVisibleItems = items.some((item) => paletteItemMatchesSearch(item, title));
+          const collapsed = isNodeMenuGroupCollapsed(title) && !state.paletteSearch;
           return (
             _.section(
-              { "data-flow-palette-section": title, hidden: !hasVisibleItems },
-              _.h3(title),
+              { class: `tl-flow-node-menu-section${collapsed ? " is-collapsed" : ""}`, "data-flow-palette-section": title, hidden: !hasVisibleItems },
+              _.button({
+                type: "button",
+                class: "tl-flow-node-menu-section-toggle",
+                "aria-expanded": String(!collapsed),
+                onclick: (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const nextCollapsed = toggleNodeMenuGroup(title);
+                  const section = event.currentTarget?.closest?.(".tl-flow-node-menu-section");
+                  section?.classList?.toggle?.("is-collapsed", nextCollapsed);
+                  event.currentTarget?.setAttribute?.("aria-expanded", String(!nextCollapsed));
+                  const toggleIcon = event.currentTarget?.querySelector?.(".cms-icon");
+                  if (toggleIcon) toggleIcon.textContent = nextCollapsed ? "chevron_right" : "expand_more";
+                },
+              }, _.span(title), _.em(String(items.filter((item) => paletteItemMatchesSearch(item, title)).length)), icon(collapsed ? "chevron_right" : "expand_more", "sm")),
               ...items.map((item) =>
                 _.button(
                   {
                     type: "button",
-                    class: `tl-flow-palette-item is-draggable is-${item.tone || "cyan"}`,
+                    class: `tl-flow-node-menu-item is-${item.tone || "cyan"}`,
                     title: item.url || item.trackerSource || item.connectionType || item.label,
                     "data-flow-palette-item": item.label,
                     "data-flow-palette-search": paletteSearchText(item, title),
                     hidden: !paletteItemMatchesSearch(item, title),
-                    onPointerDown: (event) => beginPalettePointer(event, item),
-                    onclick: () => {
-                      if (state.suppressPaletteClick) return;
-                      openPaletteNode(item);
+                    onclick: async () => {
+                      await createContextMenuNode(item);
                     },
                   },
                   icon(item.icon, "sm"),
@@ -272,11 +332,12 @@ const renderPalette = () =>
           );
         }),
         _.div(
-          { class: "tl-flow-palette-empty", "data-flow-palette-empty": "true", hidden: visiblePalette.length > 0 },
+          { class: "tl-flow-node-menu-empty", "data-flow-palette-empty": "true", hidden: visiblePalette.length > 0 },
           icon("search_off", "sm"),
           _.strong("No nodes found"),
           _.span("Try another name, type or category.")
         )
+      )
       )
     );
   })();
@@ -1682,7 +1743,7 @@ const renderCanvas = () => {
     ) : null,
     renderControls(),
     _.div(
-      { class: "tl-flow-canvas", onPointerDown: beginPan, onWheel: handleCanvasWheel, onDragOver: handleCanvasDragOver, onDrop: handleCanvasDrop },
+      { class: "tl-flow-canvas", onPointerDown: beginPan, onWheel: handleCanvasWheel, oncontextmenu: openCanvasContextMenu },
       !graph.nodes.length ? _.div({ class: "tl-flow-empty" }, "Nessun nodo corrisponde ai filtri runtime.") : null,
       _.div(
         {
@@ -6890,12 +6951,12 @@ const renderShell = () =>
       ) : null,
       _.div(
         { class: "tl-flow-grid" },
-        renderPalette(),
         _.div({ class: "tl-flow-center" }, renderCanvas()),
         renderStatusBar()
       ),
       renderPromptChatTrigger(),
       state.inspectorOpen ? _.div({ class: "tl-flow-inspector-overlay" }, renderInspector()) : null,
-      renderNodeContextMenu()
+      renderNodeContextMenu(),
+      renderCanvasNodeMenu()
     )
   );
