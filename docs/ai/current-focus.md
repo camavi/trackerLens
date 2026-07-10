@@ -18,6 +18,16 @@ Knowledge Dictionary Runtime foundation.
 
 ## Latest Completed Work
 
+Trackers Lens Agent Runtime v1 has started:
+
+- `core/runtime/agent-runtime.js` adds the first Codex-like runtime control layer for agentic flows, exposed as `window.TrackerLensAgentRuntime`.
+- v1 tools are English-first internally and include `inspectFlow`, `runFlow`, `inspectNode`, `readLogs`, `suggestFixes` and `listRuns`.
+- The first `runFlow` implementation is intentionally trace-first/dry-run: it builds an ordered runtime plan from the real graph, records in-memory run traces, emits `agent.runtime.run.completed`, and does not bypass existing node runtimes or safe executor rules.
+- Flow Map now exposes an `Agent Run` topbar dialog for Agent Runtime inspect, dry-run trace, safe fix suggestions and raw inspect export without requiring DevTools; trace steps are expandable with channel/port/dependency details, latest matching runtime event payloads, canvas focus and node inspect actions. Agent Runtime node inspect now renders a readable node summary with collapsible raw JSON instead of opening directly into a raw dump.
+- Agent Runtime safe fix suggestions now diagnose broken/duplicate links, invalid ports, isolated nodes, agent bridge gaps, preview reachability and ambiguous roots; each suggestion shows problem, cause, action, risk and preview, and safe link/mapping fixes can be applied from the dialog before an automatic trace refresh.
+- Agent Runtime v1.2 adds Undo Fix through time-travel snapshots, Runtime Fix Log, trace mode controls (`dry-run`, `simulate`, `execute-controlled`) and safe Agent Bridge creation from the palette when an agentic flow is missing the bridge boundary.
+- Runtime docs now include `docs/ai/runtime/agent-runtime.md`, documenting that Trackers Lens builds its own Agent Runtime instead of embedding Codex directly; UI localization remains a later layer.
+
 Flow Chat Brain phase 1 is implemented:
 
 - AI Flow Chat now has a `flow-chat-brain/v1` read-only answer layer for advice/explain/memory-style prompts, using verified runtime context, workspace memory, a small built-in Trackers Lens RAG knowledge base and the configured local/OpenAI-compatible provider when available.

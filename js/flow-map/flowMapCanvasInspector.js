@@ -6647,6 +6647,82 @@ const recentFlowLogs = (level = "all", limit = 8) =>
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
     .slice(0, limit);
 
+const renderAgentRuntimeNodeRecord = (record = {}) => {
+  const node = record.node || {};
+  const dependencies = record.dependencies || [];
+  const events = record.recentEvents || [];
+  const impact = record.impact || {};
+  const ports = node.ports || {};
+  const metric = (label = "", value = "") => _.span(_.strong(String(value ?? 0)), _.em(label));
+  return _.div(
+    { class: "tl-flow-record-summary" },
+    _.section(
+      { class: "tl-flow-record-hero" },
+      icon(node.type === "aiAgent" ? "psychology" : "account_tree", "sm"),
+      _.span(
+        _.strong(node.label || record.nodeId || "Runtime Node"),
+        _.em([node.type, node.subtype, node.status].filter(Boolean).join(" · ") || node.id || "")
+      )
+    ),
+    _.section(
+      { class: "tl-flow-record-metrics" },
+      metric("inputs", ports.inputs?.length || 0),
+      metric("outputs", ports.outputs?.length || 0),
+      metric("dependencies", dependencies.length),
+      metric("recent events", events.length)
+    ),
+    _.section(
+      { class: "tl-flow-record-grid" },
+      _.div(
+        _.h3("Inputs"),
+        ...((ports.inputs || []).length ? ports.inputs.map((item) => _.code(item)) : [_.p("None")])
+      ),
+      _.div(
+        _.h3("Outputs"),
+        ...((ports.outputs || []).length ? ports.outputs.map((item) => _.code(item)) : [_.p("None")])
+      )
+    ),
+    _.details(
+      { class: "tl-flow-record-section" },
+      _.summary(icon("add_link", "sm"), _.strong("Dependencies"), _.em(`${dependencies.length}`), icon("expand_more", "sm")),
+      dependencies.length ? _.div(
+        { class: "tl-flow-record-list" },
+        ...dependencies.slice(0, 12).map((dependency) =>
+          _.span(
+            icon("link", "sm"),
+            _.strong(`${dependency.sourceNodeId || "source"} -> ${dependency.targetNodeId || "target"}`),
+            _.em([dependency.channel, dependency.status].filter(Boolean).join(" · ") || dependency.id || "")
+          )
+        )
+      ) : _.p("No dependencies")
+    ),
+    _.details(
+      { class: "tl-flow-record-section" },
+      _.summary(icon("bolt", "sm"), _.strong("Recent Events"), _.em(`${events.length}`), icon("expand_more", "sm")),
+      events.length ? _.div(
+        { class: "tl-flow-record-list" },
+        ...events.slice(0, 12).map((event) =>
+          _.span(
+            icon(event.status === "error" ? "error" : "bolt", "sm"),
+            _.strong(event.eventType || event.channel || "event"),
+            _.em([event.channel, event.status, event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ""].filter(Boolean).join(" · "))
+          )
+        )
+      ) : _.p("No recent events")
+    ),
+    _.details(
+      { class: "tl-flow-record-section" },
+      _.summary(icon("account_tree", "sm"), _.strong("Impact"), _.em(impact.risk || "runtime"), icon("expand_more", "sm")),
+      _.pre({ class: "tl-flow-record-json is-compact" }, JSON.stringify(impact || {}, null, 2))
+    ),
+    _.details(
+      { class: "tl-flow-record-section" },
+      _.summary(icon("data_object", "sm"), _.strong("Raw JSON"), copyRuntimeButton(record, "Copy raw JSON"), icon("expand_more", "sm")),
+      _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2))
+    )
+  );
+};
+
 const openFlowRecordDialog = ({ title = "Runtime record", subtitle = "", iconName = "data_object", record = {} } = {}) => {
   const dialog = _.Dialog({
     class: "tl-flow-record-dialog",
@@ -6656,7 +6732,9 @@ const openFlowRecordDialog = ({ title = "Runtime record", subtitle = "", iconNam
     subtitle,
     icon: iconName,
     closeButton: true,
-    content: () => _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2)),
+    content: () => record?.version === "agent-runtime-v1" && record?.node
+      ? renderAgentRuntimeNodeRecord(record)
+      : _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2)),
     actions: ({ close }) => btn({ class: "is-primary", onclick: close }, "Close"),
   });
   dialog.open();
