@@ -1321,7 +1321,10 @@ const flowPromptBuildRuntimeQueryModel = async ({ context = {}, prompt = "", que
       wantsFixes || runtimeIntent === "diagnostics"
         ? window.TrackerLensAgentRuntime.suggestFixes({ workspaceId }).catch((error) => ({ fixes: [], error: error?.message || String(error) }))
         : Promise.resolve(null),
-      window.TrackerLensAgentRuntime.listRuns?.().catch(() => ({ runs: [] })) || Promise.resolve({ runs: [] }),
+      Promise.resolve()
+        .then(() => window.TrackerLensAgentRuntime.listRuns?.() || [])
+        .then((result) => Array.isArray(result) ? { runs: result } : result || { runs: [] })
+        .catch(() => ({ runs: [] })),
       wantsTrace
         ? window.TrackerLensAgentRuntime.runFlow({ workspaceId, dryRun: true, mode: "dry-run", payload: { objective: `Flow Chat runtime trace: ${prompt}` } }).catch((error) => ({ error: error?.message || String(error), trace: [] }))
         : Promise.resolve(null),
