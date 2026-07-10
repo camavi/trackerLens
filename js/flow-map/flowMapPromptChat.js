@@ -4650,6 +4650,7 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
   const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
   const diagnostics = flowPromptDiagnoseContext(context);
   const intent = flowPromptAgentIntent(prompt);
+  const compactNatural = flowPromptIsSimpleDefinitionQuestion(prompt);
   const query = flowPromptAgentQuery(context, prompt);
   const queryInsights = flowPromptRuntimeQueryInsights(context, query);
   const queryModel = await flowPromptBuildRuntimeQueryModel({ context, prompt: effectivePrompt || prompt, query, memory });
@@ -4707,7 +4708,7 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
     brainContext,
     brain,
   };
-  let pendingAction = intent === "advice" ? null : await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug, memory);
+  let pendingAction = compactNatural || intent === "advice" ? null : await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug, memory);
   pendingAction = await flowPromptEnrichEndpointResearchPlan(pendingAction, prompt);
   if (pendingAction && typeof pendingAction === "object") pendingAction.prompt = prompt;
   const agentPlan = flowPromptBuildGenericAgentPlan(pendingAction, {
@@ -4726,7 +4727,7 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
     parts.push("Ho capito la richiesta di modifica, ma nel livello 1 lavoro ancora in modalita read-only: posso analizzare e preparare il contesto, non applicare cambiamenti automatici.");
   }
 
-  if (flowPromptIsSimpleDefinitionQuestion(prompt) && !pendingAction) {
+  if (compactNatural && !pendingAction) {
     parts.push(flowPromptLocalDefinitionAnswer(prompt));
   } else if (brain?.answer && !pendingAction) {
     parts.push(brain.answer);
@@ -4835,13 +4836,14 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
     parts.push("Ho interrogato gli store runtime scoped disponibili come fallback read-only quando lo stato in memoria non contiene dati sufficienti.");
   }
 
-  if (memory.length && !pendingAction) {
+  if (memory.length && !pendingAction && !compactNatural) {
     parts.push(`Memoria workspace rilevante: ${memory.slice(0, 2).map((item) => item.text).filter(Boolean).join(" | ")}.`);
   }
 
   return {
     kind: mutation ? "readonly-mutation-request" : "agent-report",
     intent,
+    compactNatural: compactNatural && !pendingAction,
     content: parts.join(" "),
     context,
     memory,
@@ -7685,15 +7687,16 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const queryItems = query.items || [];
     const pendingAction = report.pendingAction || null;
     const pendingStatus = flowPromptEffectiveActionStatus(pendingAction);
+    const compactNatural = Boolean(report.compactNatural || report.debug?.compactNatural);
     const isApplyPlan = !!pendingAction && ["mutation", "connect", "disconnect", "deleteNode", "duplicateNode", "moveNode", "rename", "config", "fix", "fixRuntimeError"].includes(intent);
-    const showOverview = !isApplyPlan;
-    const showDiagnostics = intent === "diagnostics";
-    const showChannels = ["channels", "database"].includes(intent);
-    const showRuntime = ["runtime", "database"].includes(intent);
-    const showNodes = ["nodes", "explain"].includes(intent);
-    const showEdges = ["edges", "explain"].includes(intent);
-    const showConfig = ["config", "database"].includes(intent);
-    const showMemory = intent === "memory";
+    const showOverview = !isApplyPlan && !compactNatural;
+    const showDiagnostics = !compactNatural && intent === "diagnostics";
+    const showChannels = !compactNatural && ["channels", "database"].includes(intent);
+    const showRuntime = !compactNatural && ["runtime", "database"].includes(intent);
+    const showNodes = !compactNatural && ["nodes", "explain"].includes(intent);
+    const showEdges = !compactNatural && ["edges", "explain"].includes(intent);
+    const showConfig = !compactNatural && ["config", "database"].includes(intent);
+    const showMemory = !compactNatural && intent === "memory";
     const wantsRuntimeErrors = intent === "runtime" && flowPromptNormalize(query.filter) === "error";
     const renderBrain = () => {
       if (!brain && !brainContext) return null;
@@ -8143,6 +8146,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       );
     };
     const renderQueryModelDetails = () => {
+      if (compactNatural) return [];
       const sections = [];
       if (brain || brainContext) sections.push(renderBrain());
       if (architectureAdvice) sections.push(renderArchitectureAdvice());
@@ -8296,7 +8300,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       );
     };
     return _.div(
-      { class: "tl-flow-prompt-agent-report" },
+      { class: `tl-flow-prompt-agent-report${compactNatural ? " is-compact-natural" : ""}` },
       showOverview ? _.div(
         { class: "tl-flow-prompt-agent-kpis" },
         _.span(icon("account_tree", "sm"), _.strong(String(context.nodes?.length || 0)), _.em("nodi")),
@@ -8459,6 +8463,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
 
   const renderMessagePostActions = (message = {}) => {
     if (message.role !== "assistant" || !["plan", "agent-report", "text"].includes(message.kind)) return null;
+    if (message.agentReport?.compactNatural || message.agentReport?.debug?.compactNatural) return null;
     const hasBrain = Boolean(message.agentReport?.brain || message.agentReport?.brainContext);
     const canCreate = message.kind === "plan" || message.content || message.agentReport;
     const secondaryActions = [
