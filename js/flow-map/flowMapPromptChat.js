@@ -688,6 +688,14 @@ const flowPromptLocalDefinitionAnswer = (prompt = "") => {
   return "Il Flow Map è il grafo runtime di Trackers Lens: uno spazio dove nodi, link, porte, canali, eventi e log descrivono come si muovono i dati e come collaborano componenti AI/runtime. Non è solo una canvas visuale: è la mappa operativa che il runtime può ispezionare, validare, tracciare e poi eseguire in modo controllato.";
 };
 
+const flowPromptSimpleDefinitionGrounding = (prompt = "") => [
+  "Canonical Trackers Lens definition:",
+  flowPromptLocalDefinitionAnswer(prompt),
+  "Rewrite this answer naturally for the user.",
+  "Do not append workspace memory, current node lists, KPI counts, links, logs, diagnostics or implementation details unless the user explicitly asks for them.",
+  "Keep it concise and conversational.",
+].join("\n");
+
 const flowPromptUiText = (key = "", lang = "en") => {
   const dictionary = {
     brainDetails: { en: "Brain details", it: "Dettagli Brain" },
@@ -5282,21 +5290,28 @@ const flowPromptBuildAiPlan = async (prompt = "", options = {}) => {
 
 const flowPromptBuildConversationalReply = async (prompt = "", options = {}) => {
   const conversationContext = options.conversationContext || null;
+  const grounding = String(options.grounding || "").trim();
+  const fallbackReply = String(options.fallbackReply || "").trim();
+  const includeRuntimeContext = options.includeRuntimeContext !== false;
   const aiSettings = await flowPromptReadAiSettings();
   const provider = await flowPromptPickProvider(aiSettings);
   if (!provider) {
-    return "Posso rispondere alle domande sul Flow Map, ma non trovo un provider AI configurato per una risposta generale.";
+    return fallbackReply || "Posso rispondere alle domande sul Flow Map, ma non trovo un provider AI configurato per una risposta generale.";
   }
-  const context = await flowPromptAgentContext().catch(() => null);
+  const context = includeRuntimeContext ? await flowPromptAgentContext().catch(() => null) : null;
   const model = aiSettings.model || provider.model;
   const system = [
     "You are the Trackers Lens Flow Map assistant.",
     flowPromptLanguageRule(prompt),
     "Answer conversationally in that language.",
+    grounding ? "Use the provided canonical Trackers Lens context as the source of truth, but rewrite it naturally instead of copying it mechanically." : "",
     "If the question is outside Flow Map, answer briefly and explain that your main scope is this runtime graph.",
     "Do not invent runtime data; use the provided context when relevant.",
+    grounding ? "Do not append workspace inventory, memories, node lists, links, logs or diagnostics unless the user explicitly asks for them." : "",
   ].join(" ");
-  const contextText = context
+  const contextText = grounding
+    ? grounding
+    : context
     ? `Current Flow Map context: ${context.nodes.length} nodes, ${context.edges.length} links, ${context.channels.length} channels, ${context.events.length} recent events, ${context.flowLogs.length} recent logs.`
     : "Current Flow Map context is not available.";
   const conversationText = conversationContext?.active
@@ -5333,9 +5348,17 @@ const flowPromptBuildConversationalReply = async (prompt = "", options = {}) => 
     const data = await response.json();
     return String(data.choices?.[0]?.message?.content || "").trim() || "Non ho ricevuto una risposta dal provider AI.";
   } catch (error) {
-    return `Posso aiutarti sul Flow Map, ma il provider AI non ha risposto. ${flowPromptFriendlyAiError(error, { provider, aiSettings, model })}`;
+    return fallbackReply || `Posso aiutarti sul Flow Map, ma il provider AI non ha risposto. ${flowPromptFriendlyAiError(error, { provider, aiSettings, model })}`;
   }
 };
+
+const flowPromptBuildSimpleDefinitionReply = (prompt = "", options = {}) =>
+  flowPromptBuildConversationalReply(prompt, {
+    ...options,
+    grounding: flowPromptSimpleDefinitionGrounding(prompt),
+    fallbackReply: flowPromptLocalDefinitionAnswer(prompt),
+    includeRuntimeContext: false,
+  });
 
 const flowPromptBuildPlanWithAiFallback = async (prompt = "", options = {}) => {
   const conversationContext = options.conversationContext || null;
@@ -6099,6 +6122,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
   const canLearnFromMessage = (message = {}) =>
     message.role === "assistant" &&
     ["plan", "agent-report", "text"].includes(message.kind) &&
+    !message.compactNatural &&
     !message.feedback?.rating;
 
   const canImproveMessage = (message = {}) =>
@@ -6287,6 +6311,17 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const effectivePrompt = String(prompt || "").trim();
     if (!effectivePrompt) return null;
     const conversationContext = flowPromptConversationContext(activeMessages(), effectivePrompt);
+    if (!forceAgentReport && flowPromptIsSimpleDefinitionQuestion(effectivePrompt)) {
+      const reply = await flowPromptBuildSimpleDefinitionReply(promptForBrain || effectivePrompt, { conversationContext });
+      draft.analysis = null;
+      return appendMessage({
+        role: "assistant",
+        kind: "text",
+        content: reply,
+        compactNatural: true,
+        refinedFrom,
+      });
+    }
     if (forceAgentReport || flowPromptIsAgentQuestion(effectivePrompt)) {
       const report = await flowPromptBuildAgentReport(effectivePrompt, { promptForBrain, conversationContext });
       if (refinedFrom) {
@@ -6675,6 +6710,24 @@ const openFlowPromptChatDialog = async (options = {}) => {
             memory: saved ? [saved] : [],
             debug: { preference, saved },
           },
+        });
+        draft.prompt = "";
+        setActivity(null);
+        return;
+      }
+      if (flowPromptIsSimpleDefinitionQuestion(prompt)) {
+        setActivity({
+          label: "Risposta naturale",
+          detail: "Sto passando la definizione sicura al provider AI per rispondere in modo piu naturale.",
+          steps: ["Definizione Trackers Lens", "Provider AI", "Risposta chat"],
+        });
+        const reply = await flowPromptBuildSimpleDefinitionReply(prompt, { conversationContext });
+        draft.analysis = null;
+        await appendMessage({
+          role: "assistant",
+          kind: "text",
+          content: reply,
+          compactNatural: true,
         });
         draft.prompt = "";
         setActivity(null);
@@ -8463,6 +8516,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
 
   const renderMessagePostActions = (message = {}) => {
     if (message.role !== "assistant" || !["plan", "agent-report", "text"].includes(message.kind)) return null;
+    if (message.compactNatural) return null;
     if (message.agentReport?.compactNatural || message.agentReport?.debug?.compactNatural) return null;
     const hasBrain = Boolean(message.agentReport?.brain || message.agentReport?.brainContext);
     const canCreate = message.kind === "plan" || message.content || message.agentReport;
