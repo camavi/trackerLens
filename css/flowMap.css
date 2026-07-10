@@ -1,7 +1,7 @@
 /* Flow Map CSS entrypoint. Keep imports ordered; edit partials in css/flow-map/. */
 @import url("./flow-map/shell-palette.css?v=agent-runtime-v1-2");
 @import url("./flow-map/node-builder.css");
-@import url("./flow-map/prompt-chat.css");
+@import url("./flow-map/prompt-chat.css?v=flow-chat-md-1");
 @import url("./flow-map/canvas-nodes.css?v=kg-20260709-canvas-node-menu-9");
 @import url("./flow-map/inspector-config.css?v=kg-20260708-preview-graph-ui-2");
 @import url("./flow-map/status-responsive.css?v=agent-runtime-v1-2");

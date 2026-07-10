@@ -8479,12 +8479,13 @@ const openFlowPromptChatDialog = async (options = {}) => {
 
   const renderInlineMarkdown = (text = "") => {
     const parts = [];
-    const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g;
     let cursor = 0;
     String(text || "").replace(pattern, (match, _token, offset) => {
       if (offset > cursor) parts.push(text.slice(cursor, offset));
       if (match.startsWith("`")) parts.push(_.code(match.slice(1, -1)));
-      else parts.push(_.strong(match.slice(2, -2)));
+      else if (match.startsWith("**")) parts.push(_.strong(match.slice(2, -2)));
+      else parts.push(_.em(match.slice(1, -1)));
       cursor = offset + match.length;
       return match;
     });
@@ -8492,25 +8493,83 @@ const openFlowPromptChatDialog = async (options = {}) => {
     return parts.length ? parts : [text];
   };
 
+  const renderMarkdownLine = (line = "") => {
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      return _.p(
+        { class: `tl-flow-prompt-message-line is-heading is-h${Math.min(4, heading[1].length)}` },
+        ...renderInlineMarkdown(heading[2])
+      );
+    }
+    const quote = line.match(/^>\s+(.+)$/);
+    if (quote) {
+      return _.blockquote(
+        { class: "tl-flow-prompt-message-quote" },
+        ...renderInlineMarkdown(quote[1])
+      );
+    }
+    if (/^[-*_]{3,}$/.test(line)) return _.hr({ class: "tl-flow-prompt-message-rule" });
+    const ordered = line.match(/^(\d+)[.)]\s+(.+)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (ordered || bullet) {
+      return _.p(
+        { class: "tl-flow-prompt-message-line is-list" },
+        _.span({ class: "tl-flow-prompt-message-marker" }, ordered ? `${ordered[1]}.` : "•"),
+        _.span(...renderInlineMarkdown(ordered ? ordered[2] : bullet[1]))
+      );
+    }
+    return _.p({ class: "tl-flow-prompt-message-line" }, ...renderInlineMarkdown(line));
+  };
+
   const renderMessageContent = (content = "") => {
     const raw = String(content || "");
     if (!raw.trim()) return _.p("");
-    const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length <= 1) return _.p(...renderInlineMarkdown(raw.trim()));
+    const blocks = [];
+    const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+    let codeFence = null;
+    let paragraph = [];
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      blocks.push(...paragraph.map((line) => renderMarkdownLine(line)));
+      paragraph = [];
+    };
+    lines.forEach((rawLine) => {
+      const fence = rawLine.match(/^```([\w-]*)\s*$/);
+      if (fence) {
+        if (codeFence) {
+          blocks.push(_.pre(
+            { class: "tl-flow-prompt-message-codeblock" },
+            _.code(codeFence.lines.join("\n"))
+          ));
+          codeFence = null;
+        } else {
+          flushParagraph();
+          codeFence = { language: fence[1] || "", lines: [] };
+        }
+        return;
+      }
+      if (codeFence) {
+        codeFence.lines.push(rawLine);
+        return;
+      }
+      const line = rawLine.trim();
+      if (!line) {
+        flushParagraph();
+        return;
+      }
+      paragraph.push(line);
+    });
+    if (codeFence) {
+      blocks.push(_.pre(
+        { class: "tl-flow-prompt-message-codeblock" },
+        _.code(codeFence.lines.join("\n"))
+      ));
+    }
+    flushParagraph();
+    if (blocks.length <= 1) return blocks[0] || _.p("");
     return _.div(
       { class: "tl-flow-prompt-message-body" },
-      ...lines.map((line) => {
-        const ordered = line.match(/^(\d+)[.)]\s+(.+)$/);
-        const bullet = line.match(/^[-*]\s+(.+)$/);
-        if (ordered || bullet) {
-          return _.p(
-            { class: "tl-flow-prompt-message-line is-list" },
-            _.span({ class: "tl-flow-prompt-message-marker" }, ordered ? `${ordered[1]}.` : "•"),
-            _.span(...renderInlineMarkdown(ordered ? ordered[2] : bullet[1]))
-          );
-        }
-        return _.p({ class: "tl-flow-prompt-message-line" }, ...renderInlineMarkdown(line));
-      })
+      ...blocks
     );
   };
 
