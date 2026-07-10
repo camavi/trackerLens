@@ -670,6 +670,24 @@ const flowPromptLanguageName = (lang = "it") => ({
 const flowPromptLanguageRule = (prompt = "") =>
   `Golden language rule: answer in ${flowPromptLanguageName(flowPromptQuestionLanguage(prompt))}, the same language as the user request.`;
 
+const flowPromptIsSimpleDefinitionQuestion = (prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  const asksDefinition = flowPromptHasAny(text, [
+    "cosa e", "cosa è", "che cos e", "che cos'è", "cos e", "cos'è", "what is", "what's", "define",
+  ]);
+  const target = flowPromptHasAny(text, ["flow map", "flowmap", "flow-map"]);
+  const asksMutation = flowPromptHasAny(text, ["crea", "creare", "applica", "modifica", "fix", "sistema", "create", "apply", "update"]);
+  return asksDefinition && target && !asksMutation;
+};
+
+const flowPromptLocalDefinitionAnswer = (prompt = "") => {
+  const lang = flowPromptQuestionLanguage(prompt);
+  if (lang === "en") {
+    return "Flow Map is the Trackers Lens runtime graph: a workspace where nodes, links, ports, channels, events and logs describe how data moves and how AI/runtime components work together. It is not just a visual canvas; it is the operational map that the runtime can inspect, validate, trace and eventually execute.";
+  }
+  return "Il Flow Map è il grafo runtime di Trackers Lens: uno spazio dove nodi, link, porte, canali, eventi e log descrivono come si muovono i dati e come collaborano componenti AI/runtime. Non è solo una canvas visuale: è la mappa operativa che il runtime può ispezionare, validare, tracciare e poi eseguire in modo controllato.";
+};
+
 const flowPromptUiText = (key = "", lang = "en") => {
   const dictionary = {
     brainDetails: { en: "Brain details", it: "Dettagli Brain" },
@@ -1542,6 +1560,7 @@ const flowPromptBrainPaletteContext = () =>
   flowPromptPaletteContract().slice(0, 80);
 
 const flowPromptShouldUseBrain = (intent = "", prompt = "") => {
+  if (flowPromptIsSimpleDefinitionQuestion(prompt)) return false;
   if (["advice", "explain", "summary", "memory"].includes(intent)) return true;
   if (!["nodes", "edges", "channels", "config", "database"].includes(intent)) return false;
   return flowPromptHasAny(prompt, [
@@ -4593,6 +4612,12 @@ const flowPromptRunFlowChatHardeningTests = async () => {
         && !flowPromptShouldPlanFromPrompt("mi spieghi Agent Bridge in 3 punti", { lastPlan: plan, referencesPrevious: true }),
     },
     {
+      name: "simple Flow Map definition stays local",
+      ok: flowPromptIsSimpleDefinitionQuestion("cosa è il Flow Map?")
+        && !flowPromptShouldUseBrain("explain", "cosa è il Flow Map?")
+        && flowPromptLocalDefinitionAnswer("cosa è il Flow Map?").includes("grafo runtime"),
+    },
+    {
       name: "agent runtime RAG doc registered",
       ok: FLOW_PROMPT_BRAIN_DOCS.some((doc) => doc.id === "doc-agent-runtime"),
     },
@@ -4701,7 +4726,9 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
     parts.push("Ho capito la richiesta di modifica, ma nel livello 1 lavoro ancora in modalita read-only: posso analizzare e preparare il contesto, non applicare cambiamenti automatici.");
   }
 
-  if (brain?.answer && !pendingAction) {
+  if (flowPromptIsSimpleDefinitionQuestion(prompt) && !pendingAction) {
+    parts.push(flowPromptLocalDefinitionAnswer(prompt));
+  } else if (brain?.answer && !pendingAction) {
     parts.push(brain.answer);
   } else if (wantsAgentRuntime && queryModel.agentRuntime?.available && !pendingAction) {
     const runtime = queryModel.agentRuntime;
