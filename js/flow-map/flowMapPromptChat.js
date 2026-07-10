@@ -4,6 +4,30 @@ const FLOW_PROMPT_CHAT_STORE = () =>
 
 const flowPromptNow = () => new Date().toISOString();
 
+const FLOW_PROMPT_CHAT_OPEN_STATE_PREFIX = "trackersLens.flowPromptChat.openState";
+
+const flowPromptCurrentWorkspaceForStorage = () =>
+  (typeof currentWorkspaceId === "function" ? currentWorkspaceId() : "") || "runtime";
+
+const flowPromptOpenStateKey = (workspaceId = flowPromptCurrentWorkspaceForStorage()) =>
+  `${FLOW_PROMPT_CHAT_OPEN_STATE_PREFIX}.${encodeURIComponent(workspaceId || "runtime")}`;
+
+const flowPromptSaveOpenState = (isOpen = false, workspaceId = flowPromptCurrentWorkspaceForStorage()) => {
+  try {
+    window.localStorage?.setItem?.(flowPromptOpenStateKey(workspaceId), isOpen ? "open" : "closed");
+  } catch (_) {
+    // localStorage can be blocked in private/plugin contexts.
+  }
+};
+
+const flowPromptShouldRestoreOpen = (workspaceId = flowPromptCurrentWorkspaceForStorage()) => {
+  try {
+    return window.localStorage?.getItem?.(flowPromptOpenStateKey(workspaceId)) === "open";
+  } catch (_) {
+    return false;
+  }
+};
+
 const flowPromptMessageId = (prefix = "msg") =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -101,8 +125,16 @@ const flowPromptNewChat = (workspaceId = currentWorkspaceId()) => ({
 });
 
 const flowPromptPlanSnapshot = (analysis = {}) => ({
+  prompt: analysis.prompt || "",
   summary: analysis.summary || "",
   planner: analysis.planner || {},
+  notice: analysis.planner?.mode === "fallback" && analysis.planner?.error
+    ? `Avviso AI: ${analysis.planner.error}`
+    : "",
+  conversationContext: analysis.conversationContext || null,
+  memoryGuard: analysis.memoryGuard || null,
+  preflight: flowPromptPlanPreflight(analysis),
+  similarPatterns: (analysis.approvedPatterns || []).slice(0, 3),
   nodes: (analysis.analyzedNodes || []).map((item) => ({
     label: item.spec?.label || "",
     type: item.spec?.type || "",
@@ -113,6 +145,8 @@ const flowPromptPlanSnapshot = (analysis = {}) => ({
     existingLabel: item.existing?.label || "",
   })),
   edges: (analysis.analyzedEdges || []).map((edge) => ({
+    sourceKey: edge.sourceKey || edge.source?.label || "",
+    targetKey: edge.targetKey || edge.target?.label || "",
     sourceLabel: edge.source?.label || edge.sourceKey || "",
     targetLabel: edge.target?.label || edge.targetKey || "",
     sourcePort: edge.sourcePort || "",
@@ -121,12 +155,157 @@ const flowPromptPlanSnapshot = (analysis = {}) => ({
   })),
 });
 
+const flowPromptConversationContext = (messages = [], prompt = "") => {
+  const list = Array.isArray(messages) ? messages : [];
+  const recent = list
+    .slice(-8)
+    .map((message) => ({
+      role: message.role || "",
+      kind: message.kind || "text",
+      content: String(message.content || "").replace(/\s+/g, " ").slice(0, 260),
+      feedback: message.feedback?.rating || "",
+    }))
+    .filter((item) => item.content);
+  const lastPlanMessage = [...list].reverse().find((message) => message.kind === "plan" && message.plan);
+  const lastReportMessage = [...list].reverse().find((message) => message.kind === "agent-report" && message.agentReport);
+  const lastPlan = lastPlanMessage?.plan ? {
+    messageId: lastPlanMessage.id || "",
+    summary: lastPlanMessage.plan.summary || lastPlanMessage.content || "",
+    nodes: (lastPlanMessage.plan.nodes || []).map((node) => node.label).filter(Boolean).slice(0, 12),
+    edges: (lastPlanMessage.plan.edges || []).map((edge) =>
+      `${edge.sourceLabel || edge.sourceKey || ""} -> ${edge.targetLabel || edge.targetKey || ""}`.trim()
+    ).filter((edge) => edge && edge !== "->").slice(0, 12),
+  } : null;
+  const normalized = flowPromptNormalize(prompt);
+  const referencesPrevious = flowPromptHasAny(normalized, [
+    "quello", "quella", "prima", "precedente", "stesso", "stessa", "rifallo", "rifai", "come prima", "secondo",
+    "that", "previous", "same", "again", "redo", "second",
+    "eso", "anterior", "mismo", "refaz", "refais", "vorher",
+  ]);
+  const constraints = [
+    flowPromptHasAny(normalized, ["senza split", "no split", "non usare split", "without split"]) ? "avoid Split" : "",
+    flowPromptHasAny(normalized, ["usa condition", "aggiungi condition", "con condition", "use condition"]) ? "add/use Condition" : "",
+    flowPromptHasAny(normalized, ["flow in", "flow out", "in/out", "boundary", "confine"]) ? "include Flow In/Out boundary if useful" : "",
+    flowPromptHasAny(normalized, ["piu semplice", "più semplice", "semplifica", "simpler", "simplify"]) ? "simplify previous plan" : "",
+    flowPromptHasAny(normalized, ["spiega", "spiegami", "explain"]) ? "answer as explanation unless creation is explicit" : "",
+    flowPromptHasAny(normalized, ["ora crealo", "crealo", "create it", "apply it"]) ? "user may refer to creating previous plan" : "",
+  ].filter(Boolean);
+  const hasContext = Boolean(referencesPrevious || constraints.length || lastPlan || lastReportMessage);
+  if (!hasContext) return null;
+  return {
+    version: "flow-chat-conversation/v1",
+    active: true,
+    referencesPrevious,
+    constraints,
+    recent,
+    lastPlan,
+    lastReport: lastReportMessage ? {
+      messageId: lastReportMessage.id || "",
+      intent: lastReportMessage.agentReport?.intent || "",
+      summary: lastReportMessage.content || lastReportMessage.agentReport?.content || "",
+    } : null,
+  };
+};
+
+const flowPromptConversationContextLabel = (conversationContext = null) => {
+  if (!conversationContext?.active) return "";
+  const bits = [
+    conversationContext.referencesPrevious ? "usa il contesto precedente" : "",
+    conversationContext.lastPlan?.nodes?.length ? `${conversationContext.lastPlan.nodes.length} nodi dal piano precedente` : "",
+    ...(conversationContext.constraints || []).slice(0, 2),
+  ].filter(Boolean);
+  return bits.join(" · ") || "contesto chat attivo";
+};
+
+const flowPromptLastPlanActionIntent = (prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  if (!text) return "";
+  const strong = [
+    "crealo", "crea questo", "crea il flow", "crea flow", "ora crealo", "ok crealo", "applica", "applica questo",
+    "procedi", "vai", "esegui", "esegui questo", "crea da questo piano",
+    "create it", "apply it", "go ahead", "proceed", "create this flow",
+    "aplicalo", "crealo ahora", "appliquer", "erstelle es",
+  ];
+  if (flowPromptHasAny(text, strong)) return "apply";
+  const prepare = [
+    "usa questo", "usa questo piano", "prendi questo", "carica questo", "prepara questo", "lo voglio",
+    "use this", "load this", "prepare this", "use this plan",
+  ];
+  if (flowPromptHasAny(text, prepare)) return "prepare";
+  return "";
+};
+
 const flowPromptResultSummary = (result = {}) => ({
   createdNodes: result.savedNodes?.length || 0,
   reusedNodes: result.reusedNodes?.length || 0,
   createdEdges: result.createdEdges?.length || 0,
   reusedEdges: result.reusedEdges?.length || 0,
+  warnings: result.warnings || [],
+  snapshotId: result.snapshotId || "",
+  preflight: result.preflight || null,
+  completion: result.completion || null,
 });
+
+const flowPromptBuildCompletionSummary = (analysis = {}, result = {}, preflight = null) => {
+  const createdNodeLabels = (result.savedNodes || [])
+    .map((node) => node.label || node.name || node.metadata?.paletteLabel || node.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  const reusedNodeLabels = (result.reusedNodes || [])
+    .map((node) => node.label || node.name || node.metadata?.paletteLabel || node.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  const linkLabels = (preflight?.edges || [])
+    .filter((edge) => edge.status !== "blocked")
+    .map((edge) => `${edge.sourceLabel || "source"} -> ${edge.targetLabel || "target"}`)
+    .filter(Boolean)
+    .slice(0, 8);
+  const createdCount = result.savedNodes?.length || 0;
+  const reusedCount = result.reusedNodes?.length || 0;
+  const edgeCount = result.createdEdges?.length || 0;
+  const reusedEdgeCount = result.reusedEdges?.length || 0;
+  const goal = analysis.summary || "Flow applicato con controllo.";
+  const details = [
+    createdCount ? `Creati ${createdCount} nodi: ${createdNodeLabels.join(", ")}.` : "",
+    reusedCount ? `Riusati ${reusedCount} nodi esistenti: ${reusedNodeLabels.join(", ")}.` : "",
+    edgeCount ? `Creati ${edgeCount} collegamenti validati.` : "",
+    reusedEdgeCount ? `Riusati ${reusedEdgeCount} collegamenti gia presenti.` : "",
+  ].filter(Boolean);
+  return {
+    status: "Obiettivo raggiunto",
+    goal,
+    details: details.length ? details : ["Il piano e stato applicato senza modifiche aggiuntive."],
+    links: linkLabels,
+    warningCount: result.warnings?.length || 0,
+    nextStep: result.warnings?.length
+      ? "Controlla i warning oppure usa Undo se vuoi ripristinare lo stato precedente."
+      : "Puoi testare il flow, aprire Inspector sui nodi creati o usare Undo per tornare allo stato precedente.",
+  };
+};
+
+const flowPromptBuildWorkLeadSummary = (plan = {}) => {
+  const nodes = plan.nodes || [];
+  const edges = plan.edges || [];
+  const preflight = plan.preflight || null;
+  const hasRepair = Boolean(plan.planner?.selfRepair?.attempts);
+  const warnings = preflight?.warnings?.length || 0;
+  const blockers = preflight?.blockers?.length || 0;
+  return {
+    objective: plan.summary || "Piano Flow Chat pronto.",
+    constraints: [
+      plan.conversationContext?.active ? flowPromptConversationContextLabel(plan.conversationContext) : "",
+      plan.memoryGuard ? "memoria negativa considerata" : "",
+      hasRepair ? `self-repair ${plan.planner.selfRepair.attempts}` : "",
+    ].filter(Boolean),
+    plan: `${nodes.length} nodi, ${edges.length} collegamenti`,
+    verification: blockers
+      ? `${blockers} blocchi da correggere`
+      : warnings
+        ? `${warnings} warning, applicazione consentita con controllo`
+        : "preflight valido",
+    next: blockers ? "correggi o rigenera il piano" : "puoi applicare con Crea flow",
+  };
+};
 
 const flowPromptNormalize = (value = "") =>
   String(value || "")
@@ -371,6 +550,21 @@ const flowPromptPaletteItemForAiNode = (node = {}) => {
   ) || null;
 };
 
+const flowPromptStrictPaletteItemForAiNode = (node = {}) => {
+  const labelMatch = flowPromptPaletteItem(node.label || node.name || node.paletteLabel);
+  if (labelMatch) return labelMatch;
+  const type = flowPromptNormalize(node.type || node.nodeType);
+  const subtype = flowPromptNormalize(node.subtype);
+  if (!subtype) return null;
+  return flatPalette().find((item) =>
+    type &&
+    flowPromptNormalize(item.nodeType) === type &&
+    flowPromptNormalize(item.subtype) === subtype
+  ) || flatPalette().find((item) =>
+    flowPromptNormalize(item.subtype) === subtype
+  ) || null;
+};
+
 const flowPromptSpecFromPalette = (label, overrides = {}) => {
   const item = flowPromptPaletteItem(label) || {};
   return {
@@ -439,6 +633,51 @@ const flowPromptIsCreationRequest = (prompt = "") =>
     "nuovo flow", "new flow", "pipeline", "workflow",
   ]);
 
+const flowPromptQuestionLanguage = (prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  const scores = {
+    it: ["mi ", " spieg", "spieg", "che ", "cosa", "quale", "quali", "nodo", "nodi", "agente", "agenti", "collegamento", "perche", "perché", "in punti"],
+    es: ["que ", "qué ", "como", "cómo", "nodo", "agente", "explica", "dime", "en puntos"],
+    fr: ["que ", "quoi", "comment", "noeud", "agent", "explique", "dis moi", "en points"],
+    de: ["was ", "wie ", "knoten", "agent", "erklar", "erklär", "punkte"],
+    en: ["what", "which", "how", "explain", "tell me", "node", "agent", "workflow", "in points"],
+  };
+  const ranked = Object.entries(scores)
+    .map(([lang, tokens]) => [lang, tokens.reduce((sum, token) => sum + (text.includes(flowPromptNormalize(token)) ? 1 : 0), 0)])
+    .sort((a, b) => b[1] - a[1]);
+  return ranked[0]?.[1] > 0 ? ranked[0][0] : "it";
+};
+
+const flowPromptLanguageName = (lang = "it") => ({
+  it: "Italian",
+  en: "English",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+})[lang] || "the same language as the user request";
+
+const flowPromptLanguageRule = (prompt = "") =>
+  `Golden language rule: answer in ${flowPromptLanguageName(flowPromptQuestionLanguage(prompt))}, the same language as the user request.`;
+
+const flowPromptIsArchitectureAdviceRequest = (prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  const asksAdvice = flowPromptHasAny(text, [
+    "consiglia", "consigliami", "suggerisci", "suggerire", "mi dici", "dimmi", "quale nodo", "che nodo",
+    "quale node", "che node", "node da inserire", "node da insertare", "nodo da inserire", "nodo da insertare",
+    "serve per", "best practice", "architettura", "professionale", "capo lavoro", "come posso", "come possiamo",
+    "come render", "pattern", "progetta", "disegna",
+  ]);
+  const asksDesignTarget = flowPromptHasAny(text, [
+    "flow", "pipeline", "workflow", "agent", "agente", "agenti", "orchestrator", "orchestratore",
+    "node", "nodo", "nodi", "edge", "edges", "link", "collegamento", "input", "output", " in ", " out ",
+    "in/out", "out/in", "dividere", "separare", "split", "router", "routing", "porta", "porte",
+  ]);
+  const asksCurrentInventory = flowPromptIsInventoryQuestion(prompt) && !flowPromptHasAny(text, [
+    "da inserire", "da insertare", "serve per", "consiglia", "suggerisci", "best practice", "pattern",
+  ]);
+  return asksAdvice && asksDesignTarget && !asksCurrentInventory;
+};
+
 const flowPromptLooksLikeFlowRequest = (prompt = "") =>
   flowPromptIsCreationRequest(prompt) || flowPromptHasAny(prompt, [
     "flow", "pipeline", "workflow", "agent", "agente", "orchestrator", "orchestratore", "node", "nodo", "nodi",
@@ -446,12 +685,24 @@ const flowPromptLooksLikeFlowRequest = (prompt = "") =>
     "storage", "notification", "notifica",
   ]);
 
+const flowPromptShouldPlanFromPrompt = (prompt = "", conversationContext = null) => {
+  if (flowPromptLooksLikeFlowRequest(prompt)) return true;
+  if (!conversationContext?.lastPlan) return false;
+  const text = flowPromptNormalize(prompt);
+  if (flowPromptHasAny(text, [
+    "spiega", "spiegami", "explain", "perche", "perché", "why", "cosa", "what is",
+  ]) && !flowPromptHasAny(text, [
+    "rifallo", "rifai", "crea", "crealo", "aggiorna", "aggiungi", "senza", "usa", "use", "add", "without", "redo",
+  ])) return false;
+  return Boolean(conversationContext.referencesPrevious || conversationContext.constraints?.length);
+};
+
 const flowPromptIsReadOnlyRuntimeQuestion = (prompt = "") => {
   const text = flowPromptNormalize(prompt);
   if (flowPromptIsMutationRequest(prompt) || flowPromptIsCreationRequest(prompt)) return false;
   const asks = flowPromptHasAny(text, [
     "che", "cosa", "quale", "quali", "quanto", "quanti", "quante", "dimmi", "mostra", "mostrami",
-    "lista", "elenca", "spiega", "sai", "stai usando", "sto usando", "what", "which", "show", "list",
+    "lista", "elenca", "spiega", "spieghi", "spiegami", "sai", "stai usando", "sto usando", "what", "which", "show", "list",
     "tell me", "how many",
   ]);
   const runtimeSubject = flowPromptHasAny(text, [
@@ -476,8 +727,8 @@ const flowPromptIsMutationRequest = (prompt = "") =>
 const flowPromptIsAgentQuestion = (prompt = "") => {
   if (flowPromptIsCreationRequest(prompt)) return false;
   const text = flowPromptNormalize(prompt);
-  return flowPromptIsInventoryQuestion(prompt) || flowPromptIsReadOnlyRuntimeQuestion(prompt) || flowPromptHasAny(text, [
-    "spiega", "spiegami", "explain", "analizza", "analisi", "diagnosi", "diagnostica", "controlla",
+  return flowPromptIsArchitectureAdviceRequest(prompt) || flowPromptIsInventoryQuestion(prompt) || flowPromptIsReadOnlyRuntimeQuestion(prompt) || flowPromptHasAny(text, [
+    "spiega", "spieghi", "spiegami", "explain", "analizza", "analisi", "diagnosi", "diagnostica", "controlla",
     "impatto", "impact", "cosa succede", "cosa succederebbe", "dipendenze", "dependencies",
     "errore", "errori", "warning", "problema", "problemi", "rotto", "broken", "invalid",
     "collegamenti", "links", "edges", "canali", "channels", "eventi", "events", "log", "logs",
@@ -495,6 +746,7 @@ const flowPromptAgentIntent = (prompt = "") => {
   const asksRuntimeErrors = flowPromptHasAny(text, ["runtime"]) && flowPromptHasAny(text, [
     "errore", "errori", "error", "errors", "failed", "failure",
   ]);
+  if (flowPromptIsArchitectureAdviceRequest(prompt)) return "advice";
   if (
     flowPromptHasAny(text, ["elimina", "elimini", "elimine", "eliminare", "cancella", "cancellare", "rimuovi", "remove", "delete"]) &&
     !flowPromptHasAny(text, ["collegamento", "collegamenti", "link", "edge", "dependency"]) &&
@@ -517,7 +769,7 @@ const flowPromptAgentIntent = (prompt = "") => {
   if (flowPromptHasAny(text, ["config", "configurazione", "settings", "impostazioni", "provider", "modello", "model", "endpoint", "url", "method", "metodo"])) return "config";
   if (flowPromptHasAny(text, ["memoria", "memory", "ricordi", "remember"])) return "memory";
   if (flowPromptIsInventoryQuestion(text) || flowPromptHasAny(text, ["node", "nodi", "nodes", "inventario", "inventory"])) return "nodes";
-  if (flowPromptHasAny(text, ["spiega", "spiegami", "explain", "come funziona", "what is", "workspace", "flow map"])) return "explain";
+  if (flowPromptHasAny(text, ["spiega", "spieghi", "spiegami", "explain", "come funziona", "what is", "workspace", "flow map"])) return "explain";
   if (flowPromptHasAny(text, ["db", "database", "indexeddb"])) return "database";
   return "summary";
 };
@@ -1057,6 +1309,368 @@ const flowPromptBuildRuntimeQueryModel = async ({ context = {}, prompt = "", que
   };
 };
 
+const flowPromptBrainKnowledgeBase = () => [
+  {
+    id: "identity-runtime-os",
+    title: "Trackers Lens identity",
+    tags: ["identity", "architecture"],
+    text: "Trackers Lens is a local-first AI Runtime Operating Environment. Treat Flow Map as a runtime graph of nodes, dependencies, channels, events and logs, not as a generic dashboard canvas.",
+  },
+  {
+    id: "authority-runtime",
+    title: "Runtime authority",
+    tags: ["safety", "authority"],
+    text: "The LLM can plan and explain, but runtime data, palette nodes, ports, dependencies and safe executor validation are the source of truth.",
+  },
+  {
+    id: "agent-pattern",
+    title: "Professional agent pattern",
+    tags: ["agent", "orchestrator", "bridge"],
+    text: "For professional multi-step agent flows, prefer Task Node -> Orchestrator Agent -> Agent Bridge. The Orchestrator Agent owns decisions; Agent Bridge separates agent_control input from action output.",
+  },
+  {
+    id: "boundary-pattern",
+    title: "Composable Flow Map boundary",
+    tags: ["flow-in", "flow-out", "boundary", "ports"],
+    text: "Use Flow In and Flow Out to expose typed boundaries when a Flow Map must be embedded or reused. Do not use Flow In/Out merely to split one edge inside the same graph.",
+  },
+  {
+    id: "routing-pattern",
+    title: "Routing and split pattern",
+    tags: ["split", "condition", "routing"],
+    text: "Use Split to fan out the same payload to two branches. Use Condition when routing depends on validation, state, or a true/false decision.",
+  },
+  {
+    id: "debug-pattern",
+    title: "Debug pattern",
+    tags: ["preview", "debug"],
+    text: "Use Preview after critical branches while designing. It makes runtime payloads visible before connecting actions, storage or AI agents.",
+  },
+  {
+    id: "memory-rag-pattern",
+    title: "Brain pattern",
+    tags: ["memory", "rag", "llm"],
+    text: "A Codex-like Trackers Lens assistant should use memory for confirmed user/workspace facts, RAG for product knowledge, an LLM for reasoning and natural language, and local validators before any Apply.",
+  },
+];
+
+const FLOW_PROMPT_BRAIN_DOCS = [
+  { id: "doc-ai-entry", title: "AI entrypoint", url: "AI.md", tags: ["entrypoint", "rules"] },
+  { id: "doc-project-state", title: "Project state", url: "docs/ai/project-state.md", tags: ["identity", "runtime"] },
+  { id: "doc-architecture", title: "Architecture rules", url: "docs/ai/architecture.md", tags: ["architecture", "rules"] },
+  { id: "doc-flow-overview", title: "Flow Map overview", url: "docs/ai/flow-map/overview.md", tags: ["flow-map", "runtime"] },
+  { id: "doc-flow-chat", title: "Flow Chat agent", url: "docs/ai/flow-map/prompt-chat.md", tags: ["flow-chat", "agent"] },
+  { id: "doc-safe-executor", title: "Safe executor", url: "docs/ai/flow-map/safe-executor.md", tags: ["safe-executor", "mutation"] },
+  { id: "doc-runtime-graph", title: "Runtime graph", url: "docs/ai/flow-map/runtime-graph.md", tags: ["runtime", "graph"] },
+  { id: "doc-ai-memory", title: "AI memory runtime", url: "docs/ai/runtime/ai-memory.md", tags: ["memory", "workspace"] },
+];
+
+let flowPromptBrainDocCache = null;
+
+const flowPromptBrainTokens = (text = "") =>
+  flowPromptNormalize(text)
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2);
+
+const flowPromptBrainTrimDocText = (text = "") =>
+  String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[#>*_\-[\]()`]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2400);
+
+const flowPromptLoadBrainDocs = async () => {
+  if (flowPromptBrainDocCache) return flowPromptBrainDocCache;
+  if (typeof fetch !== "function") {
+    flowPromptBrainDocCache = [];
+    return flowPromptBrainDocCache;
+  }
+  const docs = await Promise.all(FLOW_PROMPT_BRAIN_DOCS.map(async (doc) => {
+    try {
+      const response = await fetch(doc.url, { cache: "force-cache" });
+      if (!response.ok) return null;
+      const text = flowPromptBrainTrimDocText(await response.text());
+      if (!text) return null;
+      return {
+        id: doc.id,
+        title: doc.title,
+        tags: doc.tags,
+        text,
+        url: doc.url,
+        source: "docs",
+      };
+    } catch (_) {
+      return null;
+    }
+  }));
+  flowPromptBrainDocCache = docs.filter(Boolean);
+  return flowPromptBrainDocCache;
+};
+
+const flowPromptScoreBrainItems = (items = [], { prompt = "", intent = "", limit = 5 } = {}) => {
+  const tokens = new Set([...flowPromptBrainTokens(prompt), flowPromptNormalize(intent)].filter(Boolean));
+  return items
+    .map((item) => {
+      const haystack = flowPromptNormalize([item.title, item.text, ...(item.tags || [])].join(" "));
+      const score = Array.from(tokens).reduce((sum, token) => {
+        if (!token) return sum;
+        if ((item.tags || []).some((tag) => flowPromptNormalize(tag).includes(token))) return sum + 3;
+        if (flowPromptNormalize(item.title).includes(token)) return sum + 2;
+        return sum + (haystack.includes(token) ? 1 : 0);
+      }, 0);
+      return { ...item, score };
+    })
+    .filter((item) => item.score > 0 || ["identity-runtime-os", "authority-runtime"].includes(item.id))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+};
+
+const flowPromptBrainRag = async ({ prompt = "", intent = "", limit = 6 } = {}) => {
+  const docs = await flowPromptLoadBrainDocs();
+  const localItems = flowPromptBrainKnowledgeBase().map((item) => ({ ...item, source: "built-in" }));
+  const scored = flowPromptScoreBrainItems([...docs, ...localItems], { prompt, intent, limit });
+  return scored.map((item) => ({
+    ...item,
+    text: String(item.text || "").slice(0, item.source === "docs" ? 1200 : 700),
+  }));
+};
+
+const flowPromptBrainPaletteContext = () =>
+  flowPromptPaletteContract().slice(0, 80);
+
+const flowPromptShouldUseBrain = (intent = "", prompt = "") => {
+  if (["advice", "explain", "summary", "memory"].includes(intent)) return true;
+  if (!["nodes", "edges", "channels", "config", "database"].includes(intent)) return false;
+  return flowPromptHasAny(prompt, [
+    "spiega", "spieghi", "spiegami", "come funziona", "perche", "perché", "why", "what is", "cosa e", "cosa è",
+    "migliore", "meglio", "professionale", "architettura", "pattern", "best practice",
+  ]);
+};
+
+const flowPromptBuildBrainContext = async ({ context = {}, prompt = "", routePrompt = "", intent = "", queryModel = {}, memory = [], approvedPatterns = [], rejectedPatterns = [], memoryGuard = null, conversationContext = null, architectureAdvice = null } = {}) => {
+  const rag = await flowPromptBrainRag({ prompt, intent });
+  return {
+    version: "flow-chat-brain-context/v1",
+    prompt,
+    routePrompt: routePrompt && routePrompt !== prompt ? routePrompt : "",
+    isRefinement: Boolean(routePrompt && routePrompt !== prompt),
+    intent,
+    workspace: {
+      id: context.workspaceId || currentWorkspaceId() || "",
+      name: context.workspaceName || currentWorkspaceName() || "",
+    },
+    runtimeFacts: {
+      nodes: context.nodes?.length || 0,
+      edges: context.edges?.length || 0,
+      channels: context.channels?.length || 0,
+      events: context.events?.length || 0,
+      logs: context.flowLogs?.length || 0,
+    },
+    palette: flowPromptBrainPaletteContext(),
+    currentNodes: (context.nodes || []).slice(0, 30).map((node) => ({
+      id: node.id,
+      label: node.label,
+      type: node.type,
+      subtype: node.subtype,
+      category: node.category,
+      inputs: node.inputs || [],
+      outputs: node.outputs || [],
+    })),
+    selectedRuntime: {
+      nodes: (queryModel.nodes || []).slice(0, 5).map((item) => ({
+        label: item.node?.label || item.node?.id || "",
+        inputs: item.node?.inputs || [],
+        outputs: item.node?.outputs || [],
+        inLinks: item.connectivity?.incoming?.length || 0,
+        outLinks: item.connectivity?.outgoing?.length || 0,
+      })),
+      errors: (queryModel.runtime?.errorInsights || []).slice(0, 4),
+      settings: queryModel.settings || {},
+    },
+    memory: (memory || []).slice(0, 6).map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      name: item.name,
+      text: item.text || item.summary || item.content || "",
+      tags: item.tags || [],
+    })),
+    approvedPatterns: (approvedPatterns || []).slice(0, 4).map((item) => ({
+      id: item.id,
+      name: item.name,
+      prompt: item.prompt,
+      nodes: item.nodes || [],
+      edges: item.edges || [],
+      text: String(item.text || "").slice(0, 420),
+      score: item.score || 0,
+    })),
+    rejectedPatterns: (rejectedPatterns || []).slice(0, 4).map((item) => ({
+      id: item.id,
+      name: item.name,
+      prompt: item.prompt,
+      nodes: item.nodes || [],
+      edges: item.edges || [],
+      text: String(item.text || "").slice(0, 360),
+      score: item.score || 0,
+    })),
+    memoryGuard: memoryGuard || null,
+    conversationContext: conversationContext || null,
+    rag,
+    localAdvice: architectureAdvice ? {
+      summary: architectureAdvice.summary,
+      pattern: architectureAdvice.pattern,
+      recommendations: (architectureAdvice.recommendations || []).map((item) => ({
+        label: item.label,
+        role: item.role,
+        reason: item.reason,
+        inputs: item.inputs || [],
+        outputs: item.outputs || [],
+      })),
+    } : null,
+  };
+};
+
+const flowPromptNormalizeBrainIntent = (value = "") => {
+  const normalized = flowPromptNormalize(value);
+  if (["advice", "architecture_advice", "architecture-advice"].includes(normalized)) return "advice";
+  if (["query", "runtime_query", "runtime-query", "nodes", "edges", "channels", "runtime", "diagnostics", "config", "memory", "database", "explain", "summary"].includes(normalized)) return "query";
+  if (["create", "createflow", "create_flow", "flow_creation"].includes(normalized)) return "createFlow";
+  if (["mutate", "mutation", "apply", "command"].includes(normalized)) return "mutate";
+  if (["debug", "fix", "diagnose"].includes(normalized)) return "debug";
+  return "query";
+};
+
+const flowPromptTrimCompleteText = (value = "", limit = 3200) => {
+  const text = String(value || "").trim();
+  if (text.length <= limit) return text;
+  const clipped = text.slice(0, limit);
+  const candidates = [
+    clipped.lastIndexOf("\n3."),
+    clipped.lastIndexOf("\n- "),
+    clipped.lastIndexOf(". "),
+    clipped.lastIndexOf("! "),
+    clipped.lastIndexOf("? "),
+    clipped.lastIndexOf("\n"),
+  ].filter((index) => index > Math.floor(limit * 0.62));
+  const cut = candidates.length ? Math.max(...candidates) + 1 : clipped.lastIndexOf(" ");
+  return `${clipped.slice(0, cut > 0 ? cut : limit).trim()}…`;
+};
+
+const flowPromptValidateBrainPayload = (payload = {}, brainContext = {}, fallbackIntent = "query") => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const paletteByLabel = new Map(flowPromptPaletteContract().map((item) => [flowPromptNormalize(item.label), item]));
+  const recommendedNodes = (Array.isArray(payload.recommendedNodes) ? payload.recommendedNodes : [])
+    .map((item) => {
+      const rawLabel = typeof item === "string" ? item : item?.label || item?.node || item?.name || "";
+      const paletteItem = paletteByLabel.get(flowPromptNormalize(rawLabel));
+      if (!paletteItem) return null;
+      return {
+        label: paletteItem.label,
+        role: String(item?.role || item?.purpose || "").slice(0, 160),
+        reason: String(item?.reason || item?.why || "").slice(0, 320),
+        inputs: paletteItem.inputs || [],
+        outputs: paletteItem.outputs || [],
+      };
+    })
+    .filter(Boolean);
+  const plan = (Array.isArray(payload.plan) ? payload.plan : [])
+    .map((step, index) => ({
+      order: Number(step?.order || index + 1),
+      title: String(step?.title || step?.step || `Step ${index + 1}`).slice(0, 120),
+      detail: String(step?.detail || step?.summary || "").slice(0, 320),
+      mutates: Boolean(step?.mutates),
+    }))
+    .slice(0, 8);
+  return {
+    version: "flow-chat-brain/v1",
+    intent: flowPromptNormalizeBrainIntent(payload.intent || fallbackIntent),
+    answer: flowPromptTrimCompleteText(payload.answer || payload.summary || "", 3200),
+    recommendedNodes,
+    plan,
+    needsConfirmation: Boolean(payload.needsConfirmation),
+    confidence: Math.max(0, Math.min(1, Number(payload.confidence || 0.6) || 0.6)),
+    sources: (Array.isArray(payload.sources) ? payload.sources : [])
+      .map((source) => String(source || "").trim())
+      .filter((source) => brainContext.rag?.some((item) => item.id === source))
+      .slice(0, 6),
+  };
+};
+
+const flowPromptBuildBrainPrompt = (brainContext = {}) => [
+  "You are the Trackers Lens Flow Chat Brain.",
+  flowPromptLanguageRule(brainContext.prompt || ""),
+  "Return only one valid JSON object.",
+  "Schema:",
+  "{\"intent\":\"advice|query|createFlow|mutate|debug\",\"answer\":\"natural answer\",\"recommendedNodes\":[{\"label\":\"palette label\",\"role\":\"short role\",\"reason\":\"why\"}],\"plan\":[{\"title\":\"step\",\"detail\":\"short detail\",\"mutates\":false}],\"needsConfirmation\":false,\"confidence\":0.0,\"sources\":[\"rag-id\"]}",
+  "Rules:",
+  "- Use only labels from context.palette in recommendedNodes.",
+  "- Runtime facts, current nodes, ports, memory and RAG context are authoritative.",
+  "- Do not claim a node/port/action exists unless it is in context.",
+  "- Treat context.approvedPatterns as user-confirmed good examples and context.rejectedPatterns as user-confirmed examples to avoid.",
+  "- Use context.conversationContext to resolve follow-up references such as previous, same, second node, simpler, without Split, or add Condition.",
+  "- Do not produce an executable mutation plan; for changes, explain that validation and Apply must use Trackers Lens tools.",
+  "- If the user asks for numbered points, complete every requested point with a full sentence; do not leave partial bullets.",
+  "- Be practical and concise, like a senior Trackers Lens operator.",
+  `context: ${JSON.stringify(brainContext)}`,
+].join("\n");
+
+const flowPromptCallBrainWithAi = async (brainContext = {}, fallbackIntent = "query") => {
+  const aiSettings = await flowPromptReadAiSettings();
+  const provider = await flowPromptPickProvider(aiSettings);
+  if (!provider) {
+    return {
+      version: "flow-chat-brain/v1",
+      intent: fallbackIntent,
+      answer: "",
+      recommendedNodes: [],
+      plan: [],
+      needsConfirmation: false,
+      confidence: 0,
+      sources: [],
+      planner: {
+        mode: "unavailable",
+        error: flowPromptFriendlyAiError(null, { aiSettings }),
+      },
+    };
+  }
+  const model = aiSettings.model || provider.model;
+  const prompt = flowPromptBuildBrainPrompt(brainContext);
+  const kind = flowPromptProviderKey(provider.provider || provider.name || provider.id);
+  try {
+    const ai = kind.includes("ollama")
+      ? await flowPromptCallOllama({ provider, model, prompt })
+      : await flowPromptCallOpenAiCompatible({ provider, model, prompt, aiSettings });
+    const payload = flowPromptFirstJsonObject(ai.text);
+    const validated = flowPromptValidateBrainPayload(payload, brainContext, fallbackIntent);
+    if (!validated?.answer && !validated?.recommendedNodes?.length && !validated?.plan?.length) return null;
+    return {
+      ...validated,
+      planner: {
+        provider: provider.name || provider.provider || aiSettings.provider || "",
+        model: ai.model || model || "",
+        mode: "llm-json",
+      },
+    };
+  } catch (error) {
+    return {
+      version: "flow-chat-brain/v1",
+      intent: fallbackIntent,
+      answer: "",
+      recommendedNodes: [],
+      plan: [],
+      needsConfirmation: false,
+      confidence: 0,
+      sources: [],
+      planner: {
+        mode: "unavailable",
+        error: flowPromptFriendlyAiError(error, { provider, aiSettings, model }),
+      },
+    };
+  }
+};
+
 const flowPromptReadWorkspaceMemory = async (prompt = "") => {
   if (!window.TrackerLensAiRuntimeStore?.buildMemoryContext) return [];
   return window.TrackerLensAiRuntimeStore.buildMemoryContext({
@@ -1076,6 +1690,134 @@ const flowPromptParseMemoryMeta = (memory = {}) => {
   } catch (_) {
     return {};
   }
+};
+
+const flowPromptPatternTokens = (value = "") =>
+  flowPromptNormalize(value)
+    .split(/\s+/)
+    .filter((token) => token.length > 2);
+
+const flowPromptApprovedPatternFromMemory = (memory = {}, prompt = "") => {
+  const meta = flowPromptParseMemoryMeta(memory);
+  const nodes = Array.isArray(meta.nodes) ? meta.nodes.filter(Boolean).slice(0, 10) : [];
+  const edges = Array.isArray(meta.edges) ? meta.edges.filter(Boolean).slice(0, 10) : [];
+  const text = [memory.name, memory.text, memory.summary, memory.meta, ...(memory.tags || []), nodes.join(" "), edges.join(" ")].join(" ");
+  const promptTokens = new Set(flowPromptPatternTokens(prompt));
+  const textTokens = new Set(flowPromptPatternTokens(text));
+  const overlap = Array.from(promptTokens).filter((token) => textTokens.has(token));
+  const nodeMatches = nodes.filter((node) => promptTokens.has(flowPromptNormalize(node))).length;
+  const score = overlap.length + (nodeMatches * 3) + Number(memory.weight || 0);
+  return {
+    id: memory.id || "",
+    kind: memory.kind || "",
+    name: memory.name || "Pattern Flow Chat",
+    text: memory.text || memory.summary || "",
+    prompt: meta.prompt || "",
+    messageKind: meta.messageKind || "",
+    nodes,
+    edges,
+    planner: meta.planner || {},
+    score,
+    updatedAt: memory.updatedAt || "",
+  };
+};
+
+const flowPromptPatternSimilarity = (left = {}, right = {}) => {
+  const leftTokens = new Set(flowPromptPatternTokens([
+    left.name,
+    left.text,
+    left.prompt,
+    ...(left.nodes || []),
+    ...(left.edges || []),
+  ].filter(Boolean).join(" ")));
+  const rightTokens = new Set(flowPromptPatternTokens([
+    right.name,
+    right.text,
+    right.prompt,
+    ...(right.nodes || []),
+    ...(right.edges || []),
+  ].filter(Boolean).join(" ")));
+  const union = new Set([...leftTokens, ...rightTokens]);
+  const tokenScore = union.size
+    ? Array.from(leftTokens).filter((token) => rightTokens.has(token)).length / union.size
+    : 0;
+  const leftNodes = new Set((left.nodes || []).map(flowPromptNormalize).filter(Boolean));
+  const rightNodes = new Set((right.nodes || []).map(flowPromptNormalize).filter(Boolean));
+  const nodeUnion = new Set([...leftNodes, ...rightNodes]);
+  const nodeScore = nodeUnion.size
+    ? Array.from(leftNodes).filter((node) => rightNodes.has(node)).length / nodeUnion.size
+    : 0;
+  return Math.max(tokenScore, nodeScore);
+};
+
+const flowPromptPatternQuality = (pattern = {}) => {
+  const nodeCount = pattern.nodes?.length || 0;
+  const edgeCount = pattern.edges?.length || 0;
+  const hasPrompt = Boolean(String(pattern.prompt || pattern.text || "").trim());
+  const hasPlanner = Boolean(pattern.planner?.mode || pattern.planner?.model);
+  const ageMs = pattern.updatedAt ? Date.now() - Date.parse(pattern.updatedAt) : Number.POSITIVE_INFINITY;
+  const recency = Number.isFinite(ageMs) && ageMs < 1000 * 60 * 60 * 24 * 14 ? 2 : Number.isFinite(ageMs) && ageMs < 1000 * 60 * 60 * 24 * 60 ? 1 : 0;
+  const structure = Math.min(4, nodeCount) + Math.min(4, edgeCount);
+  const score = structure + (hasPrompt ? 2 : 0) + (hasPlanner ? 1 : 0) + recency;
+  return {
+    score,
+    label: score >= 9 ? "alta" : score >= 5 ? "media" : "bassa",
+    nodeCount,
+    edgeCount,
+    hasPrompt,
+    recency,
+  };
+};
+
+const flowPromptReadPatternMemories = async (prompt = "", limit = 4) => {
+  if (!window.TrackerLensAiRuntimeStore?.listMemory) {
+    return { approvedPatterns: [], rejectedPatterns: [], memoryGuard: null };
+  }
+  const workspaceId = currentWorkspaceId() || "runtime";
+  const queried = await window.TrackerLensAiRuntimeStore.listMemory({
+    scope: "workspace",
+    workspaceId,
+    agentId: "flow-map-agent",
+    query: prompt,
+    limit: 24,
+  }).catch(() => []);
+  const recent = await window.TrackerLensAiRuntimeStore.listMemory({
+    scope: "workspace",
+    workspaceId,
+    agentId: "flow-map-agent",
+    limit: 24,
+  }).catch(() => []);
+  const byId = new Map([...queried, ...recent]
+    .filter((item) => ["flow-chat-approved-pattern", "flow-chat-rejected-pattern"].includes(item.kind))
+    .map((item) => [item.id, item]));
+  const patterns = Array.from(byId.values())
+    .map((item) => flowPromptApprovedPatternFromMemory(item, prompt))
+    .filter((item) => item.text || item.nodes.length || item.edges.length)
+    .map((item) => ({ ...item, quality: flowPromptPatternQuality(item) }))
+    .sort((a, b) => ((b.score + (b.quality?.score || 0)) - (a.score + (a.quality?.score || 0))) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  const rejectedPatterns = patterns
+    .filter((item) => item.kind === "flow-chat-rejected-pattern")
+    .slice(0, Math.max(limit, 6));
+  const approvedCandidates = patterns.filter((item) => item.kind === "flow-chat-approved-pattern");
+  const approvedPatterns = approvedCandidates
+    .filter((item) => !rejectedPatterns.some((rejected) => flowPromptPatternSimilarity(item, rejected) >= 0.55))
+    .slice(0, limit);
+  const excludedByRejection = Math.max(0, approvedCandidates.length - approvedPatterns.length);
+  return {
+    approvedPatterns,
+    rejectedPatterns: rejectedPatterns.slice(0, limit),
+    memoryGuard: rejectedPatterns.length || excludedByRejection
+      ? {
+        rejectedPatterns: rejectedPatterns.length,
+        excludedByRejection,
+      }
+      : null,
+  };
+};
+
+const flowPromptReadApprovedPatterns = async (prompt = "", limit = 4) => {
+  const patternMemory = await flowPromptReadPatternMemories(prompt, limit);
+  return patternMemory.approvedPatterns || [];
 };
 
 const flowPromptMemorySearchText = (memory = {}) =>
@@ -1154,7 +1896,7 @@ const flowPromptRememberConfirmedFact = async ({ kind = "fact", name = "", text 
     "flow-map-agent",
     kind,
     meta.nodeId || "",
-    meta.previousLabel || meta.endpoint || meta.nextLabel || name,
+    meta.previousLabel || meta.endpoint || meta.nextLabel || meta.stableName || name,
   ].map((value) => safeRuntimeId(value)).filter(Boolean).join("_");
   return window.TrackerLensAiRuntimeStore.remember({
     id: stableId,
@@ -1303,6 +2045,95 @@ const flowPromptRememberAppliedActions = async ({ prompt = "", applied = [], act
   return records.filter(Boolean);
 };
 
+const flowPromptApprovedMessageMemoryPayload = ({ message = {}, prompt = "" } = {}) => {
+  const kind = message.kind || "text";
+  const plan = message.plan || null;
+  const report = message.agentReport || null;
+  const nodes = (plan?.nodes || report?.brain?.recommendedNodes || report?.architectureAdvice?.recommendations || [])
+    .map((item) => item.label || item.name || "")
+    .filter(Boolean)
+    .slice(0, 10);
+  const edges = (plan?.edges || [])
+    .map((edge) => `${edge.sourceLabel || edge.sourceKey || ""} -> ${edge.targetLabel || edge.targetKey || ""}`.trim())
+    .filter((edge) => edge && edge !== "->")
+    .slice(0, 10);
+  const planner = plan?.planner || report?.brain?.planner || {};
+  const tags = [
+    "flow-chat-feedback",
+    kind,
+    planner.mode || "",
+    ...nodes,
+  ].filter(Boolean);
+  const summary = [
+    message.content || report?.content || "",
+    nodes.length ? `Nodi: ${nodes.join(", ")}` : "",
+    edges.length ? `Links: ${edges.join("; ")}` : "",
+  ].filter(Boolean).join(" · ").slice(0, 700);
+  if (!summary) return null;
+  return {
+    kind: "flow-chat-approved-pattern",
+    name: kind === "plan" ? "Pattern Flow Chat approvato" : "Risposta Flow Chat approvata",
+    text: [
+      prompt ? `Prompt confermato: ${prompt}` : "",
+      `Risposta approvata: ${summary}`,
+    ].filter(Boolean).join(" · ").slice(0, 900),
+    tags,
+    weight: kind === "plan" ? 7 : 6,
+    meta: {
+      prompt,
+      messageId: message.id || "",
+      messageKind: kind,
+      planner,
+      nodes,
+      edges,
+      sources: report?.brain?.sources || [],
+      approvedAt: flowPromptNow(),
+    },
+  };
+};
+
+const flowPromptRememberApprovedMessage = async ({ message = {}, prompt = "" } = {}) => {
+  const payload = flowPromptApprovedMessageMemoryPayload({ message, prompt });
+  if (!payload) return null;
+  const stableName = [
+    payload.kind,
+    prompt || message.content || "",
+    (payload.meta.nodes || []).join("-"),
+    (payload.meta.edges || []).join("-"),
+  ].join(" ").slice(0, 220);
+  return flowPromptRememberConfirmedFact({
+    ...payload,
+    meta: {
+      ...payload.meta,
+      stableName,
+    },
+  });
+};
+
+const flowPromptRememberRejectedMessage = async ({ message = {}, prompt = "" } = {}) => {
+  const payload = flowPromptApprovedMessageMemoryPayload({ message, prompt });
+  if (!payload) return null;
+  const stableName = [
+    "flow-chat-rejected-pattern",
+    prompt || message.content || "",
+    (payload.meta.nodes || []).join("-"),
+    (payload.meta.edges || []).join("-"),
+  ].join(" ").slice(0, 220);
+  return flowPromptRememberConfirmedFact({
+    ...payload,
+    kind: "flow-chat-rejected-pattern",
+    name: payload.meta.messageKind === "plan" ? "Pattern Flow Chat rifiutato" : "Risposta Flow Chat rifiutata",
+    text: payload.text.replace("Risposta approvata:", "Risposta rifiutata:"),
+    tags: [...new Set([...(payload.tags || []), "rejected", "do-not-use"])],
+    weight: -6,
+    meta: {
+      ...payload.meta,
+      stableName,
+      rejectedAt: flowPromptNow(),
+    },
+  });
+};
+
 const flowPromptRuntimeQueryInsights = (context = {}, query = {}) => {
   const filter = query.filter || "";
   const nodes = context.nodes || [];
@@ -1355,6 +2186,118 @@ const flowPromptRuntimeQueryInsights = (context = {}, query = {}) => {
     channelExists: normalizedFilter
       ? Array.from(channelByName.keys()).some((name) => flowPromptNormalize(name).includes(normalizedFilter))
       : false,
+  };
+};
+
+const flowPromptBuildArchitectureAdvice = (context = {}, prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  const wantsAgentBoundary = flowPromptHasAny(text, ["agent", "agente", "agenti", "orchestrator", "orchestratore"]) &&
+    flowPromptHasAny(text, ["in/out", "out/in", "input", "output", " in ", " out ", "edge", "edges", "link", "dividere", "separare", "split", "porta", "porte"]);
+  const wantsEmbeddedBoundary = flowPromptHasAny(text, ["flow map", "embedded", "riutilizz", "boundary", "porta", "porte", "in/out", "input", "output"]);
+  const wantsRouting = flowPromptHasAny(text, ["route", "router", "routing", "condizione", "condition", "if", "branch", "ramo", "dividere", "split"]);
+  const recommendations = [];
+  const add = (item) => {
+    const key = flowPromptNormalize(item.label || "");
+    if (key && !recommendations.some((entry) => flowPromptNormalize(entry.label || "") === key)) recommendations.push(item);
+  };
+
+  if (wantsAgentBoundary) {
+    add({
+      label: "Agent Bridge",
+      role: "Ponte professionale fra agenti e runtime",
+      reason: "Serve quando un agente deve ricevere eventi dal grafo e restituire azioni senza confondere il canale di controllo con il flusso dati.",
+      inputs: ["agent_control", "listening"],
+      outputs: ["action"],
+      useWhen: "Un agente deve comandare nodi o ascoltare eventi runtime.",
+      nextStep: "Inserisci Agent Bridge fra Orchestrator Agent e i nodi operativi; usa agent_control per controllo e action per comandi emessi.",
+    });
+    add({
+      label: "Orchestrator Agent",
+      role: "Cervello multi-step",
+      reason: "Coordina task, decisioni, azioni, done ed error. E' il nodo giusto quando il flow deve comportarsi come un capo lavoro.",
+      inputs: ["task"],
+      outputs: ["decision", "action", "done", "error"],
+      useWhen: "Il flow deve decidere sequenze, chiamare agenti o fermarsi su errore.",
+      nextStep: "Collega Task Node -> Orchestrator Agent -> Agent Bridge o azioni specifiche.",
+    });
+  }
+
+  if (wantsRouting || wantsAgentBoundary) {
+    add({
+      label: "Split",
+      role: "Divide un flusso in due uscite",
+      reason: "E' il nodo semplice per separare un edge logico in due rami OUT senza creare semantica AI.",
+      inputs: ["input"],
+      outputs: ["a", "b"],
+      useWhen: "Vuoi duplicare o separare il payload verso due rami.",
+      nextStep: "Usa Split se i due rami ricevono lo stesso payload; usa Condition se devono dipendere da una regola.",
+    });
+    add({
+      label: "Condition",
+      role: "Router true/false",
+      reason: "Divide il percorso in base a una condizione, mantenendo chiaro cosa entra e cosa esce.",
+      inputs: ["input"],
+      outputs: ["true", "false"],
+      useWhen: "Il ramo OUT dipende da stato, validazione o decisione.",
+      nextStep: "Collega input -> Condition, poi true/false verso agenti, azioni o Preview.",
+    });
+  }
+
+  if (wantsEmbeddedBoundary || wantsAgentBoundary) {
+    add({
+      label: "Flow In",
+      role: "Porta IN di un Flow Map componibile",
+      reason: "Espone ingressi dichiarati quando il flow deve essere riusato come modulo dentro altri Flow Map.",
+      inputs: [],
+      outputs: ["flow.in"],
+      useWhen: "Stai costruendo un sotto-flow riutilizzabile con interfaccia pulita.",
+      nextStep: "Configura le porte dal nodo Flow In e collega l'uscita al primo nodo interno.",
+    });
+    add({
+      label: "Flow Out",
+      role: "Porta OUT di un Flow Map componibile",
+      reason: "Espone uscite dichiarate e rende leggibile il contratto del sotto-flow.",
+      inputs: ["flow.out"],
+      outputs: [],
+      useWhen: "Vuoi pubblicare il risultato di un sotto-flow verso un Flow Map padre.",
+      nextStep: "Collega l'ultimo nodo interno a Flow Out e nomina le porte con tipi coerenti.",
+    });
+  }
+
+  if (!recommendations.length) {
+    add({
+      label: "Task Node",
+      role: "Ingresso operativo",
+      reason: "Trasforma un obiettivo utente in un evento runtime chiaro.",
+      inputs: [],
+      outputs: ["task"],
+      useWhen: "La richiesta parte da un obiettivo, non da una sorgente esterna.",
+      nextStep: "Collega Task Node a Orchestrator Agent o AI Analyzer.",
+    });
+    add({
+      label: "Preview",
+      role: "Verifica payload",
+      reason: "Chiude il giro di debug e fa vedere cosa passa davvero nel runtime.",
+      inputs: ["input"],
+      outputs: [],
+      useWhen: "Stai progettando o testando un nuovo flow.",
+      nextStep: "Metti Preview dopo ogni ramo critico finche il contratto dati e' stabile.",
+    });
+  }
+
+  const existingLabels = new Set((context.nodes || []).map((node) => flowPromptNormalize(node.label || node.id || "")));
+  return {
+    type: "architecture-advice",
+    summary: wantsAgentBoundary
+      ? "Per agenti con separazione IN/OUT usa un pattern Orchestrator Agent + Agent Bridge; aggiungi Split/Condition solo quando devi ramificare il payload, e Flow In/Flow Out solo per boundary di Flow Map componibili."
+      : "Questa e' una richiesta di progettazione: propongo nodi di palette e pattern, non una ricerca nei nodi esistenti.",
+    recommendations: recommendations.map((item) => ({
+      ...item,
+      alreadyInWorkspace: existingLabels.has(flowPromptNormalize(item.label)),
+    })),
+    pattern: wantsAgentBoundary
+      ? "Task Node -> Orchestrator Agent -> Agent Bridge -> Split/Condition -> Actions/AI Agents/Preview"
+      : "Source/Task -> Processor/Agent -> Preview/Action/Storage",
   };
 };
 
@@ -3455,14 +4398,100 @@ const flowPromptRunRuntimeErrorMemoryTests = async () => {
   };
 };
 
-const flowPromptBuildAgentReport = async (prompt = "") => {
-  const memory = await flowPromptReadWorkspaceMemory(prompt);
+const flowPromptRunFlowChatHardeningTests = async () => {
+  const plan = {
+    summary: "Flow professionale agentico",
+    planner: { mode: "ai", selfRepair: { attempts: 2 } },
+    nodes: [
+      { label: "Task Node" },
+      { label: "Orchestrator Agent" },
+      { label: "Preview", action: "reuse" },
+    ],
+    edges: [
+      { sourceLabel: "Task Node", targetLabel: "Orchestrator Agent" },
+      { sourceLabel: "Orchestrator Agent", targetLabel: "Preview" },
+    ],
+    preflight: { ok: true, warnings: [], blockers: [], summary: "Pronto" },
+    conversationContext: { active: true, referencesPrevious: true, lastPlan: { nodes: ["Task Node"] }, constraints: ["avoid Split"] },
+  };
+  const pattern = {
+    name: "Agent pattern",
+    text: "Task -> Orchestrator -> Preview",
+    prompt: "crea flow agentico",
+    nodes: ["Task Node", "Orchestrator Agent", "Preview"],
+    edges: ["Task Node -> Orchestrator Agent", "Orchestrator Agent -> Preview"],
+    planner: { mode: "ai" },
+    updatedAt: flowPromptNow(),
+  };
+  const completion = flowPromptBuildCompletionSummary(
+    { summary: plan.summary },
+    {
+      savedNodes: [{ label: "Task Node" }, { label: "Orchestrator Agent" }],
+      reusedNodes: [{ label: "Preview" }],
+      createdEdges: [{}, {}],
+      reusedEdges: [],
+      warnings: [],
+    },
+    { edges: plan.edges }
+  );
+  const workLead = flowPromptBuildWorkLeadSummary(plan);
+  const tests = [
+    {
+      name: "short apply intent",
+      ok: flowPromptLastPlanActionIntent("crealo") === "apply" && flowPromptLastPlanActionIntent("usa questo piano") === "prepare",
+    },
+    {
+      name: "pattern quality",
+      ok: flowPromptPatternQuality(pattern).label === "alta",
+      quality: flowPromptPatternQuality(pattern),
+    },
+    {
+      name: "work lead summary",
+      ok: workLead.verification === "preflight valido" && /Crea flow/i.test(workLead.next),
+      workLead,
+    },
+    {
+      name: "completion summary",
+      ok: completion.status === "Obiettivo raggiunto" && completion.details.length >= 3 && completion.links.length === 2,
+      completion,
+    },
+  ];
+  return {
+    ok: tests.every((test) => test.ok),
+    tests,
+  };
+};
+
+const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
+  const effectivePrompt = String(options.promptForBrain || prompt || "").trim();
+  const conversationContext = options.conversationContext || null;
+  const memory = await flowPromptReadWorkspaceMemory(effectivePrompt || prompt);
+  const patternMemory = await flowPromptReadPatternMemories(effectivePrompt || prompt);
   const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
   const diagnostics = flowPromptDiagnoseContext(context);
   const intent = flowPromptAgentIntent(prompt);
   const query = flowPromptAgentQuery(context, prompt);
   const queryInsights = flowPromptRuntimeQueryInsights(context, query);
-  const queryModel = await flowPromptBuildRuntimeQueryModel({ context, prompt, query, memory });
+  const queryModel = await flowPromptBuildRuntimeQueryModel({ context, prompt: effectivePrompt || prompt, query, memory });
+  const architectureAdvice = intent === "advice" ? flowPromptBuildArchitectureAdvice(context, prompt) : null;
+  const brainContext = flowPromptShouldUseBrain(intent, prompt)
+    ? await flowPromptBuildBrainContext({
+      context,
+      prompt: effectivePrompt || prompt,
+      routePrompt: prompt,
+      intent,
+      queryModel,
+      memory,
+      approvedPatterns: patternMemory.approvedPatterns || [],
+      rejectedPatterns: patternMemory.rejectedPatterns || [],
+      memoryGuard: patternMemory.memoryGuard,
+      conversationContext,
+      architectureAdvice,
+    })
+    : null;
+  const brain = brainContext
+    ? await flowPromptCallBrainWithAi(brainContext, intent === "advice" ? "advice" : "query")
+    : null;
   const wantsRuntimeErrors = intent === "runtime" && flowPromptNormalize(query.filter) === "error";
   if (wantsRuntimeErrors && queryModel.runtime?.errors?.length) {
     const firstError = queryModel.runtime.errors[0];
@@ -3495,8 +4524,10 @@ const flowPromptBuildAgentReport = async (prompt = "") => {
     queryInsights,
     queryModel,
     memory,
+    brainContext,
+    brain,
   };
-  let pendingAction = await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug, memory);
+  let pendingAction = intent === "advice" ? null : await flowPromptBuildActionPlanWithAiNormalize(context, prompt, debug, memory);
   pendingAction = await flowPromptEnrichEndpointResearchPlan(pendingAction, prompt);
   if (pendingAction && typeof pendingAction === "object") pendingAction.prompt = prompt;
   const agentPlan = flowPromptBuildGenericAgentPlan(pendingAction, {
@@ -3506,14 +4537,30 @@ const flowPromptBuildAgentReport = async (prompt = "") => {
   debug.genericPlan = flowPromptDebugAgentPlan(agentPlan);
   const lower = flowPromptNormalize(prompt);
   const wantsDb = flowPromptHasAny(lower, ["db", "database", "indexeddb"]);
-  const mutation = flowPromptIsMutationRequest(prompt);
+  const mutation = intent !== "advice" && flowPromptIsMutationRequest(prompt);
   const parts = [];
 
   if (mutation && !pendingAction) {
     parts.push("Ho capito la richiesta di modifica, ma nel livello 1 lavoro ancora in modalita read-only: posso analizzare e preparare il contesto, non applicare cambiamenti automatici.");
   }
 
-  if (pendingAction) {
+  if (brain?.answer && !pendingAction) {
+    parts.push(brain.answer);
+  } else if (brain?.planner?.mode === "unavailable" && brain.planner.error) {
+    parts.push(`Avviso AI: ${brain.planner.error}`);
+    if (architectureAdvice) {
+      parts.push(architectureAdvice.summary);
+      const primary = architectureAdvice.recommendations?.[0];
+      if (primary) parts.push(`Fallback locale: nodo principale consigliato ${primary.label}. ${primary.reason}`);
+    }
+  } else if (architectureAdvice) {
+    parts.push(architectureAdvice.summary);
+    const primary = architectureAdvice.recommendations?.[0];
+    if (primary) {
+      parts.push(`Nodo principale consigliato: ${primary.label}. ${primary.reason}`);
+      parts.push(`Pattern: ${architectureAdvice.pattern}.`);
+    }
+  } else if (pendingAction) {
     parts.push(pendingAction.summary);
   } else if (intent === "channels") {
     parts.push(query.filter
@@ -3598,6 +4645,9 @@ const flowPromptBuildAgentReport = async (prompt = "") => {
     query,
     queryInsights,
     queryModel,
+    architectureAdvice,
+    brainContext,
+    brain,
     pendingAction,
     agentPlan,
     debug,
@@ -3659,6 +4709,40 @@ const flowPromptWithLmStudioBase = (endpoint = "") => {
   return clean.endsWith("/v1") ? clean : `${clean}/v1`;
 };
 
+const flowPromptAiProviderName = (provider = {}, aiSettings = {}) =>
+  provider.name || provider.provider || provider.id || aiSettings.provider || "AI provider";
+
+const flowPromptFriendlyAiError = (error = null, { provider = {}, aiSettings = {}, endpoint = "", model = "" } = {}) => {
+  const raw = String(error?.message || error || "").trim();
+  const providerName = flowPromptAiProviderName(provider, aiSettings);
+  const providerKey = flowPromptProviderKey(provider.provider || provider.name || provider.id || aiSettings.provider);
+  const target = endpoint || provider.endpoint || (providerKey.includes("ollama") ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234");
+  const resolvedModel = model || aiSettings.model || provider.model || "";
+  if (!provider?.id && !provider?.name && !provider?.provider && !aiSettings.provider) {
+    return "Provider AI non configurato. Apri Settings -> AI & Modelli e seleziona Ollama o LM Studio.";
+  }
+  if (/failed to fetch|load failed|networkerror|connection refused|err_connection_refused|fetch failed/i.test(raw)) {
+    const startHint = providerKey.includes("ollama")
+      ? "Avvia Ollama con `ollama serve`, poi verifica `http://127.0.0.1:11434/api/tags`."
+      : "Avvia il server locale del provider e verifica endpoint/modello in Settings -> AI & Modelli.";
+    return `${providerName} non raggiungibile su ${target}. ${startHint}`;
+  }
+  if (/404|not found/i.test(raw) && providerKey.includes("ollama")) {
+    return `${providerName} risponde, ma il modello ${resolvedModel || "configurato"} non sembra disponibile. Esegui ` +
+      "`ollama pull " + (resolvedModel || "llama3.1") + "` oppure scegli un modello installato in Settings.";
+  }
+  if (/timeout|abort/i.test(raw)) {
+    return `${providerName} non ha risposto in tempo su ${target}. Controlla che il modello sia caricato e riduci max tokens se serve.`;
+  }
+  if (/HTTP 400|context|token/i.test(raw)) {
+    return `${providerName} ha rifiutato la richiesta${resolvedModel ? ` per ${resolvedModel}` : ""}. Il prompt potrebbe essere troppo grande o il modello non compatibile. Dettaglio: ${raw}`;
+  }
+  if (/HTTP 401|HTTP 403|unauthorized|forbidden/i.test(raw)) {
+    return `${providerName} richiede credenziali o permessi validi. Controlla API key e impostazioni provider.`;
+  }
+  return `${providerName} non ha completato la richiesta AI${target ? ` su ${target}` : ""}.${raw ? ` Dettaglio: ${raw}` : ""}`;
+};
+
 const flowPromptResolveLmStudioModel = async ({ provider = {}, model = "" } = {}) => {
   const requested = String(model || provider.model || "").trim();
   if (requested && requested !== "local-model") return requested;
@@ -3700,7 +4784,7 @@ const flowPromptCallOpenAiCompatible = async ({ provider = {}, model = "", promp
         { role: "user", content: prompt },
       ],
       temperature: Math.min(1, Number(aiSettings.temperature ?? 0.2)),
-      max_tokens: Math.max(400, Number(aiSettings.maxTokens || 1400)),
+      max_tokens: Math.max(900, Number(aiSettings.maxTokens || 2200)),
     }),
   });
   if (!response.ok) {
@@ -3721,7 +4805,7 @@ const flowPromptPaletteContract = () =>
     outputs: (item.outputs || []).map((port) => flowPromptPortName(port, "")),
   }));
 
-const flowPromptBuildAiPlannerPrompt = ({ prompt = "", workspaceId = currentWorkspaceId() } = {}) => {
+const flowPromptBuildAiPlannerPrompt = ({ prompt = "", workspaceId = currentWorkspaceId(), brainContext = null } = {}) => {
   const currentNodes = (state.runtime.nodes || []).map((node) => ({
     id: node.id,
     label: node.label,
@@ -3733,18 +4817,41 @@ const flowPromptBuildAiPlannerPrompt = ({ prompt = "", workspaceId = currentWork
   }));
   return [
     "Create a Trackers Lens Flow Map plan from the user request.",
+    flowPromptLanguageRule(prompt),
+    "The JSON summary and any natural-language descriptions must use that language.",
     "Return only JSON with this schema:",
-    "{\"summary\":\"short text\",\"nodes\":[{\"label\":\"palette label\",\"config\":{},\"description\":\"optional\"}],\"edges\":[{\"sourceKey\":\"node label\",\"targetKey\":\"node label\"}]}",
+    "{\"summary\":\"short text\",\"nodes\":[{\"label\":\"palette label\",\"config\":{},\"description\":\"optional\"}],\"edges\":[{\"sourceKey\":\"node label\",\"targetKey\":\"node label\",\"sourcePort\":\"optional output port\",\"targetPort\":\"optional input port\"}]}",
     "Rules:",
     "- Use labels from allowedPalette when possible.",
     "- Include Orchestrator Agent for autonomous/multi-step AI flows.",
     "- Prefer Task Node for user objectives without an external source.",
     "- Include Preview unless the user asks for a concrete Lens or Action.",
     "- Do not invent unsupported node types.",
+    "- Use RAG and confirmed memory as planning guidance, but never as proof that unsupported nodes exist.",
+    "- Prefer approvedPatterns when they match the user request, adapting only where the current prompt requires it.",
+    "- Approved patterns are examples of user-confirmed good answers/plans; still validate every node and port against allowedPalette.",
+    "- Avoid rejectedPatterns: they are user-confirmed bad answers/plans and must not be copied or used as examples.",
+    "- If brainContext.conversationContext references a previous plan, adapt that previous plan instead of starting from scratch.",
+    "- Honor conversation constraints such as avoid Split, add Condition, simplify, or include Flow In/Out when they are present.",
+    "- For professional agent flows, prefer Task Node -> Orchestrator Agent -> Agent Bridge -> Preview or concrete actions.",
+    "- Use Split for payload fan-out and Condition for decision routing.",
+    "- Use Flow In and Flow Out only when the request needs reusable/embedded Flow Map boundaries.",
+    "- When connecting Orchestrator Agent to Agent Bridge, prefer sourcePort action and targetPort agent_control.",
+    "- When connecting Agent Bridge to Split or Preview, prefer sourcePort action and targetPort input.",
+    "- When connecting Task Node to Orchestrator Agent, use task -> task.",
     "- Existing nodes are listed for context; still output desired labels, the app will deduplicate.",
     `workspaceId: ${workspaceId}`,
     `allowedPalette: ${JSON.stringify(flowPromptPaletteContract())}`,
     `existingNodes: ${JSON.stringify(currentNodes)}`,
+    brainContext ? `brainContext: ${JSON.stringify({
+      runtimeFacts: brainContext.runtimeFacts,
+      memory: brainContext.memory,
+      approvedPatterns: brainContext.approvedPatterns,
+      rejectedPatterns: brainContext.rejectedPatterns,
+      memoryGuard: brainContext.memoryGuard,
+      conversationContext: brainContext.conversationContext,
+      rag: brainContext.rag,
+    })}` : "",
     `userRequest: ${prompt}`,
   ].join("\n");
 };
@@ -3754,9 +4861,9 @@ const flowPromptNormalizeAiPlan = (payload = {}, originalPrompt = "") => {
   const aliases = new Map();
   const specs = nodes
     .map((node) => {
-      const paletteItem = flowPromptPaletteItemForAiNode(node);
-      const label = String(paletteItem?.label || node.label || node.name || node.paletteLabel || "").trim();
-      if (!label) return null;
+      const paletteItem = flowPromptStrictPaletteItemForAiNode(node);
+      if (!paletteItem?.label) return null;
+      const label = String(paletteItem.label).trim();
       [node.label, node.name, node.paletteLabel, node.id, label].filter(Boolean).forEach((value) => {
         aliases.set(String(value), label);
       });
@@ -3779,6 +4886,8 @@ const flowPromptNormalizeAiPlan = (payload = {}, originalPrompt = "") => {
       return {
         sourceKey: aliases.get(String(sourceRaw)) || sourceRaw,
         targetKey: aliases.get(String(targetRaw)) || targetRaw,
+        sourcePort: edge.sourcePort || edge.fromPort || edge.output || "",
+        targetPort: edge.targetPort || edge.toPort || edge.input || "",
       };
     })
     .filter((edge) => labelSet.has(edge.sourceKey) && labelSet.has(edge.targetKey));
@@ -3795,31 +4904,178 @@ const flowPromptNormalizeAiPlan = (payload = {}, originalPrompt = "") => {
   };
 };
 
-const flowPromptBuildAiPlan = async (prompt = "") => {
+const flowPromptCallPlannerProvider = async ({ kind = "", provider = {}, model = "", prompt = "", aiSettings = {} } = {}) =>
+  kind.includes("ollama")
+    ? flowPromptCallOllama({ provider, model, prompt })
+    : flowPromptCallOpenAiCompatible({ provider, model, prompt, aiSettings });
+
+const flowPromptAiRepairPrompt = ({ originalPrompt = "", plannerPrompt = "", rawText = "", payload = null, plan = null, preflight = null, attempt = 1 } = {}) => [
+  "Repair the Trackers Lens Flow Map plan.",
+  flowPromptLanguageRule(originalPrompt),
+  "Return only one valid JSON object with this exact schema:",
+  "{\"summary\":\"short text\",\"nodes\":[{\"label\":\"palette label\",\"config\":{},\"description\":\"optional\"}],\"edges\":[{\"sourceKey\":\"node label\",\"targetKey\":\"node label\",\"sourcePort\":\"optional output port\",\"targetPort\":\"optional input port\"}]}",
+  "Rules:",
+  "- Do not add prose, markdown, comments, or code fences.",
+  "- Use only labels from allowedPalette in the original planner prompt.",
+  "- Fix only the JSON/validation problems listed below.",
+  "- If a port is invalid, choose a valid port from the source/target node contract in the original planner prompt.",
+  "- If a node cannot receive input, connect to the next valid runtime node instead.",
+  "- Keep the user's requested architecture and conversation constraints.",
+  `repairAttempt: ${attempt}`,
+  `userRequest: ${originalPrompt}`,
+  `validationErrors: ${JSON.stringify({
+    jsonMissing: !payload,
+    blockers: preflight?.blockers || [],
+    warnings: preflight?.warnings || [],
+    checks: preflight?.checks || [],
+  })}`,
+  plan ? `currentPlan: ${JSON.stringify({
+    summary: plan.summary,
+    nodes: (plan.nodes || []).map((node) => ({ label: node.label, type: node.type, subtype: node.subtype })),
+    edges: plan.edges || [],
+  })}` : "",
+  rawText ? `rawProviderText: ${String(rawText).slice(0, 2400)}` : "",
+  `originalPlannerPrompt: ${plannerPrompt.slice(0, 8000)}`,
+].filter(Boolean).join("\n");
+
+const flowPromptValidateAiPlanCandidate = (payload = null, prompt = "") => {
+  const plan = flowPromptNormalizeAiPlan(payload || {}, prompt);
+  if (!plan) {
+    return {
+      ok: false,
+      plan: null,
+      analysis: null,
+      preflight: null,
+      errors: ["Il provider AI non ha restituito un piano JSON valido"],
+    };
+  }
+  const analysis = flowPromptAnalyzePlan(plan);
+  const preflight = flowPromptPlanPreflight(analysis);
+  return {
+    ok: preflight.ok,
+    plan,
+    analysis,
+    preflight,
+    errors: preflight.blockers || [],
+  };
+};
+
+const flowPromptBuildAiPlan = async (prompt = "", options = {}) => {
+  const conversationContext = options.conversationContext || null;
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const aiSettings = await flowPromptReadAiSettings();
   const provider = await flowPromptPickProvider(aiSettings);
-  if (!provider) throw new Error(`Provider AI non trovato: ${aiSettings.provider || "N/D"}`);
+  if (!provider) throw new Error(flowPromptFriendlyAiError(null, { aiSettings }));
   const kind = flowPromptProviderKey(provider.provider || provider.name || provider.id);
-  const plannerPrompt = flowPromptBuildAiPlannerPrompt({ prompt });
+  const memory = await flowPromptReadWorkspaceMemory(prompt);
+  const patternMemory = await flowPromptReadPatternMemories(prompt);
+  const approvedPatterns = patternMemory.approvedPatterns || [];
+  const rejectedPatterns = patternMemory.rejectedPatterns || [];
+  const context = flowPromptContextWithMemory(await flowPromptAgentContext(), memory);
+  const query = flowPromptAgentQuery(context, prompt);
+  const queryModel = await flowPromptBuildRuntimeQueryModel({ context, prompt, query, memory });
+  const architectureAdvice = flowPromptIsArchitectureAdviceRequest(prompt)
+    ? flowPromptBuildArchitectureAdvice(context, prompt)
+    : null;
+  const brainContext = await flowPromptBuildBrainContext({
+    context,
+    prompt,
+    intent: "createFlow",
+    queryModel,
+    memory,
+    approvedPatterns,
+    rejectedPatterns,
+    memoryGuard: patternMemory.memoryGuard,
+    conversationContext,
+    architectureAdvice,
+  });
+  const plannerPrompt = flowPromptBuildAiPlannerPrompt({ prompt, brainContext });
   const model = aiSettings.model || provider.model;
-  const ai = kind.includes("ollama")
-    ? await flowPromptCallOllama({ provider, model, prompt: plannerPrompt })
-    : await flowPromptCallOpenAiCompatible({ provider, model, prompt: plannerPrompt, aiSettings });
-  const payload = flowPromptFirstJsonObject(ai.text);
-  const plan = flowPromptNormalizeAiPlan(payload || {}, prompt);
-  if (!plan) throw new Error("Il provider AI non ha restituito un piano JSON valido");
+  let ai = null;
+  let payload = null;
+  let plan = null;
+  let validation = null;
+  let activePrompt = plannerPrompt;
+  const repairLog = [];
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    onProgress?.({
+      attempt,
+      maxAttempts,
+      phase: attempt === 1 ? "planner" : "repair",
+      label: attempt === 1 ? "Planner AI" : `Self repair ${attempt - 1}`,
+      detail: attempt === 1
+        ? "Sto chiedendo al provider un piano JSON validabile."
+        : "Sto rimandando al provider gli errori reali del preflight.",
+    });
+    try {
+      ai = await flowPromptCallPlannerProvider({ kind, provider, model, prompt: activePrompt, aiSettings });
+    } catch (error) {
+      throw new Error(flowPromptFriendlyAiError(error, { provider, aiSettings, model }));
+    }
+    payload = flowPromptFirstJsonObject(ai.text);
+    validation = flowPromptValidateAiPlanCandidate(payload, prompt);
+    repairLog.push({
+      attempt,
+      json: Boolean(payload),
+      ok: validation.ok,
+      errors: validation.errors || [],
+    });
+    onProgress?.({
+      attempt,
+      maxAttempts,
+      phase: validation.ok ? "validated" : "preflight",
+      label: validation.ok ? "Piano validato" : "Preflight repair",
+      detail: validation.ok
+        ? "JSON, nodi e porte sono validi."
+        : (validation.errors?.[0] || "Il piano richiede correzioni."),
+    });
+    if (validation.ok) {
+      plan = validation.plan;
+      break;
+    }
+    if (attempt >= maxAttempts) break;
+    activePrompt = flowPromptAiRepairPrompt({
+      originalPrompt: prompt,
+      plannerPrompt,
+      rawText: ai.text || "",
+      payload,
+      plan: validation.plan,
+      preflight: validation.preflight,
+      attempt: attempt + 1,
+    });
+  }
+  if (!plan) {
+    const lastErrors = validation?.errors?.length ? `: ${validation.errors.join("; ")}` : "";
+    throw new Error(`Il provider AI non ha restituito un piano JSON valido dopo self-repair${lastErrors}`);
+  }
   return {
     ...plan,
     summary: `${plan.summary} · AI ${provider.name || provider.provider || aiSettings.provider} / ${ai.model || model}`,
     planner: {
       provider: provider.name || provider.provider || aiSettings.provider,
       model: ai.model || model,
-      mode: "ai",
+      mode: "ai-brain",
+      selfRepair: {
+        attempts: repairLog.length,
+        repaired: repairLog.length > 1 && Boolean(plan),
+        log: repairLog,
+      },
+      rag: (brainContext.rag || []).map((item) => item.id),
+      memory: (brainContext.memory || []).length,
+      approvedPatterns: approvedPatterns.length,
+      rejectedPatterns: rejectedPatterns.length,
+      conversationContext: Boolean(conversationContext?.active),
     },
+    approvedPatterns,
+    rejectedPatterns,
+    memoryGuard: patternMemory.memoryGuard,
+    conversationContext,
   };
 };
 
-const flowPromptBuildConversationalReply = async (prompt = "") => {
+const flowPromptBuildConversationalReply = async (prompt = "", options = {}) => {
+  const conversationContext = options.conversationContext || null;
   const aiSettings = await flowPromptReadAiSettings();
   const provider = await flowPromptPickProvider(aiSettings);
   if (!provider) {
@@ -3829,13 +5085,17 @@ const flowPromptBuildConversationalReply = async (prompt = "") => {
   const model = aiSettings.model || provider.model;
   const system = [
     "You are the Trackers Lens Flow Map assistant.",
-    "Answer conversationally in the user's language.",
+    flowPromptLanguageRule(prompt),
+    "Answer conversationally in that language.",
     "If the question is outside Flow Map, answer briefly and explain that your main scope is this runtime graph.",
     "Do not invent runtime data; use the provided context when relevant.",
   ].join(" ");
   const contextText = context
     ? `Current Flow Map context: ${context.nodes.length} nodes, ${context.edges.length} links, ${context.channels.length} channels, ${context.events.length} recent events, ${context.flowLogs.length} recent logs.`
     : "Current Flow Map context is not available.";
+  const conversationText = conversationContext?.active
+    ? `Conversation context: ${JSON.stringify(conversationContext)}`
+    : "";
   const kind = flowPromptProviderKey(provider.provider || provider.name || provider.id);
 
   try {
@@ -3843,7 +5103,7 @@ const flowPromptBuildConversationalReply = async (prompt = "") => {
       const ai = await flowPromptCallOllama({
         provider,
         model,
-        prompt: `${system}\n${contextText}\nUser question: ${prompt}`,
+        prompt: `${system}\n${contextText}\n${conversationText}\nUser question: ${prompt}`,
       });
       return String(ai.text || "").trim() || "Non ho ricevuto una risposta dal provider AI.";
     }
@@ -3857,7 +5117,7 @@ const flowPromptBuildConversationalReply = async (prompt = "") => {
         model: resolvedModel,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: `${contextText}\n\n${prompt}` },
+          { role: "user", content: `${contextText}\n${conversationText}\n\n${prompt}` },
         ],
         temperature: Math.min(1, Number(aiSettings.temperature ?? 0.35)),
         max_tokens: Math.max(160, Math.min(900, Number(aiSettings.maxTokens || 600))),
@@ -3867,21 +5127,38 @@ const flowPromptBuildConversationalReply = async (prompt = "") => {
     const data = await response.json();
     return String(data.choices?.[0]?.message?.content || "").trim() || "Non ho ricevuto una risposta dal provider AI.";
   } catch (error) {
-    return `Posso aiutarti sul Flow Map, ma il provider AI non ha risposto per la chat generale: ${error?.message || "errore sconosciuto"}.`;
+    return `Posso aiutarti sul Flow Map, ma il provider AI non ha risposto. ${flowPromptFriendlyAiError(error, { provider, aiSettings, model })}`;
   }
 };
 
-const flowPromptBuildPlanWithAiFallback = async (prompt = "") => {
+const flowPromptBuildPlanWithAiFallback = async (prompt = "", options = {}) => {
+  const conversationContext = options.conversationContext || null;
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   try {
-    return await flowPromptBuildAiPlan(prompt);
+    return await flowPromptBuildAiPlan(prompt, { conversationContext, onProgress });
   } catch (error) {
-    const localPlan = flowPromptBuildPlan(prompt);
+    onProgress?.({
+      phase: "fallback",
+      label: "Fallback locale",
+      detail: error?.message || "Provider AI non validabile, preparo un piano locale.",
+    });
+    const localPlan = flowPromptBuildContextualLocalPlan(prompt, conversationContext);
+    const patternMemory = await flowPromptReadPatternMemories(prompt);
+    const approvedPatterns = patternMemory.approvedPatterns || [];
+    const rejectedPatterns = patternMemory.rejectedPatterns || [];
     return {
       ...localPlan,
       summary: `${localPlan.summary} · fallback locale`,
+      approvedPatterns,
+      rejectedPatterns,
+      memoryGuard: patternMemory.memoryGuard,
+      conversationContext,
       planner: {
         mode: "fallback",
         error: error?.message || "AI planner non disponibile",
+        approvedPatterns: approvedPatterns.length,
+        rejectedPatterns: rejectedPatterns.length,
+        conversationContext: Boolean(conversationContext?.active),
       },
     };
   }
@@ -3889,6 +5166,8 @@ const flowPromptBuildPlanWithAiFallback = async (prompt = "") => {
 
 const flowPromptPlannerLabel = (planner = {}) => {
   if (!planner || !planner.mode) return "Local planner";
+  const repair = planner.selfRepair?.repaired ? ` · self-repair ${Math.max(1, Number(planner.selfRepair?.attempts || 1) - 1)}` : "";
+  if (planner.mode === "ai-brain") return `AI Brain planner · ${planner.provider || "provider"}${planner.model ? ` / ${planner.model}` : ""}${repair}`;
   if (planner.mode === "ai") return `AI planner · ${planner.provider || "provider"}${planner.model ? ` / ${planner.model}` : ""}`;
   return "Local fallback";
 };
@@ -3947,6 +5226,96 @@ const flowPromptBuildPlan = (prompt = "") => {
     prompt: text,
     summary: `Plan locale: ${specs.length} nodi e ${edges.length} collegamenti.`,
     nodes: specs,
+    edges,
+  };
+};
+
+const flowPromptBuildContextualLocalPlan = (prompt = "", conversationContext = null) => {
+  const text = String(prompt || "").trim();
+  const constraints = new Set(conversationContext?.constraints || []);
+  const shouldUsePrevious = Boolean(conversationContext?.lastPlan?.nodes?.length && (conversationContext.referencesPrevious || constraints.size));
+  const baseSpecs = shouldUsePrevious
+    ? conversationContext.lastPlan.nodes
+      .map((label) => flowPromptSpecFromPalette(label))
+      .filter((spec) => spec?.label)
+    : flowPromptBuildPlan(prompt).nodes;
+  const byLabel = new Map();
+  const add = (label, overrides = {}) => {
+    const spec = flowPromptSpecFromPalette(label, overrides);
+    if (!spec?.label) return;
+    byLabel.set(spec.label, spec);
+  };
+  baseSpecs.forEach((spec) => add(spec.label, spec));
+
+  if (constraints.has("avoid Split") || constraints.has("simplify previous plan")) byLabel.delete("Split");
+  if (constraints.has("simplify previous plan")) {
+    byLabel.delete("Condition");
+    byLabel.delete("AI Analyzer");
+    byLabel.delete("AI Planner");
+    byLabel.delete("AI Summarizer");
+    byLabel.delete("AI Classifier");
+    byLabel.delete("AI Predictor");
+  }
+  if (constraints.has("add/use Condition")) add("Condition");
+  if (constraints.has("include Flow In/Out boundary if useful")) {
+    byLabel.delete("Task Node");
+    add("Flow In");
+    add("Flow Out");
+  }
+  if ((byLabel.has("Orchestrator Agent") || flowPromptHasAny(text, ["agent", "agente", "agenti"])) && !byLabel.has("Agent Bridge")) {
+    add("Agent Bridge");
+  }
+  if (!byLabel.has("Preview")) add("Preview");
+
+  const orderedLabels = [
+    "Flow In",
+    "Task Node",
+    "REST API",
+    "RSS Feed",
+    "WebSocket",
+    "Orchestrator Agent",
+    "Agent Bridge",
+    "Condition",
+    "Split",
+    "AI Planner",
+    "AI Analyzer",
+    "AI Summarizer",
+    "AI Classifier",
+    "AI Predictor",
+    "Transform",
+    "Filter",
+    "Save DB Record",
+    "History Store",
+    "Telegram Message",
+    "Slack Message",
+    "Discord Message",
+    "Email",
+    "Browser Notification",
+    "Flow Out",
+    "Preview",
+  ];
+  const ordered = [
+    ...orderedLabels.map((label) => byLabel.get(label)).filter(Boolean),
+    ...Array.from(byLabel.values()).filter((spec) => !orderedLabels.includes(spec.label)),
+  ];
+  const hasFlowOut = byLabel.has("Flow Out");
+  const hasPreview = byLabel.has("Preview");
+  const chain = hasFlowOut && hasPreview
+    ? ordered.filter((spec) => spec.label !== "Preview")
+    : ordered;
+  const edges = chain.slice(0, -1).map((source, index) => ({
+    sourceKey: source.label,
+    targetKey: chain[index + 1].label,
+  }));
+  if (hasFlowOut && hasPreview) {
+    const flowOutIndex = chain.findIndex((spec) => spec.label === "Flow Out");
+    const previewSource = flowOutIndex > 0 ? chain[flowOutIndex - 1] : chain[chain.length - 1];
+    if (previewSource?.label) edges.push({ sourceKey: previewSource.label, targetKey: "Preview" });
+  }
+  return {
+    prompt: text,
+    summary: `Plan locale contestuale: ${ordered.length} nodi e ${edges.length} collegamenti.`,
+    nodes: ordered,
     edges,
   };
 };
@@ -4077,20 +5446,108 @@ const flowPromptPersistConnection = async ({ dependency = {}, source = {}, targe
   return window.TrackerLensConnectionsStore.upsert(connection);
 };
 
+const flowPromptNodePortNames = (node = {}, side = "out") =>
+  (side === "in" ? node.inputs || [] : node.outputs || [])
+    .map((port) => flowPromptPortName(port, ""))
+    .filter(Boolean);
+
+const flowPromptPickPreferredPort = (ports = [], preferences = [], fallback = "") => {
+  const names = ports.map((port) => flowPromptPortName(port, "")).filter(Boolean);
+  if (!names.length) return fallback || "";
+  const normalized = new Map(names.map((name) => [flowPromptNormalize(name), name]));
+  const preferred = preferences.map(flowPromptNormalize).find((name) => normalized.has(name));
+  return preferred ? normalized.get(preferred) : names[0] || fallback || "";
+};
+
+const flowPromptPortPreferencesForLink = (source = {}, target = {}, edge = {}) => {
+  const sourceLabel = flowPromptNormalize(source.label || source.subtype || source.type || "");
+  const targetLabel = flowPromptNormalize(target.label || target.subtype || target.type || "");
+  const sourceSubtype = flowPromptNormalize(source.subtype || nodeSubtype(source));
+  const targetSubtype = flowPromptNormalize(target.subtype || nodeSubtype(target));
+  const sourcePrefs = [];
+  const targetPrefs = [];
+
+  if (targetSubtype === "agent-bridge" || targetLabel.includes("agent bridge")) {
+    sourcePrefs.push("action", "decision", "task", "analysis");
+    targetPrefs.push("agent_control", "agent-control", "listening");
+  }
+  if (sourceSubtype === "agent-bridge" || sourceLabel.includes("agent bridge")) {
+    sourcePrefs.push("action", "agent_control");
+    targetPrefs.push("input", "raw", "task");
+  }
+  if (targetSubtype === "split" || targetLabel.includes("split")) {
+    sourcePrefs.push("action", "decision", "output", "task", "raw");
+    targetPrefs.push("input");
+  }
+  if (targetSubtype === "condition" || targetLabel.includes("condition")) {
+    sourcePrefs.push("decision", "action", "output", "task", "raw");
+    targetPrefs.push("input");
+  }
+  if (targetSubtype === "task" || targetLabel.includes("task node")) {
+    sourcePrefs.push("flow.in", "task", "output", "raw");
+    targetPrefs.push("task");
+  }
+  if (target.type === "aiAgent" || targetLabel.includes("ai ") || targetLabel.includes("agent")) {
+    targetPrefs.push("task", "input");
+  }
+  if (targetLabel.includes("preview") || targetSubtype === "preview") {
+    sourcePrefs.push("action", "output", "analysis", "summary", "decision", "a", "b", "raw");
+    targetPrefs.push("input", "raw", "all");
+  }
+  if (sourceSubtype === "flow-in" || sourceLabel.includes("flow in")) {
+    sourcePrefs.push("flow.in", "output");
+  }
+  if (targetSubtype === "flow-out" || targetLabel.includes("flow out")) {
+    targetPrefs.push("flow.out", "input");
+  }
+  if (sourceSubtype === "orchestrator" || sourceLabel.includes("orchestrator")) {
+    sourcePrefs.push(targetSubtype === "agent-bridge" ? "action" : "decision", "action", "done", "error");
+  }
+  if (sourceSubtype === "task" || sourceLabel.includes("task node")) {
+    sourcePrefs.push("task");
+  }
+
+  const explicitSource = edge.sourcePort || edge.fromPort || edge.output || "";
+  const explicitTarget = edge.targetPort || edge.toPort || edge.input || "";
+  return {
+    source: [explicitSource, ...sourcePrefs, "output", "raw", "task"].filter(Boolean),
+    target: [explicitTarget, ...targetPrefs, "input", "raw", "all"].filter(Boolean),
+  };
+};
+
+const flowPromptResolvePlanPorts = (source = {}, target = {}, edge = {}) => {
+  const prefs = flowPromptPortPreferencesForLink(source, target, edge);
+  const sourcePort = flowPromptPickPreferredPort(flowPromptNodePortNames(source, "out"), prefs.source, edge.sourcePort || "output");
+  const targetPort = flowPromptPickPreferredPort(flowPromptNodePortNames(target, "in"), prefs.target, edge.targetPort || "input");
+  const channel = sourcePort || source.channels?.[0] || "runtime";
+  return { sourcePort, targetPort, channel };
+};
+
 const flowPromptAnalyzePlan = (plan = {}) => {
   const nodeRefs = new Map();
   const analyzedNodes = (plan.nodes || []).map((spec, index) => {
     const existing = flowPromptFindExistingNode(spec);
     const ref = existing || flowPromptNodeFromSpec({ spec, workspaceId: currentWorkspaceId(), index });
-    nodeRefs.set(spec.label, ref);
+    [
+      spec.label,
+      spec.key,
+      spec.name,
+      existing?.label,
+      existing?.id,
+      ref?.label,
+      ref?.id,
+    ].filter(Boolean).forEach((key) => nodeRefs.set(key, ref));
     return { spec, index, existing, node: ref, action: existing ? "reuse" : "create" };
   });
   const analyzedEdges = (plan.edges || []).map((edge, index) => {
     const source = nodeRefs.get(edge.sourceKey);
     const target = nodeRefs.get(edge.targetKey);
-    const sourcePort = flowPromptPortName(source?.outputs?.[0], "output");
-    const targetPort = flowPromptPortName(target?.inputs?.[0], "input");
-    const channel = sourcePort || source?.channels?.[0] || "runtime";
+    const resolvedEdge = source && target ? edge : {
+      ...edge,
+      sourcePort: "",
+      targetPort: "",
+    };
+    const { sourcePort, targetPort, channel } = flowPromptResolvePlanPorts(source, target, resolvedEdge);
     const duplicate = (state.runtime.dependencies || []).find((dependency) =>
       dependency.sourceNodeId === source?.id &&
       dependency.targetNodeId === target?.id &&
@@ -4099,6 +5556,113 @@ const flowPromptAnalyzePlan = (plan = {}) => {
     return { ...edge, index, source, target, sourcePort, targetPort, channel, duplicate };
   });
   return { ...plan, analyzedNodes, analyzedEdges };
+};
+
+const flowPromptPlanPreflight = (analysis = {}) => {
+  const nodes = analysis.analyzedNodes || [];
+  const edges = analysis.analyzedEdges || [];
+  const blockers = [];
+  const warnings = [];
+  const checks = [];
+  const nodeChecks = nodes.map((item) => {
+    const spec = item.spec || {};
+    const paletteItem = flowPromptPaletteItem(spec.label) || flowPromptStrictPaletteItemForAiNode(spec);
+    const status = !paletteItem
+      ? "blocked"
+      : item.existing?.id
+        ? "reuse"
+        : "create";
+    if (!paletteItem) {
+      blockers.push(`Nodo non presente nella palette: ${spec.label || spec.subtype || "senza nome"}.`);
+    }
+    return {
+      label: spec.label || item.node?.label || "Node",
+      action: item.existing?.id ? "reuse" : "create",
+      status,
+      palette: Boolean(paletteItem),
+      detail: item.existing?.id
+        ? `Riuso nodo esistente: ${item.existing.label || item.existing.id}`
+        : paletteItem
+          ? "Nodo palette valido"
+          : "Nodo non validato",
+    };
+  });
+  const edgeChecks = edges.map((edge) => {
+    const source = edge.source || {};
+    const target = edge.target || {};
+    const sourcePorts = flowPromptNodePortNames(source, "out");
+    const targetPorts = flowPromptNodePortNames(target, "in");
+    const sourceOk = Boolean(edge.source?.id && edge.target?.id);
+    const sourcePortOk = !edge.sourcePort || sourcePorts.includes(edge.sourcePort);
+    const targetPortOk = !edge.targetPort || targetPorts.includes(edge.targetPort);
+    const duplicate = Boolean(edge.duplicate);
+    const status = !sourceOk || !sourcePortOk || !targetPortOk
+      ? "blocked"
+      : duplicate
+        ? "reuse"
+        : "create";
+    if (!sourceOk) blockers.push(`Link incompleto: ${edge.sourceKey || edge.sourceLabel || "source"} -> ${edge.targetKey || edge.targetLabel || "target"}.`);
+    if (!sourcePortOk) blockers.push(`Porta OUT non valida su ${source.label || edge.sourceKey}: ${edge.sourcePort}.`);
+    if (!targetPortOk) blockers.push(`Porta IN non valida su ${target.label || edge.targetKey}: ${edge.targetPort}.`);
+    if (duplicate) warnings.push(`Link gia presente: ${source.label || edge.sourceKey} -> ${target.label || edge.targetKey}.`);
+    return {
+      sourceLabel: source.label || edge.sourceLabel || edge.sourceKey || "source",
+      targetLabel: target.label || edge.targetLabel || edge.targetKey || "target",
+      sourcePort: edge.sourcePort || "",
+      targetPort: edge.targetPort || "",
+      channel: edge.channel || "",
+      duplicate,
+      status,
+    };
+  });
+  const destructiveActions = (analysis.actions || []).filter((action) =>
+    ["delete", "deleteNode", "disconnect", "remove"].includes(action?.type || action?.action)
+  );
+  if (destructiveActions.length) {
+    blockers.push("Il piano contiene azioni distruttive: bloccato per questa modalita.");
+  }
+  checks.push({
+    label: "Palette",
+    status: nodeChecks.every((item) => item.palette) ? "ok" : "blocked",
+    detail: `${nodeChecks.filter((item) => item.palette).length}/${nodeChecks.length} nodi validati`,
+  });
+  checks.push({
+    label: "Porte IN/OUT",
+    status: edgeChecks.every((item) => item.status !== "blocked") ? "ok" : "blocked",
+    detail: `${edgeChecks.filter((item) => item.status !== "blocked").length}/${edgeChecks.length} link validati`,
+  });
+  checks.push({
+    label: "Duplicati",
+    status: edgeChecks.some((item) => item.duplicate) ? "warn" : "ok",
+    detail: edgeChecks.some((item) => item.duplicate) ? "Alcuni link saranno riusati" : "Nessun link duplicato",
+  });
+  checks.push({
+    label: "Azioni distruttive",
+    status: destructiveActions.length ? "blocked" : "ok",
+    detail: destructiveActions.length ? `${destructiveActions.length} azioni bloccate` : "Nessuna azione distruttiva",
+  });
+  const createdNodes = nodeChecks.filter((item) => item.action === "create").length;
+  const reusedNodes = nodeChecks.filter((item) => item.action === "reuse").length;
+  const createdEdges = edgeChecks.filter((item) => item.status === "create").length;
+  const reusedEdges = edgeChecks.filter((item) => item.status === "reuse").length;
+  return {
+    ok: blockers.length === 0,
+    status: blockers.length ? "blocked" : warnings.length ? "warn" : "ready",
+    summary: blockers.length
+      ? "Piano bloccato: correggere i problemi prima di applicare."
+      : `Pronto: ${createdNodes} nodi da creare, ${reusedNodes} da riusare, ${createdEdges} link da creare, ${reusedEdges} da riusare.`,
+    whatWillHappen: [
+      createdNodes ? `${createdNodes} nodi saranno creati` : "",
+      reusedNodes ? `${reusedNodes} nodi esistenti saranno riusati` : "",
+      createdEdges ? `${createdEdges} link saranno creati` : "",
+      reusedEdges ? `${reusedEdges} link esistenti saranno riusati` : "",
+    ].filter(Boolean),
+    checks,
+    nodes: nodeChecks,
+    edges: edgeChecks,
+    blockers: [...new Set(blockers)],
+    warnings: [...new Set(warnings)],
+  };
 };
 
 const flowPromptMaterializePlan = async (analysis = {}) => {
@@ -4128,9 +5692,7 @@ const flowPromptMaterializePlan = async (analysis = {}) => {
     const source = nodeByLabel.get(edge.sourceKey) || edge.source;
     const target = nodeByLabel.get(edge.targetKey) || edge.target;
     if (!source?.id || !target?.id) continue;
-    const sourcePort = flowPromptPortName(source.outputs?.[0], edge.sourcePort || "output");
-    const targetPort = flowPromptPortName(target.inputs?.[0], edge.targetPort || "input");
-    const channel = sourcePort || source.channels?.[0] || "runtime";
+    const { sourcePort, targetPort, channel } = flowPromptResolvePlanPorts(source, target, edge);
     const duplicate = (state.runtime.dependencies || []).find((dependency) =>
       dependency.sourceNodeId === source.id &&
       dependency.targetNodeId === target.id &&
@@ -4188,14 +5750,16 @@ const flowPromptMaterializePlan = async (analysis = {}) => {
   return { savedNodes, reusedNodes, createdEdges, reusedEdges };
 };
 
-const openFlowPromptChatDialog = async () => {
+const openFlowPromptChatDialog = async (options = {}) => {
   const existingAside = document.querySelector("[data-flow-prompt-aside]");
   if (existingAside) {
+    flowPromptSaveOpenState(true);
     existingAside.classList.add("is-open");
-    existingAside.querySelector("textarea")?.focus?.();
+    if (!options.restore) existingAside.querySelector("textarea")?.focus?.();
     return;
   }
   const workspaceId = await ensureRuntimeWorkspaceScope();
+  flowPromptSaveOpenState(true, workspaceId);
   const draft = {
     workspaceId,
     chats: [],
@@ -4258,6 +5822,176 @@ const openFlowPromptChatDialog = async () => {
     return nextMessage;
   };
 
+  const promptBeforeMessage = (messageId = "") => {
+    const messages = activeMessages();
+    const index = messages.findIndex((item) => item.id === messageId);
+    const before = index >= 0 ? messages.slice(0, index) : messages;
+    return [...before].reverse().find((item) => item.role === "user" && item.content)?.content || "";
+  };
+
+  const messageById = (messageId = "") =>
+    activeMessages().find((item) => item.id === messageId) || null;
+
+  const scrollToMessage = (messageId = "") => {
+    if (!messageId) return;
+    const root = document.querySelector("[data-flow-prompt-chat]");
+    const messages = Array.from(root?.querySelectorAll("[data-flow-prompt-message-id]") || []);
+    const target = messages.find((item) => item.getAttribute("data-flow-prompt-message-id") === messageId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("is-highlighted");
+    window.setTimeout(() => target.classList.remove("is-highlighted"), 1600);
+  };
+
+  const openMessageBrainDetails = (messageId = "") => {
+    const root = document.querySelector("[data-flow-prompt-chat]");
+    const messages = Array.from(root?.querySelectorAll("[data-flow-prompt-message-id]") || []);
+    const target = messages.find((item) => item.getAttribute("data-flow-prompt-message-id") === messageId);
+    const details = target?.querySelector?.(".tl-flow-prompt-brain-details");
+    if (!details) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("is-highlighted");
+    window.setTimeout(() => target.classList.remove("is-highlighted"), 1400);
+  };
+
+  const focusPromptDraft = () => {
+    refresh();
+    requestAnimationFrame(() => {
+      const textarea = document.querySelector("[data-flow-prompt-chat] textarea");
+      if (!textarea) return;
+      textarea.value = draft.prompt || "";
+      textarea.focus();
+      textarea.setSelectionRange?.(textarea.value.length, textarea.value.length);
+    });
+  };
+
+  const patternMemoryMeta = (item = {}) => {
+    if (!item.meta) return {};
+    if (typeof item.meta === "object") return item.meta;
+    try {
+      return JSON.parse(item.meta);
+    } catch {
+      return {};
+    }
+  };
+
+  const listPatternMemories = async (query = "") => {
+    if (!window.TrackerLensAiRuntimeStore?.listMemory) return [];
+    const records = await window.TrackerLensAiRuntimeStore.listMemory({
+      scope: "workspace",
+      workspaceId: currentWorkspaceId() || "runtime",
+      agentId: "flow-map-agent",
+      query,
+      limit: 100,
+    }).catch(() => []);
+    return records
+      .filter((item) => ["flow-chat-approved-pattern", "flow-chat-rejected-pattern"].includes(item.kind))
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+  };
+
+  const canLearnFromMessage = (message = {}) =>
+    message.role === "assistant" &&
+    ["plan", "agent-report", "text"].includes(message.kind) &&
+    !message.feedback?.rating;
+
+  const canImproveMessage = (message = {}) =>
+    message.role === "assistant" &&
+    ["plan", "agent-report", "text"].includes(message.kind);
+
+  const updateMessageFeedback = async (messageId = "", feedback = {}) => {
+    const messages = activeMessages().map((item) =>
+      item.id === messageId
+        ? {
+          ...item,
+          feedback: feedback
+            ? { ...(item.feedback || {}), ...feedback, updatedAt: flowPromptNow() }
+            : null,
+        }
+        : item
+    );
+    draft.activeChat = {
+      ...draft.activeChat,
+      messages,
+      updatedAt: flowPromptNow(),
+    };
+    await persistActiveChat();
+  };
+
+  const forgetMessageMemory = async (message = {}) => {
+    if (!message?.id || draft.busy) return;
+    draft.busy = true;
+    draft.error = "";
+    setActivity({
+      label: "Rimuovo memoria",
+      detail: "Sto eliminando il pattern confermato dalla memoria workspace.",
+      steps: ["Identificazione memoria", "Forget workspace", "Aggiornamento chat"],
+    });
+    try {
+      const prompt = message.feedback?.prompt || promptBeforeMessage(message.id);
+      const payload = flowPromptApprovedMessageMemoryPayload({ message, prompt });
+      const stableName = payload ? [
+        payload.kind,
+        prompt || message.content || "",
+        (payload.meta?.nodes || []).join("-"),
+        (payload.meta?.edges || []).join("-"),
+      ].join(" ").slice(0, 220) : "";
+      const fallbackId = payload ? [
+        "mem",
+        "workspace",
+        currentWorkspaceId() || "runtime",
+        "flow-map-agent",
+        payload.kind,
+        stableName,
+      ].map((value) => safeRuntimeId(value)).filter(Boolean).join("_") : "";
+      const memoryIds = [...new Set([message.feedback?.memoryId, fallbackId].filter(Boolean))];
+      if (window.TrackerLensAiRuntimeStore?.forgetMemory) {
+        for (const id of memoryIds) {
+          await window.TrackerLensAiRuntimeStore.forgetMemory(id).catch(() => null);
+        }
+      }
+      await updateMessageFeedback(message.id, null);
+    } catch (error) {
+      draft.error = error?.message || "Errore rimozione memoria Flow Chat.";
+    } finally {
+      draft.busy = false;
+      draft.activity = null;
+      refresh();
+    }
+  };
+
+  const learnFromMessage = async (message = {}, rating = "approved") => {
+    if (!message?.id || draft.busy) return;
+    draft.busy = true;
+    draft.error = "";
+    setActivity({
+      label: rating === "approved" ? "Memorizzo pattern" : "Registro feedback",
+      detail: rating === "approved"
+        ? "Sto salvando questa risposta come pattern confermato del workspace."
+        : "Sto marcando questa risposta come non riutilizzabile.",
+      steps: rating === "approved"
+        ? ["Feedback esplicito", "Memoria workspace", "Aggiornamento chat"]
+        : ["Feedback esplicito", "Memoria negativa", "Aggiornamento chat"],
+    });
+    try {
+      const prompt = promptBeforeMessage(message.id);
+      const saved = rating === "approved"
+        ? await flowPromptRememberApprovedMessage({ message, prompt })
+        : await flowPromptRememberRejectedMessage({ message, prompt });
+      await updateMessageFeedback(message.id, {
+        rating,
+        memoryId: saved?.id || "",
+        prompt,
+      });
+    } catch (error) {
+      draft.error = error?.message || "Errore salvataggio feedback Flow Chat.";
+    } finally {
+      draft.busy = false;
+      draft.activity = null;
+      refresh();
+    }
+  };
+
   const refresh = () => {
     const asideRoot = document.querySelector("[data-flow-prompt-aside]");
     const root = document.querySelector("[data-flow-prompt-chat]");
@@ -4282,6 +6016,22 @@ const openFlowPromptChatDialog = async () => {
       updatedAt: flowPromptNow(),
     } : null;
     refresh();
+  };
+
+  const plannerProgressActivity = (progress = {}) => {
+    const attempt = progress.attempt || 1;
+    const maxAttempts = progress.maxAttempts || 3;
+    const repairStep = attempt > 1 ? `Self repair ${attempt - 1}/${Math.max(1, maxAttempts - 1)}` : "Prima generazione JSON";
+    return {
+      label: progress.label || "Planner AI",
+      detail: progress.detail || "Sto preparando un piano validabile.",
+      steps: [
+        "Lettura Brain, RAG e memoria",
+        repairStep,
+        progress.phase === "fallback" ? "Fallback locale" : "Preflight reale",
+        progress.phase === "validated" ? "Piano validato" : "Correzione in corso",
+      ],
+    };
   };
 
   const loadHistory = async () => {
@@ -4327,6 +6077,341 @@ const openFlowPromptChatDialog = async () => {
     refresh();
   };
 
+  const appendAiResponseForPrompt = async (prompt = "", { refinedFrom = "", promptForBrain = "", forceAgentReport = false } = {}) => {
+    const effectivePrompt = String(prompt || "").trim();
+    if (!effectivePrompt) return null;
+    const conversationContext = flowPromptConversationContext(activeMessages(), effectivePrompt);
+    if (forceAgentReport || flowPromptIsAgentQuestion(effectivePrompt)) {
+      const report = await flowPromptBuildAgentReport(effectivePrompt, { promptForBrain, conversationContext });
+      if (refinedFrom) {
+        report.refinedFrom = refinedFrom;
+        report.debug = { ...(report.debug || {}), refinedFrom };
+      }
+      draft.analysis = null;
+      return appendMessage({
+        role: "assistant",
+        kind: "agent-report",
+        content: report.content,
+        agentReport: report,
+        refinedFrom,
+      });
+    }
+    if (!flowPromptShouldPlanFromPrompt(effectivePrompt, conversationContext)) {
+      const reply = await flowPromptBuildConversationalReply(effectivePrompt, { conversationContext });
+      draft.analysis = null;
+      return appendMessage({
+        role: "assistant",
+        kind: "text",
+        content: reply,
+        refinedFrom,
+      });
+    }
+    draft.analysis = flowPromptAnalyzePlan(await flowPromptBuildPlanWithAiFallback(effectivePrompt, {
+      conversationContext,
+      onProgress: (progress) => setActivity(plannerProgressActivity(progress)),
+    }));
+    return appendMessage({
+      role: "assistant",
+      kind: "plan",
+      content: draft.analysis.planner?.mode === "fallback" && draft.analysis.planner?.error
+        ? `${draft.analysis.summary || "Piano generato."}\n\nAvviso AI: ${draft.analysis.planner.error}\nUso il fallback locale per continuare.`
+        : draft.analysis.summary || "Piano generato.",
+      plan: flowPromptPlanSnapshot(draft.analysis),
+      refinedFrom,
+    });
+  };
+
+  const improveMessage = async (message = {}) => {
+    if (!message?.id || draft.busy) return;
+    const originalPrompt = promptBeforeMessage(message.id);
+    if (!originalPrompt) {
+      draft.error = "Non trovo il prompt utente precedente per migliorare questa risposta.";
+      refresh();
+      return;
+    }
+    const lang = flowPromptQuestionLanguage(originalPrompt);
+    const localizedImprove = {
+      en: [
+        "Improve the previous answer while keeping the same intent and the same language as the user question.",
+        "Be more precise, operational, and consistent with Trackers Lens.",
+        "Do not create a flow if the original question was an explanation or advice.",
+        message.content ? `Previous answer to improve: ${message.content}` : "",
+      ],
+      es: [
+        "Mejora la respuesta anterior manteniendo la misma intencion y el mismo idioma de la pregunta.",
+        "Se mas preciso, operativo y coherente con Trackers Lens.",
+        "No crees un flow si la pregunta original era una explicacion o un consejo.",
+        message.content ? `Respuesta anterior a mejorar: ${message.content}` : "",
+      ],
+      fr: [
+        "Ameliore la reponse precedente en gardant la meme intention et la meme langue que la question.",
+        "Sois plus precis, operationnel et coherent avec Trackers Lens.",
+        "Ne cree pas de flow si la question originale etait une explication ou un conseil.",
+        message.content ? `Reponse precedente a ameliorer: ${message.content}` : "",
+      ],
+      de: [
+        "Verbessere die vorherige Antwort mit derselben Absicht und derselben Sprache wie die Frage.",
+        "Sei praziser, operativer und konsistent mit Trackers Lens.",
+        "Erstelle keinen Flow, wenn die ursprungliche Frage eine Erklarung oder Empfehlung war.",
+        message.content ? `Vorherige Antwort zur Verbesserung: ${message.content}` : "",
+      ],
+      it: [
+        "Migliora la risposta precedente mantenendo la stessa intenzione e la stessa lingua della domanda.",
+        "Sii piu preciso, operativo e coerente con Trackers Lens.",
+        "Non creare un flow se la domanda era una spiegazione o un consiglio.",
+        message.content ? `Risposta precedente da migliorare: ${message.content}` : "",
+      ],
+    };
+    const improvementInstruction = localizedImprove[lang] || localizedImprove.it;
+    const improvementPrompt = [
+      originalPrompt,
+      "",
+      ...improvementInstruction,
+    ].filter(Boolean).join("\n");
+    draft.busy = true;
+    draft.error = "";
+    setActivity({
+      label: "Miglioro risposta",
+      detail: "Sto rigenerando con Brain, RAG e memoria aggiornati.",
+      steps: ["Prompt originale", "Contesto Brain", "Nuova risposta"],
+    });
+    try {
+      await appendAiResponseForPrompt(originalPrompt, {
+        refinedFrom: message.id,
+        promptForBrain: improvementPrompt,
+        forceAgentReport: message.kind === "agent-report",
+      });
+    } catch (error) {
+      draft.error = error?.message || "Errore miglioramento risposta Flow Chat.";
+    } finally {
+      draft.busy = false;
+      draft.activity = null;
+      refresh();
+    }
+  };
+
+  const useMessageAsTemplate = (message = {}) => {
+    const prompt = promptBeforeMessage(message.id);
+    draft.prompt = [
+      prompt || "",
+      message.content ? `\nUsa questa risposta come template Trackers Lens:\n${message.content}` : "",
+    ].filter(Boolean).join("\n").trim();
+    focusPromptDraft();
+  };
+
+  const createFlowFromMessage = async (message = {}) => {
+    if (!message?.id || draft.busy) return;
+    if (message.kind === "plan" && message.plan) {
+      await createPlanSnapshot(message.plan);
+      return;
+    }
+    const sourcePrompt = promptBeforeMessage(message.id);
+    const content = String(message.content || "").trim();
+    const prompt = [
+      "crea un flow operativo da questa risposta Trackers Lens.",
+      sourcePrompt ? `Richiesta originale: ${sourcePrompt}` : "",
+      content ? `Risposta sorgente: ${content}` : "",
+      "Usa solo nodi palette reali, porte IN/OUT valide e collegamenti espliciti.",
+    ].filter(Boolean).join("\n");
+    await analyze(prompt);
+  };
+
+  const makeMessageOperational = async (message = {}) => {
+    if (!message?.id || draft.busy) return;
+    const originalPrompt = promptBeforeMessage(message.id);
+    if (!originalPrompt) {
+      draft.error = "Non trovo il prompt utente precedente per rendere operativa questa risposta.";
+      refresh();
+      return;
+    }
+    const lang = flowPromptQuestionLanguage(originalPrompt);
+    const language = flowPromptLanguageName(lang);
+    const operationalPrompt = [
+      originalPrompt,
+      "",
+      `Rewrite the previous answer in ${language}, keeping the original intent.`,
+      "Make it operational for Trackers Lens: include recommended palette nodes, IN/OUT ports, links, technical reason, and when to use each part.",
+      "Do not create or apply the flow automatically. Return professional guidance first.",
+      message.content ? `Previous answer: ${message.content}` : "",
+    ].filter(Boolean).join("\n");
+    draft.busy = true;
+    draft.error = "";
+    setActivity({
+      label: "Rendo operativa",
+      detail: "Sto trasformando la risposta in istruzioni tecniche con nodi, porte e link.",
+      steps: ["Prompt originale", "Contesto operativo", "Risposta strutturata"],
+    });
+    try {
+      await appendAiResponseForPrompt(originalPrompt, {
+        refinedFrom: message.id,
+        promptForBrain: operationalPrompt,
+        forceAgentReport: true,
+      });
+    } catch (error) {
+      draft.error = error?.message || "Errore trasformazione operativa Flow Chat.";
+    } finally {
+      draft.busy = false;
+      draft.activity = null;
+      refresh();
+    }
+  };
+
+  const openSavedPatternsDialog = async () => {
+    let query = "";
+    let patterns = await listPatternMemories(query);
+    let dialog = null;
+    const renderPatternRow = (item = {}) => {
+      const meta = patternMemoryMeta(item);
+      const nodes = Array.isArray(meta.nodes) ? meta.nodes : [];
+      const edges = Array.isArray(meta.edges) ? meta.edges : [];
+      const prompt = meta.prompt || "";
+      const rejected = item.kind === "flow-chat-rejected-pattern";
+      return _.div(
+        { class: `tl-flow-prompt-pattern-row${rejected ? " is-rejected" : ""}` },
+        _.span({ class: "tl-flow-prompt-pattern-icon" }, icon(rejected ? "block" : meta.messageKind === "plan" ? "account_tree" : "memory", "sm")),
+        _.div(
+          { class: "tl-flow-prompt-pattern-main" },
+          _.strong(item.name || "Pattern Flow Chat"),
+          _.p(item.summary || item.text || ""),
+          _.div(
+            { class: "tl-flow-prompt-pattern-meta" },
+            nodes.length ? _.code(`${nodes.length} nodi`) : null,
+            edges.length ? _.code(`${edges.length} link`) : null,
+            _.code(rejected ? "Non usare" : "Approvato"),
+            meta.messageKind ? _.code(meta.messageKind) : null,
+            item.updatedAt ? _.time(new Date(item.updatedAt).toLocaleString()) : null
+          )
+        ),
+        _.div(
+          { class: "tl-flow-prompt-pattern-actions" },
+          rejected ? null : btn({
+            class: "is-ghost is-icon-only",
+            "aria-label": "Usa pattern",
+            title: "Carica questo pattern nel prompt",
+            onclick: () => {
+              draft.prompt = prompt || item.text || item.summary || "";
+              dialog?.close?.();
+              focusPromptDraft();
+            },
+          }, icon("input", "sm")),
+          rejected ? null : btn({
+            class: "is-ghost is-icon-only",
+            "aria-label": "Crea flow da pattern",
+            title: "Prepara un flow da questo pattern",
+            onclick: () => {
+              dialog?.close?.();
+              analyze(`crea un flow professionale da questo pattern salvato:\n${item.text || item.summary || prompt}`);
+            },
+          }, icon("add_link", "sm")),
+          btn({
+            class: "is-ghost is-danger is-icon-only",
+            "aria-label": "Elimina pattern",
+            title: rejected ? "Elimina questa memoria negativa" : "Elimina questo pattern dalla memoria",
+            onclick: async () => {
+              if (!window.confirm(rejected ? "Eliminare questa memoria negativa?" : "Eliminare questo pattern salvato?")) return;
+              await window.TrackerLensAiRuntimeStore?.forgetMemory?.(item.id);
+              patterns = await listPatternMemories(query);
+              refreshDialog();
+              refresh();
+            },
+          }, icon("delete", "sm"))
+        )
+      );
+    };
+    const renderBody = () => _.div(
+      { class: "tl-flow-prompt-pattern-dialog-body" },
+      _.label(
+        { class: "tl-flow-prompt-pattern-search" },
+        icon("search", "sm"),
+        _.input({
+          type: "search",
+          value: query,
+          placeholder: "Cerca pattern salvati o rifiutati...",
+          oninput: async (event) => {
+            query = event.currentTarget.value || "";
+            patterns = await listPatternMemories(query);
+            refreshDialog();
+          },
+        })
+      ),
+      _.div(
+        { class: "tl-flow-prompt-pattern-list" },
+        ...(patterns.length
+          ? patterns.map(renderPatternRow)
+          : [_.p({ class: "tl-flow-prompt-inventory-empty" }, "Nessun pattern salvato o rifiutato per questa Flow Map.")])
+      )
+    );
+    const refreshDialog = () => {
+      const host = document.querySelector("[data-flow-prompt-pattern-dialog]");
+      if (host) host.replaceChildren(renderBody());
+    };
+    dialog = _.Dialog({
+      class: "tl-flow-prompt-pattern-dialog",
+      panelClass: "tl-flow-prompt-pattern-dialog-panel",
+      size: "lg",
+      title: "Pattern salvati",
+      subtitle: "Memorie approvate e rifiutate da AI Flow Chat.",
+      icon: "memory",
+      closeButton: true,
+      scrollable: true,
+      bodyMaxHeight: "68vh",
+      content: () => _.div({ "data-flow-prompt-pattern-dialog": "true" }, renderBody()),
+      actions: ({ close }) => _.Toolbar(
+        { align: "end", gap: 8 },
+        btn({
+          onclick: async () => {
+            patterns = await listPatternMemories(query);
+            refreshDialog();
+          },
+        }, icon("refresh", "sm"), "Aggiorna"),
+        btn({ onclick: close }, "Chiudi")
+      ),
+    });
+    dialog.open();
+  };
+
+  const latestPlanMessage = () =>
+    [...activeMessages()].reverse().find((message) => message.kind === "plan" && message.plan) || null;
+
+  const applyLastPlanFromPrompt = async (prompt = "", intent = "prepare") => {
+    const lastPlan = latestPlanMessage();
+    if (!lastPlan?.plan) {
+      draft.analysis = null;
+      await appendMessage({
+        role: "assistant",
+        kind: "error",
+        content: "Non trovo un piano precedente da usare. Genera prima un piano, poi posso applicarlo o prepararlo.",
+      });
+      return true;
+    }
+    draft.analysis = flowPromptAnalyzePlan(planFromSnapshot(lastPlan.plan));
+    const preflight = flowPromptPlanPreflight(draft.analysis);
+    if (!preflight.ok) {
+      await appendMessage({
+        role: "assistant",
+        kind: "error",
+        content: `Ho recuperato l'ultimo piano, ma non posso applicarlo perche non passa il controllo attuale.\n${preflight.summary}\n${preflight.blockers.join("\n")}`,
+      });
+      return true;
+    }
+    if (intent === "apply") {
+      setActivity({
+        label: "Uso l'ultimo piano",
+        detail: "Ho recuperato il piano valido dalla chat e lo applico con preflight e undo snapshot.",
+        steps: ["Recupero piano", "Preflight", "Create flow"],
+      });
+      await create();
+      return true;
+    }
+    await appendMessage({
+      role: "assistant",
+      kind: "plan",
+      content: "Ho recuperato l'ultimo piano valido dalla chat. Pronto per Crea flow.",
+      plan: flowPromptPlanSnapshot(draft.analysis),
+    });
+    return true;
+  };
+
   const analyze = async (promptOverride = null) => {
     draft.error = "";
     const prompt = String(promptOverride ?? draft.prompt ?? "").trim();
@@ -4344,11 +6429,24 @@ const openFlowPromptChatDialog = async () => {
     draft.result = null;
     try {
       await appendMessage({ role: "user", kind: "prompt", content: prompt });
+      const conversationContext = flowPromptConversationContext(activeMessages(), prompt);
       setActivity({
         label: "Analisi richiesta",
         detail: "Sto decidendo se usare i comandi Flow Map o il planner di creazione.",
         steps: ["Prompt ricevuto", "Classificazione intento"],
       });
+      const lastPlanActionIntent = flowPromptLastPlanActionIntent(prompt);
+      if (lastPlanActionIntent) {
+        setActivity({
+          label: lastPlanActionIntent === "apply" ? "Applico piano" : "Recupero piano",
+          detail: "Sto cercando l'ultimo piano valido nella conversazione.",
+          steps: ["Ultimo piano", "Preflight", lastPlanActionIntent === "apply" ? "Create flow" : "Piano pronto"],
+        });
+        await applyLastPlanFromPrompt(prompt, lastPlanActionIntent);
+        draft.prompt = "";
+        setActivity(null);
+        return;
+      }
       const preference = flowPromptExtractPreferenceMemory(prompt);
       if (preference) {
         setActivity({
@@ -4382,7 +6480,7 @@ const openFlowPromptChatDialog = async () => {
           detail: "Sto raccogliendo nodi, collegamenti, canali, eventi e log del workspace.",
           steps: ["Inventario Flow Map", "Query runtime scoped", "Diagnostica strutturale"],
         });
-        const report = await flowPromptBuildAgentReport(prompt);
+        const report = await flowPromptBuildAgentReport(prompt, { conversationContext });
         draft.analysis = null;
         await appendMessage({
           role: "assistant",
@@ -4394,13 +6492,13 @@ const openFlowPromptChatDialog = async () => {
         setActivity(null);
         return;
       }
-      if (!flowPromptLooksLikeFlowRequest(prompt)) {
+      if (!flowPromptShouldPlanFromPrompt(prompt, conversationContext)) {
         setActivity({
           label: "Risposta chat",
           detail: "Sto usando AI Settings per rispondere senza creare nodi.",
           steps: ["Contesto Flow Map", "Provider AI", "Risposta generale"],
         });
-        const reply = await flowPromptBuildConversationalReply(prompt);
+        const reply = await flowPromptBuildConversationalReply(prompt, { conversationContext });
         draft.analysis = null;
         await appendMessage({
           role: "assistant",
@@ -4416,7 +6514,10 @@ const openFlowPromptChatDialog = async () => {
         detail: "Sto controllando nodi esistenti e preparando il piano con AI Settings.",
         steps: ["Lettura AI Settings", "Planner AI o fallback locale", "Controllo duplicati"],
       });
-      draft.analysis = flowPromptAnalyzePlan(await flowPromptBuildPlanWithAiFallback(prompt));
+      draft.analysis = flowPromptAnalyzePlan(await flowPromptBuildPlanWithAiFallback(prompt, {
+        conversationContext,
+        onProgress: (progress) => setActivity(plannerProgressActivity(progress)),
+      }));
       setActivity({
         label: "Piano pronto",
         detail: "Sto preparando il riepilogo con nodi da creare, riusare e collegare.",
@@ -4426,7 +6527,7 @@ const openFlowPromptChatDialog = async () => {
         role: "assistant",
         kind: "plan",
         content: draft.analysis.planner?.mode === "fallback" && draft.analysis.planner?.error
-          ? `${draft.analysis.summary || "Piano generato."}\nAI planner fallback: ${draft.analysis.planner.error}`
+          ? `${draft.analysis.summary || "Piano generato."}\n\nAvviso AI: ${draft.analysis.planner.error}\nUso il fallback locale per continuare.`
           : draft.analysis.summary || "Piano generato.",
         plan: flowPromptPlanSnapshot(draft.analysis),
       });
@@ -4444,15 +6545,30 @@ const openFlowPromptChatDialog = async () => {
   const create = async () => {
     if (!draft.analysis) await analyze();
     if (!draft.analysis) return;
+    const preflight = flowPromptPlanPreflight(draft.analysis);
+    if (!preflight.ok) {
+      await appendMessage({
+        role: "assistant",
+        kind: "error",
+        content: `${preflight.summary}\n${preflight.blockers.join("\n")}`,
+      }).catch(() => null);
+      refresh();
+      return;
+    }
     draft.busy = true;
     draft.error = "";
     setActivity({
-      label: "Creo il flow",
-      detail: "Sto scrivendo nodi e collegamenti nel runtime graph.",
-      steps: ["Materializzazione nodi", "Registrazione canali", "Creazione dependency"],
+      label: "Applico con controllo",
+      detail: "Sto catturando uno snapshot e scrivendo solo nodi/link validati.",
+      steps: ["Snapshot undo", "Materializzazione nodi", "Creazione dependency"],
     });
     try {
+      const snapshot = await captureAgentSnapshot("Before Flow Chat create");
       draft.result = await flowPromptMaterializePlan(draft.analysis);
+      draft.result.snapshotId = snapshot?.id || "";
+      draft.result.preflight = preflight;
+      draft.result.warnings = preflight.warnings || [];
+      draft.result.completion = flowPromptBuildCompletionSummary(draft.analysis, draft.result, preflight);
       setActivity({
         label: "Finalizzo",
         detail: "Sto aggiornando il canvas e salvando il risultato nello storico.",
@@ -4462,7 +6578,9 @@ const openFlowPromptChatDialog = async () => {
       await appendMessage({
         role: "assistant",
         kind: "result",
-        content: `${summary.createdNodes} nodi creati, ${summary.reusedNodes} riusati, ${summary.createdEdges} collegamenti creati, ${summary.reusedEdges} riusati.`,
+        content: summary.warnings?.length
+          ? `Flow creato e validato. Warning: ${summary.warnings.length}.`
+          : "Flow creato e validato.",
         result: summary,
       });
       draft.analysis = null;
@@ -4976,25 +7094,291 @@ const openFlowPromptChatDialog = async () => {
       })
     ),
     edges: (snapshot.edges || []).map((edge) => ({
-      sourceKey: edge.sourceLabel || edge.sourceKey || "",
-      targetKey: edge.targetLabel || edge.targetKey || "",
+      sourceKey: edge.sourceKey || edge.sourceLabel || "",
+      targetKey: edge.targetKey || edge.targetLabel || "",
+      sourcePort: edge.sourcePort || "",
+      targetPort: edge.targetPort || "",
     })).filter((edge) => edge.sourceKey && edge.targetKey),
   });
 
   const createPlanSnapshot = async (snapshot = {}) => {
-    if (!draft.analysis) {
-      draft.analysis = flowPromptAnalyzePlan(planFromSnapshot(snapshot));
-    }
+    draft.analysis = flowPromptAnalyzePlan(planFromSnapshot(snapshot));
     await create();
   };
 
-  const renderPlanSnapshot = (plan = {}) =>
-    _.div(
+  const brainActionPromptForNode = (label = "") => {
+    const normalized = flowPromptNormalize(label);
+    if (normalized === "agent bridge") return "crea un flow professionale per agenti con task, orchestrator, agent bridge e preview";
+    if (normalized === "orchestrator agent") return "crea un flow professionale per agenti con task, orchestrator, agent bridge, split e preview";
+    if (normalized === "flow in" || normalized === "flow out") return "crea un flow map componibile con Flow In, Orchestrator Agent, Agent Bridge, Flow Out e Preview";
+    if (normalized === "split") return "crea un flow professionale per agenti con task, orchestrator, bridge, split e preview";
+    if (normalized === "condition") return "crea un flow professionale per agenti con task, orchestrator, condition e preview";
+    if (normalized === "preview") return "crea un flow professionale con task, orchestrator agent, agent bridge e preview";
+    return label ? `crea un flow con ${label} e preview` : "";
+  };
+
+  const brainQuickActions = (brain = {}, architectureAdvice = null) => {
+    const labels = new Set([
+      ...(brain?.recommendedNodes || []).map((item) => item.label),
+      ...(architectureAdvice?.recommendations || []).map((item) => item.label),
+    ].filter(Boolean));
+    const actions = [];
+    const add = (key, label, prompt, iconName = "ads_click") => {
+      if (!prompt || actions.some((item) => item.key === key)) return;
+      actions.push({ key, label, prompt, iconName });
+    };
+    if (labels.has("Agent Bridge") || labels.has("Orchestrator Agent")) {
+      add(
+        "agent-pattern",
+        "Crea pattern agentico",
+        "crea un flow professionale per agenti con task, orchestrator, agent bridge, split e preview",
+        "hub"
+      );
+    }
+    if (labels.has("Agent Bridge")) {
+      add("agent-bridge", "Inserisci Agent Bridge", brainActionPromptForNode("Agent Bridge"), "network_node");
+    }
+    if (labels.has("Flow In") || labels.has("Flow Out")) {
+      add(
+        "flow-boundary",
+        "Crea boundary Flow In/Out",
+        "crea un flow map componibile con Flow In, Orchestrator Agent, Agent Bridge, Flow Out e Preview",
+        "account_tree"
+      );
+    }
+    if (labels.has("Split") || labels.has("Condition")) {
+      add(
+        "routing",
+        "Crea routing agentico",
+        labels.has("Condition")
+          ? "crea un flow professionale per agenti con task, orchestrator, condition e preview"
+          : "crea un flow professionale per agenti con task, orchestrator, bridge, split e preview",
+        "alt_route"
+      );
+    }
+    return actions.slice(0, 4);
+  };
+
+  const planRefinementActions = (plan = {}) => {
+    const labels = new Set((plan.nodes || []).map((node) => flowPromptNormalize(node.label || "")));
+    const hasAgentBridge = labels.has("agent bridge");
+    const hasOrchestrator = labels.has("orchestrator agent");
+    const hasSplit = labels.has("split");
+    const hasCondition = labels.has("condition");
+    const hasFlowBoundary = labels.has("flow in") || labels.has("flow out");
+    const hasPreview = labels.has("preview");
+    const actions = [];
+    const add = (key, label, prompt, iconName = "tune") => {
+      if (!prompt || actions.some((item) => item.key === key || item.prompt === prompt)) return;
+      actions.push({ key, label, prompt, iconName });
+    };
+
+    if ((hasAgentBridge || hasOrchestrator) && !hasFlowBoundary) {
+      add(
+        "flow-boundary",
+        "Aggiungi Flow In/Out",
+        "modifica il piano: crea un flow map componibile per agenti con Flow In, Task Node, Orchestrator Agent, Agent Bridge, Split, Flow Out e Preview",
+        "account_tree"
+      );
+    }
+    if ((hasAgentBridge || hasOrchestrator) && hasSplit && !hasCondition) {
+      add(
+        "condition-routing",
+        "Usa Condition",
+        "modifica il piano: crea un flow professionale per agenti con Task Node, Orchestrator Agent, Agent Bridge, Condition e Preview",
+        "alt_route"
+      );
+    }
+    if ((hasAgentBridge || hasOrchestrator) && !hasSplit && !hasCondition) {
+      add(
+        "split-routing",
+        "Aggiungi Split",
+        "modifica il piano: crea un flow professionale per agenti con Task Node, Orchestrator Agent, Agent Bridge, Split e Preview",
+        "call_split"
+      );
+    }
+    if (hasAgentBridge && (hasSplit || hasCondition)) {
+      add(
+        "minimal-agent",
+        "Semplifica",
+        "modifica il piano: crea un flow agentico minimo con Task Node, Orchestrator Agent, Agent Bridge e Preview",
+        "compress"
+      );
+    }
+    if (hasPreview && (hasAgentBridge || hasOrchestrator)) {
+      add(
+        "explain-plan",
+        "Spiega prima",
+        `spiegami questo piano prima di crearlo: ${plan.summary || "flow agentico con bridge, routing e preview"}`,
+        "info"
+      );
+    }
+    return actions.slice(0, 4);
+  };
+
+  const renderPlanSnapshot = (plan = {}) => {
+    const refinementActions = planRefinementActions(plan);
+    const preflight = plan.preflight || null;
+    const similarPatterns = plan.similarPatterns || [];
+    const memoryGuard = plan.memoryGuard || null;
+    const conversationLabel = flowPromptConversationContextLabel(plan.conversationContext);
+    const selfRepair = plan.planner?.selfRepair || null;
+    const preflightExpanded = Boolean(preflight && (!preflight.ok || preflight.warnings?.length || preflight.blockers?.length));
+    const workLead = flowPromptBuildWorkLeadSummary(plan);
+    const renderPreflight = () => !preflight ? null : _.details(
+      { class: `tl-flow-prompt-preflight is-${preflight.status || "ready"}`, ...(preflightExpanded ? { open: true } : {}) },
+      _.summary(
+        icon(preflight.ok ? "verified" : "warning", "sm"),
+        _.span(
+          _.strong(preflight.ok ? "Applica con controllo" : "Controllo bloccato"),
+          _.em(preflight.summary || "Validazione piano")
+        ),
+        icon("expand_more", "sm")
+      ),
+      _.div(
+        { class: "tl-flow-prompt-preflight-body" },
+        preflight.whatWillHappen?.length ? _.section(
+          _.h4("Cosa fara"),
+          ...preflight.whatWillHappen.map((item) => _.span(icon("check_circle", "sm"), item))
+        ) : null,
+        preflight.checks?.length ? _.section(
+          _.h4("Validazioni"),
+          ...preflight.checks.map((item) =>
+            _.span(
+              { class: `is-${item.status || "ok"}` },
+              icon(item.status === "blocked" ? "error" : item.status === "warn" ? "warning" : "check_circle", "sm"),
+              _.strong(item.label),
+              _.em(item.detail || "")
+            )
+          )
+        ) : null,
+        preflight.blockers?.length ? _.section(
+          _.h4("Blocchi"),
+          ...preflight.blockers.map((item) => _.span({ class: "is-blocked" }, icon("error", "sm"), item))
+        ) : null,
+        preflight.warnings?.length ? _.section(
+          _.h4("Rischi / conflitti"),
+          ...preflight.warnings.map((item) => _.span({ class: "is-warn" }, icon("warning", "sm"), item))
+        ) : null
+      )
+    );
+    const renderSelfRepair = () => !selfRepair?.attempts ? null : _.details(
+      { class: "tl-flow-prompt-self-repair" },
+      _.summary(
+        icon(selfRepair.repaired ? "auto_fix_high" : "fact_check", "sm"),
+        _.span(
+          _.strong(selfRepair.repaired ? "Self repair" : "Validazione AI"),
+          _.em(`${selfRepair.attempts} tentativ${selfRepair.attempts === 1 ? "o" : "i"}${selfRepair.repaired ? " · corretto" : ""}`)
+        ),
+        icon("expand_more", "sm")
+      ),
+      _.div(
+        { class: "tl-flow-prompt-self-repair-list" },
+        ...(selfRepair.log || []).map((item) =>
+          _.span(
+            { class: item.ok ? "is-ok" : "is-warn" },
+            icon(item.ok ? "check_circle" : item.json ? "sync_problem" : "data_object", "sm"),
+            _.strong(`Tentativo ${item.attempt}`),
+            _.em(item.ok
+              ? "JSON e preflight validi"
+              : item.json
+                ? (item.errors?.[0] || "Preflight da correggere")
+                : "JSON non valido")
+          )
+        )
+      )
+    );
+    const similarPatternPrompt = (pattern = {}) => {
+      const lang = flowPromptQuestionLanguage(plan.prompt || draft.prompt || "");
+      const lines = lang === "en"
+        ? [
+          "Create a flow using this approved pattern as reference:",
+          pattern.prompt || pattern.text || pattern.name || "",
+          pattern.nodes?.length ? `Pattern nodes: ${pattern.nodes.join(", ")}` : "",
+          pattern.edges?.length ? `Pattern links: ${pattern.edges.join("; ")}` : "",
+        ]
+        : [
+          "crea un flow usando questo pattern approvato come riferimento:",
+          pattern.prompt || pattern.text || pattern.name || "",
+          pattern.nodes?.length ? `Nodi pattern: ${pattern.nodes.join(", ")}` : "",
+          pattern.edges?.length ? `Link pattern: ${pattern.edges.join("; ")}` : "",
+        ];
+      return lines.filter(Boolean).join("\n");
+    };
+    const renderSimilarPatterns = () => !similarPatterns.length ? null : _.details(
+      { class: "tl-flow-prompt-pattern-hints" },
+      _.summary(
+        icon("memory", "sm"),
+        _.span(_.strong("Pattern simili"), _.em(`${similarPatterns.length} dalla memoria`)),
+        icon("expand_more", "sm")
+      ),
+      _.div(
+        { class: "tl-flow-prompt-pattern-hint-list" },
+        ...similarPatterns.map((pattern) =>
+          _.div(
+            { class: "tl-flow-prompt-pattern-hint" },
+            _.span(
+              icon("auto_awesome_motion", "sm"),
+              _.strong(pattern.name || "Pattern salvato"),
+              _.em([
+                pattern.nodes?.length ? `${pattern.nodes.length} nodi` : "",
+                pattern.edges?.length ? `${pattern.edges.length} link` : "",
+                pattern.quality?.label ? `qualita ${pattern.quality.label}` : "",
+              ].filter(Boolean).join(" · ") || "pattern")
+            ),
+            btn({
+              class: "is-ghost is-icon-only",
+              "aria-label": "Usa pattern simile",
+              disabled: draft.busy,
+              title: "Rigenera usando questo pattern approvato",
+              onclick: () => analyze(similarPatternPrompt(pattern)),
+            }, icon("input", "sm"))
+          )
+        )
+      )
+    );
+    return _.div(
       { class: "tl-flow-prompt-message-plan" },
       _.div(
         { class: `tl-flow-prompt-planner-badge is-${plan.planner?.mode || "local"}` },
-        icon(plan.planner?.mode === "ai" ? "psychology" : "rule", "sm"),
+        icon(["ai", "ai-brain"].includes(plan.planner?.mode) ? "psychology" : "rule", "sm"),
         _.span(flowPromptPlannerLabel(plan.planner))
+      ),
+      plan.notice ? _.div(
+        { class: "tl-flow-prompt-endpoint-source-warning" },
+        icon("warning", "sm"),
+        _.span(plan.notice)
+      ) : null,
+      memoryGuard ? _.div(
+        { class: "tl-flow-prompt-endpoint-source-warning is-memory-guard" },
+        icon("block", "sm"),
+        _.span([
+          memoryGuard.excludedByRejection ? `${memoryGuard.excludedByRejection} pattern esclusi dalla memoria negativa` : "",
+          memoryGuard.rejectedPatterns ? `${memoryGuard.rejectedPatterns} rifiuti considerati` : "",
+        ].filter(Boolean).join(" · ") || "Memoria negativa attiva")
+      ) : null,
+      conversationLabel ? _.div(
+        { class: "tl-flow-prompt-endpoint-source-warning is-conversation-context" },
+        icon("forum", "sm"),
+        _.span(conversationLabel)
+      ) : null,
+      renderSelfRepair(),
+      _.details(
+        { class: "tl-flow-prompt-worklead" },
+        _.summary(
+          { class: "tl-flow-prompt-worklead-head" },
+          icon("assignment_turned_in", "sm"),
+          _.span(_.strong("Capo lavoro"), _.em(workLead.next)),
+          _.code(workLead.plan),
+          icon("expand_more", "sm")
+        ),
+        _.div(
+          { class: "tl-flow-prompt-worklead-rows" },
+          _.span(_.strong("Obiettivo"), _.em(workLead.objective)),
+          workLead.constraints.length ? _.span(_.strong("Vincoli"), _.em(workLead.constraints.join(" · "))) : null,
+          _.span(_.strong("Piano"), _.em(workLead.plan)),
+          _.span(_.strong("Verifica"), _.em(workLead.verification))
+        )
       ),
       _.div(
         { class: "tl-flow-prompt-mini-grid" },
@@ -5019,15 +7403,37 @@ const openFlowPromptChatDialog = async () => {
           )
         )
       ),
+      renderPreflight(),
+      renderSimilarPatterns(),
+      refinementActions.length ? _.details(
+        { class: "tl-flow-prompt-plan-options" },
+        _.summary(
+          icon("tune", "sm"),
+          _.span(_.strong("Opzioni"), _.em(`${refinementActions.length} alternative`)),
+          icon("expand_more", "sm")
+        ),
+        _.div(
+          { class: "tl-flow-prompt-choice-buttons" },
+          ...refinementActions.map((action) =>
+            btn({
+              class: "is-ghost",
+              disabled: draft.busy,
+              onclick: () => analyze(action.prompt),
+              title: action.prompt,
+            }, icon(action.iconName || "tune", "sm"), action.label)
+          )
+        )
+      ) : null,
       (plan.nodes || []).length ? _.div(
         { class: "tl-flow-prompt-plan-actions" },
         btn({
           class: "is-primary",
-          disabled: draft.busy,
+          disabled: draft.busy || preflight?.ok === false,
           onclick: () => createPlanSnapshot(plan),
-        }, icon("add_link", "sm"), "Create flow")
+        }, icon("add_link", "sm"), "Crea flow")
       ) : null
     );
+  };
 
   const renderInventorySnapshot = (inventory = {}) =>
     _.div(
@@ -5069,6 +7475,9 @@ const openFlowPromptChatDialog = async () => {
     const intent = report.intent || "summary";
     const query = report.query || {};
     const queryModel = report.queryModel || {};
+    const architectureAdvice = report.architectureAdvice || null;
+    const brain = report.brain || null;
+    const brainContext = report.brainContext || null;
     const queryItems = query.items || [];
     const pendingAction = report.pendingAction || null;
     const pendingStatus = flowPromptEffectiveActionStatus(pendingAction);
@@ -5082,6 +7491,127 @@ const openFlowPromptChatDialog = async () => {
     const showConfig = ["config", "database"].includes(intent);
     const showMemory = intent === "memory";
     const wantsRuntimeErrors = intent === "runtime" && flowPromptNormalize(query.filter) === "error";
+    const renderBrain = () => {
+      if (!brain && !brainContext) return null;
+      const actions = brainQuickActions(brain, architectureAdvice);
+      const language = flowPromptLanguageName(flowPromptQuestionLanguage(brainContext?.prompt || report.debug?.prompt || ""));
+      const refinedFrom = report.refinedFrom || report.debug?.refinedFrom || "";
+      const sourceIds = new Set(brain?.sources || []);
+      const ragItems = (brainContext?.rag || [])
+        .filter((item) => !sourceIds.size || sourceIds.has(item.id))
+        .slice(0, 6);
+      const memoryItems = (brainContext?.memory || []).slice(0, 5);
+      return _.details(
+        { class: "tl-flow-prompt-brain-details" },
+        _.summary(
+          icon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
+          _.span(
+            _.strong("Brain details"),
+            _.em(`${intent} · ${language} · ${Math.round((brain?.confidence || 0) * 100)}%`)
+          ),
+          icon("expand_more", "sm")
+        ),
+        _.div(
+          { class: "tl-flow-prompt-brain-body" },
+          _.span(
+            { class: "tl-flow-prompt-query-card-head" },
+            icon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
+            _.strong(brain?.planner?.mode === "llm-json" ? "LLM + RAG" : "Fallback locale"),
+            _.code(brain?.planner?.model || brain?.planner?.error || "local")
+          ),
+          _.div(
+            { class: "tl-flow-prompt-query-card-grid" },
+            _.span(_.strong(intent), _.em("intent")),
+            _.span(_.strong(language), _.em("lingua")),
+            brainContext?.isRefinement ? _.span(_.strong("yes"), _.em("refinement")) : null,
+            refinedFrom ? _.span(_.strong(refinedFrom.slice(-8)), _.em("refinedFrom")) : null,
+            brainContext?.conversationContext?.active ? _.span(_.strong("yes"), _.em("contesto chat")) : null,
+            _.span(_.strong(String(brainContext?.rag?.length || 0)), _.em("RAG")),
+            _.span(_.strong(String(brainContext?.memory?.length || 0)), _.em("memoria")),
+            _.span(_.strong(String(brainContext?.approvedPatterns?.length || 0)), _.em("pattern ok")),
+            _.span(_.strong(String(brainContext?.rejectedPatterns?.length || 0)), _.em("pattern no")),
+            _.span(_.strong(String(brain?.recommendedNodes?.length || 0)), _.em("nodi validati")),
+            _.span(_.strong(String(Math.round((brain?.confidence || 0) * 100))), _.em("confidence"))
+          ),
+          brain?.planner?.error ? _.small(`AI: ${brain.planner.error}`) : null,
+          ragItems.length ? _.div(
+            { class: "tl-flow-prompt-brain-list" },
+            _.em("Fonti RAG"),
+            ...ragItems.map((item) =>
+              _.span(
+                icon(item.source === "docs" ? "article" : "hub", "sm"),
+                _.strong(item.title || item.id),
+                _.code(item.id)
+              )
+            )
+          ) : null,
+          memoryItems.length ? _.div(
+            { class: "tl-flow-prompt-brain-list" },
+            _.em("Memoria usata"),
+            ...memoryItems.map((item) =>
+              _.span(
+                icon("memory", "sm"),
+                _.strong(item.name || item.kind || "Memory"),
+                _.code(item.kind || item.scope || "workspace")
+              )
+            )
+          ) : null,
+          brain?.recommendedNodes?.length ? _.div(
+            { class: "tl-flow-prompt-brain-list" },
+            _.em("Nodi palette validati"),
+            ...brain.recommendedNodes.slice(0, 6).map((item) =>
+              _.span(
+                icon("check_circle", "sm"),
+                _.strong(item.label),
+                _.code("palette"),
+                item.role ? _.small(item.role) : null
+              )
+            )
+          ) : null,
+          actions.length ? _.div(
+            { class: "tl-flow-prompt-choice-group" },
+            _.em("Azioni rapide"),
+            _.div(
+              { class: "tl-flow-prompt-choice-buttons" },
+              ...actions.map((action) =>
+                btn({
+                  class: "is-ghost",
+                  disabled: draft.busy,
+                  onclick: () => analyze(action.prompt),
+                  title: action.prompt,
+                }, icon(action.iconName || "ads_click", "sm"), action.label)
+              )
+            )
+          ) : null
+        )
+      );
+    };
+    const renderArchitectureAdvice = () => !architectureAdvice ? null : _.section(
+      _.h4("Consiglio architettura"),
+      architectureAdvice.pattern ? _.p(_.strong("Pattern: "), architectureAdvice.pattern) : null,
+      ...(architectureAdvice.recommendations || []).slice(0, 6).map((item) =>
+        _.div(
+          { class: "tl-flow-prompt-query-card" },
+          _.span(
+            { class: "tl-flow-prompt-query-card-head" },
+            icon(item.alreadyInWorkspace ? "check_circle" : "add_circle", "sm"),
+            _.strong(item.label || "Nodo"),
+            _.code(item.alreadyInWorkspace ? "gia presente" : "da inserire")
+          ),
+          _.div(
+            { class: "tl-flow-prompt-query-card-grid" },
+            _.span(_.strong(String(item.inputs?.length || 0)), _.em("input")),
+            _.span(_.strong(String(item.outputs?.length || 0)), _.em("output")),
+            _.span(_.strong(item.role || "-"), _.em("ruolo")),
+            _.span(_.strong(item.useWhen || "-"), _.em("quando"))
+          ),
+          item.reason ? _.small(item.reason) : null,
+          item.inputs?.length ? _.small(`IN: ${item.inputs.join(", ")}`) : null,
+          item.outputs?.length ? _.small(`OUT: ${item.outputs.join(", ")}`) : null,
+          item.nextStep ? _.small(`Step: ${item.nextStep}`) : null
+        )
+      )
+    );
     const renderChoiceGroup = (label = "", choices = []) =>
       choices.length ? _.div(
         { class: "tl-flow-prompt-choice-group" },
@@ -5370,6 +7900,8 @@ const openFlowPromptChatDialog = async () => {
     };
     const renderQueryModelDetails = () => {
       const sections = [];
+      if (brain || brainContext) sections.push(renderBrain());
+      if (architectureAdvice) sections.push(renderArchitectureAdvice());
       if ((showNodes || showConfig) && queryModel.nodes?.length) {
         sections.push(_.section(
           _.h4(`Dettaglio nodi (${queryModel.nodes.length})`),
@@ -5644,43 +8176,245 @@ const openFlowPromptChatDialog = async () => {
     );
   };
 
-  const renderMessage = (message = {}) =>
-    _.article(
-      { class: `tl-flow-prompt-message is-${message.role || "assistant"} is-${message.kind || "text"}` },
+  const renderInlineMarkdown = (text = "") => {
+    const parts = [];
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+    let cursor = 0;
+    String(text || "").replace(pattern, (match, _token, offset) => {
+      if (offset > cursor) parts.push(text.slice(cursor, offset));
+      if (match.startsWith("`")) parts.push(_.code(match.slice(1, -1)));
+      else parts.push(_.strong(match.slice(2, -2)));
+      cursor = offset + match.length;
+      return match;
+    });
+    if (cursor < text.length) parts.push(text.slice(cursor));
+    return parts.length ? parts : [text];
+  };
+
+  const renderMessageContent = (content = "") => {
+    const raw = String(content || "");
+    if (!raw.trim()) return _.p("");
+    const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length <= 1) return _.p(...renderInlineMarkdown(raw.trim()));
+    return _.div(
+      { class: "tl-flow-prompt-message-body" },
+      ...lines.map((line) => {
+        const ordered = line.match(/^(\d+)[.)]\s+(.+)$/);
+        const bullet = line.match(/^[-*]\s+(.+)$/);
+        if (ordered || bullet) {
+          return _.p(
+            { class: "tl-flow-prompt-message-line is-list" },
+            _.span({ class: "tl-flow-prompt-message-marker" }, ordered ? `${ordered[1]}.` : "•"),
+            _.span(...renderInlineMarkdown(ordered ? ordered[2] : bullet[1]))
+          );
+        }
+        return _.p({ class: "tl-flow-prompt-message-line" }, ...renderInlineMarkdown(line));
+      })
+    );
+  };
+
+  const renderMessagePostActions = (message = {}) => {
+    if (message.role !== "assistant" || !["plan", "agent-report", "text"].includes(message.kind)) return null;
+    const hasBrain = Boolean(message.agentReport?.brain || message.agentReport?.brainContext);
+    const canCreate = message.kind === "plan" || message.content || message.agentReport;
+    const secondaryActions = [
+      btn({
+        class: "is-ghost",
+        disabled: draft.busy,
+        title: "Carica questa risposta nel prompt come template",
+        onclick: () => useMessageAsTemplate(message),
+      }, icon("input", "sm"), "Usa template"),
+      btn({
+        class: "is-ghost",
+        disabled: draft.busy,
+        title: "Trasforma in risposta operativa con nodi, porte e link",
+        onclick: () => makeMessageOperational(message),
+      }, icon("construction", "sm"), "Rendi operativo"),
+      hasBrain ? btn({
+        class: "is-ghost",
+        disabled: draft.busy,
+        title: "Apri Brain details",
+        onclick: () => openMessageBrainDetails(message.id),
+      }, icon("psychology", "sm"), "Brain details") : null,
+    ].filter(Boolean);
+    return _.div(
+      { class: "tl-flow-prompt-post-actions" },
+      canCreate ? btn({
+        class: "is-ghost",
+        disabled: draft.busy,
+        title: message.kind === "plan" ? "Crea questo flow" : "Prepara un flow operativo da questa risposta",
+        onclick: () => createFlowFromMessage(message),
+      }, icon("add_link", "sm"), message.kind === "plan" ? "Crea flow" : "Crea flow da risposta") : null,
+      canLearnFromMessage(message) ? btn({
+        class: "is-ghost",
+        disabled: draft.busy,
+        title: "Salva questa risposta come pattern confermato",
+        onclick: () => learnFromMessage(message, "approved"),
+      }, icon("memory", "sm"), "Salva pattern") : null,
+      canLearnFromMessage(message) ? btn({
+        class: "is-ghost is-icon-only",
+        "aria-label": "Non usare come pattern",
+        disabled: draft.busy,
+        title: "Non riusare questa risposta come esempio",
+        onclick: () => learnFromMessage(message, "rejected"),
+      }, icon("block", "sm")) : null,
+      secondaryActions.length ? _.details(
+        { class: "tl-flow-prompt-more-actions" },
+        _.summary(
+          { title: "Altre azioni" },
+          icon("more_horiz", "sm"),
+          _.span("Altro")
+        ),
+        _.div(...secondaryActions)
+      ) : null
+    );
+  };
+
+  const renderResultSnapshot = (result = {}) =>
+    _.div(
+      { class: "tl-flow-prompt-result-report" },
+      result.completion ? _.section(
+        { class: "tl-flow-prompt-completion" },
+        _.div(
+          { class: "tl-flow-prompt-completion-head" },
+          icon(result.warnings?.length ? "task_alt" : "verified", "sm"),
+          _.span(
+            _.strong(result.completion.status || "Obiettivo raggiunto"),
+            _.em(result.completion.goal || "Flow applicato con controllo.")
+          )
+        ),
+        result.completion.details?.length ? _.div(
+          { class: "tl-flow-prompt-completion-list" },
+          ...result.completion.details.map((item) => _.span(icon("check_circle", "sm"), item))
+        ) : null,
+        result.completion.links?.length ? _.details(
+          { class: "tl-flow-prompt-completion-links" },
+          _.summary(icon("add_link", "sm"), _.strong("Collegamenti"), _.em(`${result.completion.links.length} principali`), icon("expand_more", "sm")),
+          _.div(...result.completion.links.map((item) => _.code(item)))
+        ) : null,
+        result.completion.nextStep ? _.p({ class: "tl-flow-prompt-completion-next" }, result.completion.nextStep) : null
+      ) : null,
       _.div(
-        { class: "tl-flow-prompt-message-head" },
-        _.span(icon(message.role === "user" ? "person" : "auto_awesome", "sm"), _.strong(message.role === "user" ? "Tu" : "AI Flow Chat")),
-        _.time(new Date(message.createdAt || Date.now()).toLocaleString())
-      ),
-      _.p(message.content || ""),
-      message.kind === "plan" && message.plan ? renderPlanSnapshot(message.plan) : null,
-      message.kind === "inventory" && message.inventory ? renderInventorySnapshot(message.inventory) : null,
-      message.kind === "agent-report" && message.agentReport ? renderAgentReport(message.agentReport) : null,
-      message.kind === "result" && message.result ? _.div(
         { class: "tl-flow-prompt-result is-inline" },
         icon("check_circle", "sm"),
         _.span(
-          message.result.applied?.length
-            ? message.result.applied.map((item) => item.label).join(" · ")
-            : `${message.result.createdNodes} creati · ${message.result.reusedNodes} aggiornati · ${message.result.createdEdges} link creati · ${message.result.reusedEdges} link riusati`
+          result.applied?.length
+            ? result.applied.map((item) => item.label).join(" · ")
+            : `${result.createdNodes} creati · ${result.reusedNodes} riusati · ${result.createdEdges} link creati · ${result.reusedEdges} link riusati`
         ),
-        message.result.focusNodeId ? btn({
+        result.focusNodeId ? btn({
           class: "is-ghost",
           disabled: draft.busy,
-          onclick: () => focusAgentNode(message.result.focusNodeId),
+          onclick: () => focusAgentNode(result.focusNodeId),
         }, icon("right_panel_open", "sm"), "Inspector") : null,
-        message.result.focusNodeId ? btn({
+        result.focusNodeId ? btn({
           class: "is-ghost",
           disabled: draft.busy,
-          onclick: () => retryRuntimeNodeTest(message.result.focusNodeId),
+          onclick: () => retryRuntimeNodeTest(result.focusNodeId),
         }, icon("play_arrow", "sm"), "Retry") : null,
-        message.result.snapshotId ? btn({
+        result.snapshotId ? btn({
           class: "is-ghost",
           disabled: draft.busy,
-          onclick: () => restoreAgentSnapshot(message.result.snapshotId),
+          title: "Ripristina lo snapshot precedente",
+          onclick: () => restoreAgentSnapshot(result.snapshotId),
         }, icon("undo", "sm"), "Undo") : null
+      ),
+      result.warnings?.length ? _.div(
+        { class: "tl-flow-prompt-result-warnings" },
+        _.strong(icon("warning", "sm"), "Warning"),
+        ...result.warnings.map((item) => _.span(item))
+      ) : null,
+      result.preflight?.checks?.length ? _.details(
+        {
+          class: "tl-flow-prompt-result-checks",
+          ...(result.warnings?.length || result.preflight?.blockers?.length ? { open: true } : {}),
+        },
+        _.summary(
+          icon("fact_check", "sm"),
+          _.span(_.strong("Controlli tecnici"), _.em(result.preflight.summary || "Preflight completato")),
+          icon("expand_more", "sm")
+        ),
+        _.div(
+          ...result.preflight.checks.map((item) =>
+            _.span(
+              { class: `is-${item.status || "ok"}` },
+              icon(item.status === "warn" ? "warning" : item.status === "blocked" ? "error" : "check_circle", "sm"),
+              _.strong(item.label),
+              _.em(item.detail || "")
+            )
+          )
+        )
       ) : null
     );
+
+  const renderMessage = (message = {}) => {
+    const refinedSource = message.refinedFrom ? messageById(message.refinedFrom) : null;
+    return _.article(
+      {
+        class: `tl-flow-prompt-message is-${message.role || "assistant"} is-${message.kind || "text"}`,
+        "data-flow-prompt-message-id": message.id || "",
+      },
+      _.div(
+        { class: "tl-flow-prompt-message-head" },
+        _.span(icon(message.role === "user" ? "person" : "auto_awesome", "sm"), _.strong(message.role === "user" ? "Tu" : "AI Flow Chat")),
+        _.div(
+          { class: "tl-flow-prompt-message-meta" },
+          message.refinedFrom ? _.span(
+            {
+              class: "tl-flow-prompt-feedback-pill is-revision",
+              title: refinedSource
+                ? "Risposta migliorata da una risposta precedente"
+                : "Risposta migliorata da una risposta precedente non trovata nello storico corrente",
+            },
+            icon("history", "sm"),
+            "Revisione"
+          ) : null,
+          message.refinedFrom ? _.div(
+            { class: "tl-flow-prompt-feedback-actions" },
+            btn({
+              class: "is-ghost is-icon-only",
+              "aria-label": "Vai alla risposta originale",
+              disabled: draft.busy || !refinedSource,
+              title: refinedSource ? "Mostra la risposta originale" : "Risposta originale non disponibile",
+              onclick: () => scrollToMessage(message.refinedFrom),
+            }, icon("subdirectory_arrow_left", "sm"))
+          ) : null,
+          message.feedback?.rating === "approved" ? _.span({ class: "tl-flow-prompt-feedback-pill is-approved" }, icon("memory", "sm"), "Memorizzato") : null,
+          message.feedback?.rating === "rejected" ? _.span({ class: "tl-flow-prompt-feedback-pill is-rejected" }, icon("block", "sm"), "Non usare") : null,
+          message.feedback?.rating === "approved" ? _.div(
+            { class: "tl-flow-prompt-feedback-actions" },
+            btn({
+              class: "is-ghost is-danger is-icon-only",
+              "aria-label": "Dimentica memoria",
+              disabled: draft.busy,
+              title: "Rimuovi questa memoria confermata",
+              onclick: () => forgetMessageMemory(message),
+            }, icon("delete", "sm"))
+          ) : null,
+          canImproveMessage(message) ? _.div(
+            { class: "tl-flow-prompt-feedback-actions" },
+            btn({
+              class: "is-ghost is-icon-only",
+              "aria-label": "Migliora risposta",
+              disabled: draft.busy,
+              title: "Migliora questa risposta con Brain, RAG e memoria",
+              onclick: () => improveMessage(message),
+            }, icon("auto_fix_high", "sm"))
+          ) : null
+        )
+      ),
+      renderMessageContent(message.content || ""),
+      message.kind === "plan" && message.plan ? renderPlanSnapshot(message.plan) : null,
+      message.kind === "inventory" && message.inventory ? renderInventorySnapshot(message.inventory) : null,
+      message.kind === "agent-report" && message.agentReport ? renderAgentReport(message.agentReport) : null,
+      message.kind === "result" && message.result ? renderResultSnapshot(message.result) : null,
+      renderMessagePostActions(message),
+      _.footer(
+        { class: "tl-flow-prompt-message-foot" },
+        _.time(new Date(message.createdAt || Date.now()).toLocaleString())
+      )
+    );
+  };
 
   const renderChatList = () =>
     _.aside(
@@ -5813,6 +8547,7 @@ const openFlowPromptChatDialog = async () => {
 
   const closeAside = () => {
     if (!aside) return;
+    flowPromptSaveOpenState(false, draft.workspaceId || workspaceId);
     aside.classList.remove("is-open");
     window.setTimeout(() => aside?.remove?.(), 180);
   };
@@ -5836,7 +8571,22 @@ const openFlowPromptChatDialog = async () => {
         _.strong(isHistory ? "Chat history" : activeTitle),
         _.em(isHistory ? `${draft.chats.length} chat salvate` : "Flow Map agent")
       ),
-      btn({ class: "is-ghost", "aria-label": "Chiudi AI Flow Chat", title: "Chiudi", onclick: closeAside }, icon("close", "sm"))
+      _.div(
+        { class: "tl-flow-prompt-aside-actions" },
+        btn({
+          class: "is-ghost is-icon-only",
+          "aria-label": "Pattern salvati",
+          title: "Pattern salvati",
+          onclick: openSavedPatternsDialog,
+        }, icon("memory", "sm"))
+      ),
+      btn({
+        class: "is-ghost is-icon-only tl-flow-prompt-aside-close",
+        dense: true,
+        "aria-label": "Chiudi AI Flow Chat",
+        title: "Chiudi",
+        onclick: closeAside,
+      }, icon("close", "sm"))
     );
   }
 
@@ -5854,7 +8604,7 @@ const openFlowPromptChatDialog = async () => {
   document.body.appendChild(aside);
   requestAnimationFrame(() => {
     aside?.classList.add("is-open");
-    aside?.querySelector("textarea")?.focus?.();
+    if (!options.restore) aside?.querySelector("textarea")?.focus?.();
   });
   loadHistory();
 };
@@ -5864,4 +8614,19 @@ window.TrackerLensFlowPromptChat = {
   ...(window.TrackerLensFlowPromptChat || {}),
   runRuntimeErrorMemoryTests: flowPromptRunRuntimeErrorMemoryTests,
   runMemoryRecallTests: flowPromptRunMemoryRecallTests,
+  runFlowChatHardeningTests: flowPromptRunFlowChatHardeningTests,
 };
+
+const flowPromptRestoreOpenState = () => {
+  if (document.querySelector("[data-flow-prompt-aside]")) return;
+  if (!flowPromptShouldRestoreOpen()) return;
+  openFlowPromptChatDialog({ restore: true }).catch((error) => {
+    console.warn("AI Flow Chat restore non completato:", error);
+  });
+};
+
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", () => window.setTimeout(flowPromptRestoreOpenState, 250), { once: true });
+} else {
+  window.setTimeout(flowPromptRestoreOpenState, 250);
+}
