@@ -23,6 +23,11 @@ Last updated: 2026-06-11.
 ## Current Capabilities
 
 - inventory/questions about nodes/channels/links/runtime/config/memory
+- Agent Runtime tool context: `inspectFlow`, `suggestFixes`, recent runs and optional dry-run trace can be passed into Brain answers for diagnostics/fix/trace prompts.
+- provider health summaries are included in runtime query context so Flow Chat can explain missing model/endpoint/provider problems without relying on console errors.
+- Brain RAG includes Agent Runtime and Runtime Contract docs in addition to Flow Chat/Safe Executor/Runtime Graph docs.
+- Flow Chat memory ranking considers pattern structure, recency, use frequency, workspace fit and stale penalties.
+- explain-only prompts are explicitly blocked from becoming creation plans.
 - connect/disconnect
 - rename
 - config/channel updates

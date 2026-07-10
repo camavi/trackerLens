@@ -628,10 +628,21 @@ const flowPromptIsInventoryQuestion = (prompt = "") => {
 };
 
 const flowPromptIsCreationRequest = (prompt = "") =>
-  flowPromptHasAny(prompt, [
+  !flowPromptIsExplainOnlyRequest(prompt) && flowPromptHasAny(prompt, [
     "crea", "creare", "genera", "generare", "aggiungi", "costruisci", "build", "create", "generate", "add",
     "nuovo flow", "new flow", "pipeline", "workflow",
   ]);
+
+const flowPromptIsExplainOnlyRequest = (prompt = "") => {
+  const text = flowPromptNormalize(prompt);
+  const asksExplain = flowPromptHasAny(text, [
+    "spiega", "spiegami", "mi spieghi", "explain", "why", "perche", "perché", "come funziona", "what is", "cosa e", "cosa è",
+  ]);
+  const asksApply = flowPromptHasAny(text, [
+    "crea", "creare", "crealo", "applica", "procedi", "genera", "aggiungi", "inserisci", "modifica", "sistema", "fix", "build", "create", "apply", "add",
+  ]);
+  return asksExplain && !asksApply;
+};
 
 const flowPromptQuestionLanguage = (prompt = "") => {
   const text = flowPromptNormalize(prompt);
@@ -658,6 +669,19 @@ const flowPromptLanguageName = (lang = "it") => ({
 
 const flowPromptLanguageRule = (prompt = "") =>
   `Golden language rule: answer in ${flowPromptLanguageName(flowPromptQuestionLanguage(prompt))}, the same language as the user request.`;
+
+const flowPromptUiText = (key = "", lang = "en") => {
+  const dictionary = {
+    brainDetails: { en: "Brain details", it: "Dettagli Brain" },
+    providerHealth: { en: "Provider health", it: "Stato provider" },
+    agentRuntime: { en: "Agent Runtime", it: "Agent Runtime" },
+    runtimeTools: { en: "Runtime tools", it: "Strumenti runtime" },
+    memoryRank: { en: "Memory rank", it: "Ranking memoria" },
+    ragSources: { en: "RAG sources", it: "Fonti RAG" },
+    diagnostics: { en: "Diagnostics", it: "Diagnostica" },
+  };
+  return dictionary[key]?.[lang] || dictionary[key]?.en || key;
+};
 
 const flowPromptIsArchitectureAdviceRequest = (prompt = "") => {
   const text = flowPromptNormalize(prompt);
@@ -686,6 +710,7 @@ const flowPromptLooksLikeFlowRequest = (prompt = "") =>
   ]);
 
 const flowPromptShouldPlanFromPrompt = (prompt = "", conversationContext = null) => {
+  if (flowPromptIsExplainOnlyRequest(prompt)) return false;
   if (flowPromptLooksLikeFlowRequest(prompt)) return true;
   if (!conversationContext?.lastPlan) return false;
   const text = flowPromptNormalize(prompt);
@@ -1247,11 +1272,79 @@ const flowPromptBuildRuntimeQueryModel = async ({ context = {}, prompt = "", que
     config: node.metadata?.config || {},
     manifest: node.metadata?.manifest || null,
   }));
-  const [channels, settings, aiRuntime] = await Promise.all([
+  const flowPromptProviderHealth = (providers = []) => {
+    const normalized = (providers || []).map((provider) => {
+      const endpoint = String(provider.endpoint || provider.baseUrl || "").replace(/\/+$/g, "");
+      const status = provider.status || provider.health || (provider.local ? "local" : "configured") || "";
+      const model = provider.model || provider.defaultModel || "";
+      const providerType = provider.provider || provider.providerType || provider.name || "";
+      const issue = !endpoint && provider.local
+        ? "missing-endpoint"
+        : !model
+          ? "missing-model"
+          : String(status).toLowerCase().includes("error")
+            ? "provider-error"
+            : "";
+      return {
+        id: provider.id || provider.name || providerType || "provider",
+        name: provider.name || provider.provider || provider.id || "Provider",
+        provider: providerType,
+        model,
+        endpoint,
+        status,
+        local: Boolean(provider.local),
+        ready: !issue,
+        issue,
+      };
+    });
+    const ready = normalized.filter((item) => item.ready).length;
+    return {
+      ready,
+      total: normalized.length,
+      primary: normalized.find((item) => item.ready) || normalized[0] || null,
+      providers: normalized.slice(0, 8),
+      summary: normalized.length
+        ? `${ready}/${normalized.length} provider ready`
+        : "No AI provider configured",
+    };
+  };
+  const flowPromptAgentRuntimeTools = async () => {
+    if (!window.TrackerLensAgentRuntime?.inspectFlow) {
+      return { available: false, version: "", summary: null, fixes: [], runs: [], trace: null, tools: [] };
+    }
+    const workspaceId = context.workspaceId || currentWorkspaceId() || "";
+    const runtimeIntent = flowPromptAgentIntent(prompt);
+    const wantsTrace = flowPromptHasAny(prompt, ["trace", "run trace", "simula", "simulate", "verifica", "verify"]);
+    const wantsFixes = flowPromptHasAny(prompt, ["fix", "sistema", "ripara", "correggi", "diagnosi", "diagnostica", "problema", "error", "errore"]);
+    const [inspect, fixes, runs, trace] = await Promise.all([
+      window.TrackerLensAgentRuntime.inspectFlow({ workspaceId }).catch((error) => ({ error: error?.message || String(error) })),
+      wantsFixes || runtimeIntent === "diagnostics"
+        ? window.TrackerLensAgentRuntime.suggestFixes({ workspaceId }).catch((error) => ({ fixes: [], error: error?.message || String(error) }))
+        : Promise.resolve(null),
+      window.TrackerLensAgentRuntime.listRuns?.().catch(() => ({ runs: [] })) || Promise.resolve({ runs: [] }),
+      wantsTrace
+        ? window.TrackerLensAgentRuntime.runFlow({ workspaceId, dryRun: true, mode: "dry-run", payload: { objective: `Flow Chat runtime trace: ${prompt}` } }).catch((error) => ({ error: error?.message || String(error), trace: [] }))
+        : Promise.resolve(null),
+    ]);
+    return {
+      available: true,
+      version: window.TrackerLensAgentRuntime.VERSION || "agent-runtime-v1",
+      summary: inspect.summary || null,
+      issues: inspect.issues || [],
+      fixes: fixes?.fixes || [],
+      fixError: fixes?.error || "",
+      runs: (runs.runs || []).slice(0, 5),
+      trace,
+      tools: Object.keys(window.TrackerLensAgentRuntime.tools || {}),
+    };
+  };
+  const [channels, settings, aiRuntime, agentRuntime] = await Promise.all([
     flowPromptBuildChannelLineage(context, filter),
     flowPromptReadSettingsSnapshot(),
     flowPromptReadAiRuntimeSnapshot(),
+    flowPromptAgentRuntimeTools(),
   ]);
+  const providerHealth = flowPromptProviderHealth(aiRuntime.providers || []);
   const runtimeRecords = flowPromptRecentRecords([...(context.flowLogs || []), ...(context.events || [])], 12);
   const errors = runtimeRecords.filter((record) =>
     record.level === "error" || record.status === "error" || record.severity === "error"
@@ -1288,6 +1381,7 @@ const flowPromptBuildRuntimeQueryModel = async ({ context = {}, prompt = "", que
     },
     settings,
     aiRuntime: {
+      providerHealth,
       providers: aiRuntime.providers.map((provider) => ({
         id: provider.id,
         name: provider.name || provider.provider || provider.id,
@@ -1305,6 +1399,7 @@ const flowPromptBuildRuntimeQueryModel = async ({ context = {}, prompt = "", que
       logs: aiRuntime.logs.slice(0, 5),
       prompts: aiRuntime.prompts.slice(0, 6).map((item) => ({ id: item.id, title: item.title || item.name || item.prompt || item.id })),
     },
+    agentRuntime,
     memory: memory.slice(0, 8),
   };
 };
@@ -1362,6 +1457,8 @@ const FLOW_PROMPT_BRAIN_DOCS = [
   { id: "doc-flow-chat", title: "Flow Chat agent", url: "docs/ai/flow-map/prompt-chat.md", tags: ["flow-chat", "agent"] },
   { id: "doc-safe-executor", title: "Safe executor", url: "docs/ai/flow-map/safe-executor.md", tags: ["safe-executor", "mutation"] },
   { id: "doc-runtime-graph", title: "Runtime graph", url: "docs/ai/flow-map/runtime-graph.md", tags: ["runtime", "graph"] },
+  { id: "doc-runtime-contract", title: "Runtime contract", url: "docs/ai/runtime/contract.md", tags: ["runtime", "contract", "ports"] },
+  { id: "doc-agent-runtime", title: "Agent Runtime", url: "docs/ai/runtime/agent-runtime.md", tags: ["agent-runtime", "tools", "trace", "fixes"] },
   { id: "doc-ai-memory", title: "AI memory runtime", url: "docs/ai/runtime/ai-memory.md", tags: ["memory", "workspace"] },
 ];
 
@@ -1489,6 +1586,28 @@ const flowPromptBuildBrainContext = async ({ context = {}, prompt = "", routePro
       })),
       errors: (queryModel.runtime?.errorInsights || []).slice(0, 4),
       settings: queryModel.settings || {},
+      providerHealth: queryModel.aiRuntime?.providerHealth || null,
+      agentRuntime: queryModel.agentRuntime ? {
+        available: queryModel.agentRuntime.available,
+        version: queryModel.agentRuntime.version,
+        summary: queryModel.agentRuntime.summary,
+        issues: (queryModel.agentRuntime.issues || []).slice(0, 8),
+        fixes: (queryModel.agentRuntime.fixes || []).slice(0, 8).map((fix) => ({
+          type: fix.type,
+          severity: fix.severity,
+          problem: fix.problem,
+          actionText: fix.actionText,
+          safe: fix.safe,
+          preview: fix.preview,
+        })),
+        trace: queryModel.agentRuntime.trace ? {
+          status: queryModel.agentRuntime.trace.status,
+          mode: queryModel.agentRuntime.trace.mode,
+          steps: queryModel.agentRuntime.trace.trace?.length || 0,
+          validationOk: queryModel.agentRuntime.trace.summary?.validationOk,
+        } : null,
+        tools: queryModel.agentRuntime.tools || [],
+      } : null,
     },
     memory: (memory || []).slice(0, 6).map((item) => ({
       id: item.id,
@@ -1607,6 +1726,8 @@ const flowPromptBuildBrainPrompt = (brainContext = {}) => [
   "Rules:",
   "- Use only labels from context.palette in recommendedNodes.",
   "- Runtime facts, current nodes, ports, memory and RAG context are authoritative.",
+  "- If context.selectedRuntime.agentRuntime is available, use its inspectFlow/suggestFixes/runFlow facts before giving diagnostics.",
+  "- Provider health is operational data: mention missing model/endpoint/provider only when context.selectedRuntime.providerHealth reports it.",
   "- Do not claim a node/port/action exists unless it is in context.",
   "- Treat context.approvedPatterns as user-confirmed good examples and context.rejectedPatterns as user-confirmed examples to avoid.",
   "- Use context.conversationContext to resolve follow-up references such as previous, same, second node, simpler, without Split, or add Condition.",
@@ -1719,6 +1840,8 @@ const flowPromptApprovedPatternFromMemory = (memory = {}, prompt = "") => {
     planner: meta.planner || {},
     score,
     updatedAt: memory.updatedAt || "",
+    workspaceId: memory.workspaceId || meta.workspaceId || "",
+    uses: Number(meta.uses || meta.useCount || memory.uses || memory.useCount || 0) || 0,
   };
 };
 
@@ -1757,8 +1880,11 @@ const flowPromptPatternQuality = (pattern = {}) => {
   const hasPlanner = Boolean(pattern.planner?.mode || pattern.planner?.model);
   const ageMs = pattern.updatedAt ? Date.now() - Date.parse(pattern.updatedAt) : Number.POSITIVE_INFINITY;
   const recency = Number.isFinite(ageMs) && ageMs < 1000 * 60 * 60 * 24 * 14 ? 2 : Number.isFinite(ageMs) && ageMs < 1000 * 60 * 60 * 24 * 60 ? 1 : 0;
+  const frequency = Math.min(3, Number(pattern.uses || pattern.useCount || pattern.hits || pattern.meta?.uses || 0) || 0);
+  const workspaceFit = pattern.workspaceId && pattern.workspaceId === currentWorkspaceId() ? 2 : 0;
+  const stalePenalty = Number.isFinite(ageMs) && ageMs > 1000 * 60 * 60 * 24 * 120 ? 2 : 0;
   const structure = Math.min(4, nodeCount) + Math.min(4, edgeCount);
-  const score = structure + (hasPrompt ? 2 : 0) + (hasPlanner ? 1 : 0) + recency;
+  const score = structure + (hasPrompt ? 2 : 0) + (hasPlanner ? 1 : 0) + recency + frequency + workspaceFit - stalePenalty;
   return {
     score,
     label: score >= 9 ? "alta" : score >= 5 ? "media" : "bassa",
@@ -1766,6 +1892,9 @@ const flowPromptPatternQuality = (pattern = {}) => {
     edgeCount,
     hasPrompt,
     recency,
+    frequency,
+    workspaceFit,
+    stale: stalePenalty > 0,
   };
 };
 
@@ -4422,7 +4551,17 @@ const flowPromptRunFlowChatHardeningTests = async () => {
     edges: ["Task Node -> Orchestrator Agent", "Orchestrator Agent -> Preview"],
     planner: { mode: "ai" },
     updatedAt: flowPromptNow(),
+    uses: 3,
   };
+  const brainPrompt = flowPromptBuildBrainPrompt({
+    prompt: "diagnostica il flow",
+    palette: [],
+    selectedRuntime: {
+      agentRuntime: { available: true, tools: ["inspectFlow", "suggestFixes"], fixes: [] },
+      providerHealth: { summary: "1/1 provider ready" },
+    },
+    rag: [],
+  });
   const completion = flowPromptBuildCompletionSummary(
     { summary: plan.summary },
     {
@@ -4442,8 +4581,21 @@ const flowPromptRunFlowChatHardeningTests = async () => {
     },
     {
       name: "pattern quality",
-      ok: flowPromptPatternQuality(pattern).label === "alta",
+      ok: flowPromptPatternQuality(pattern).label === "alta" && flowPromptPatternQuality(pattern).frequency === 3,
       quality: flowPromptPatternQuality(pattern),
+    },
+    {
+      name: "explain-only does not plan",
+      ok: flowPromptIsExplainOnlyRequest("mi spieghi Agent Bridge in 3 punti")
+        && !flowPromptShouldPlanFromPrompt("mi spieghi Agent Bridge in 3 punti", { lastPlan: plan, referencesPrevious: true }),
+    },
+    {
+      name: "agent runtime RAG doc registered",
+      ok: FLOW_PROMPT_BRAIN_DOCS.some((doc) => doc.id === "doc-agent-runtime"),
+    },
+    {
+      name: "brain prompt includes runtime tools",
+      ok: brainPrompt.includes("inspectFlow/suggestFixes/runFlow") && brainPrompt.includes("Provider health"),
     },
     {
       name: "work lead summary",
@@ -4537,6 +4689,8 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
   debug.genericPlan = flowPromptDebugAgentPlan(agentPlan);
   const lower = flowPromptNormalize(prompt);
   const wantsDb = flowPromptHasAny(lower, ["db", "database", "indexeddb"]);
+  const wantsAgentRuntime = flowPromptHasAny(lower, ["agent runtime", "runtime agent", "diagnosi", "diagnostica", "trace", "fix", "sistema", "verifica"]);
+  const wantsProviderHealth = flowPromptHasAny(lower, ["provider", "modello", "model", "llm", "ollama", "lm studio", "openai"]);
   const mutation = intent !== "advice" && flowPromptIsMutationRequest(prompt);
   const parts = [];
 
@@ -4546,6 +4700,26 @@ const flowPromptBuildAgentReport = async (prompt = "", options = {}) => {
 
   if (brain?.answer && !pendingAction) {
     parts.push(brain.answer);
+  } else if (wantsAgentRuntime && queryModel.agentRuntime?.available && !pendingAction) {
+    const runtime = queryModel.agentRuntime;
+    const fixCount = runtime.fixes?.length || 0;
+    const issueCount = runtime.issues?.length || 0;
+    parts.push(`Agent Runtime attivo (${runtime.version}). Flow corrente: ${runtime.summary?.nodes || 0} nodi, ${runtime.summary?.dependencies || 0} collegamenti, ${issueCount} issue.`);
+    if (fixCount) {
+      const primaryFix = runtime.fixes[0];
+      parts.push(`Fix suggeriti: ${fixCount}. Primo fix: ${primaryFix.problem || primaryFix.type}; azione: ${primaryFix.actionText || primaryFix.preview || "review manuale"}.`);
+    } else {
+      parts.push("Nessun fix automatico necessario secondo Agent Runtime.");
+    }
+    if (runtime.trace) {
+      parts.push(`Trace ${runtime.trace.mode || "dry-run"}: ${runtime.trace.status || "completed"}, ${runtime.trace.trace?.length || 0} step.`);
+    }
+  } else if (wantsProviderHealth && !pendingAction) {
+    const health = queryModel.aiRuntime?.providerHealth;
+    parts.push(health?.summary || "Nessun provider AI configurato.");
+    if (health?.primary) {
+      parts.push(`Provider primario: ${health.primary.name} · ${health.primary.provider || "provider"} · ${health.primary.model || "model missing"}${health.primary.issue ? ` · issue ${health.primary.issue}` : ""}.`);
+    }
   } else if (brain?.planner?.mode === "unavailable" && brain.planner.error) {
     parts.push(`Avviso AI: ${brain.planner.error}`);
     if (architectureAdvice) {
@@ -7501,12 +7675,15 @@ const openFlowPromptChatDialog = async (options = {}) => {
         .filter((item) => !sourceIds.size || sourceIds.has(item.id))
         .slice(0, 6);
       const memoryItems = (brainContext?.memory || []).slice(0, 5);
+      const providerHealth = brainContext?.selectedRuntime?.providerHealth || null;
+      const agentRuntime = brainContext?.selectedRuntime?.agentRuntime || null;
+      const uiLang = flowPromptQuestionLanguage(brainContext?.prompt || report.debug?.prompt || "");
       return _.details(
         { class: "tl-flow-prompt-brain-details" },
         _.summary(
           icon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
           _.span(
-            _.strong("Brain details"),
+            _.strong(flowPromptUiText("brainDetails", uiLang)),
             _.em(`${intent} · ${language} · ${Math.round((brain?.confidence || 0) * 100)}%`)
           ),
           icon("expand_more", "sm")
@@ -7534,9 +7711,46 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.span(_.strong(String(Math.round((brain?.confidence || 0) * 100))), _.em("confidence"))
           ),
           brain?.planner?.error ? _.small(`AI: ${brain.planner.error}`) : null,
+          providerHealth ? _.div(
+            { class: "tl-flow-prompt-brain-list" },
+            _.em(flowPromptUiText("providerHealth", uiLang)),
+            _.span(
+              icon(providerHealth.ready ? "check_circle" : "warning", "sm"),
+              _.strong(providerHealth.summary || "Provider health"),
+              _.code(providerHealth.primary?.model || providerHealth.primary?.issue || "provider")
+            ),
+            ...((providerHealth.providers || []).slice(0, 4).map((provider) =>
+              _.span(
+                icon(provider.ready ? "radio_button_checked" : "error", "sm"),
+                _.strong(provider.name || provider.id),
+                _.code([provider.provider, provider.model || provider.issue || "model"].filter(Boolean).join(" · "))
+              )
+            ))
+          ) : null,
+          agentRuntime?.available ? _.div(
+            { class: "tl-flow-prompt-brain-list" },
+            _.em(flowPromptUiText("agentRuntime", uiLang)),
+            _.span(
+              icon("smart_toy", "sm"),
+              _.strong(`${agentRuntime.summary?.nodes || 0} nodes · ${agentRuntime.summary?.dependencies || 0} links`),
+              _.code(agentRuntime.version || "agent-runtime")
+            ),
+            agentRuntime.trace ? _.span(
+              icon(agentRuntime.trace.status === "blocked" ? "warning" : "timeline", "sm"),
+              _.strong(`${agentRuntime.trace.mode || "trace"} · ${agentRuntime.trace.steps || 0} steps`),
+              _.code(agentRuntime.trace.status || "trace")
+            ) : null,
+            ...((agentRuntime.fixes || []).slice(0, 4).map((fix) =>
+              _.span(
+                icon(fix.safe ? "build" : "manage_search", "sm"),
+                _.strong(fix.problem || fix.type || "Runtime fix"),
+                _.code(fix.safe ? "safe" : "manual")
+              )
+            ))
+          ) : null,
           ragItems.length ? _.div(
             { class: "tl-flow-prompt-brain-list" },
-            _.em("Fonti RAG"),
+            _.em(flowPromptUiText("ragSources", uiLang)),
             ...ragItems.map((item) =>
               _.span(
                 icon(item.source === "docs" ? "article" : "hub", "sm"),
@@ -7547,7 +7761,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ) : null,
           memoryItems.length ? _.div(
             { class: "tl-flow-prompt-brain-list" },
-            _.em("Memoria usata"),
+            _.em(flowPromptUiText("memoryRank", uiLang)),
             ...memoryItems.map((item) =>
               _.span(
                 icon("memory", "sm"),
