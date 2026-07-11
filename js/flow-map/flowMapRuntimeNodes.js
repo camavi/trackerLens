@@ -1777,7 +1777,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
     "knowledge-dictionary-builder": [
       { iconName: "filter_alt", label: "Scope", value: config.scope || "document" },
       { iconName: "translate", label: "Language", value: config.language || "auto" },
-      { iconName: "data_object", label: "Terms", value: config.maxTerms || "120" },
+      { iconName: "data_object", label: "Limit", value: config.maxTerms || "120" },
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
       { iconName: "hub", label: "Output", value: output || "knowledge.dictionary.updated" },

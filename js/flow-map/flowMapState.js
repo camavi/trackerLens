@@ -711,6 +711,12 @@ const cleanupKnowledgeGraphWorkspaceData = async (workspaceId = "") => {
       record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
     result.knowledgeRelations = await cleanupKnowledgeStore(stores.relations, (record) =>
       record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeDictionary = await cleanupKnowledgeStore(stores.dictionary, (record) =>
+      record.collectionId === collectionId || record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeEvents = await cleanupKnowledgeStore(stores.events, (record) =>
+      record.collectionId === collectionId || record.metadata?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
+    result.knowledgeQueries = await cleanupKnowledgeStore(stores.queries, (record) =>
+      record.collectionId === collectionId || record.scope?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
     result.knowledgeMetrics = await cleanupKnowledgeStore(stores.metrics, (record) =>
       record.value?.collectionId === collectionId || isKnowledgeGraphSampleRecord(record));
   }

@@ -205,10 +205,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const clearGraphIndex = async ({ workspaceId, collectionId = "", documentId = "", graphScope = "" } = {}) => {
     const scope = String(graphScope || (documentId ? "document" : collectionId ? "collection" : "workspace")).toLowerCase();
-    const [entities, relations, metrics] = await Promise.all([
+    const [entities, relations, metrics, queries] = await Promise.all([
       listStore(STORES.entities),
       listStore(STORES.relations),
       listStore(STORES.metrics),
+      listStore(STORES.queries),
     ]);
     const scopedEntities = byWorkspace(entities, workspaceId)
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
@@ -227,15 +228,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((metric) => metric.metric === "knowledge.graph.snapshot")
       .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
       .filter((metric) => scope !== "document" || !documentId || metric.value?.documentId === documentId);
+    const scopedQueries = byWorkspace(queries, workspaceId)
+      .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+      .filter((query) => scope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
     await Promise.all([
       deleteRecords(STORES.relations, scopedRelations.map((relation) => relation.id)),
       deleteRecords(STORES.entities, scopedEntities.map((entity) => entity.id)),
       deleteRecords(STORES.metrics, scopedMetrics.map((metric) => metric.id)),
+      deleteRecords(STORES.queries, scopedQueries.map((query) => query.id)),
     ]);
     return {
       entities: scopedEntities.length,
       relations: scopedRelations.length,
       snapshots: scopedMetrics.length,
+      queries: scopedQueries.length,
       documentIds: [...scopedDocumentIds],
       graphScope: scope,
       collectionId,
@@ -4746,9 +4752,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const scopedChunks = byWorkspace(chunks, workspaceId)
       .filter((chunk) => !documentId || chunk.documentId === documentId)
       .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId);
+    const activeDocumentIds = new Set([
+      ...scopedEntities.map((entity) => entity.documentId).filter(Boolean),
+      ...scopedChunks.map((chunk) => chunk.documentId).filter(Boolean),
+    ]);
     const scopedEvents = byWorkspace(eventsAll, workspaceId)
       .filter((item) => !documentId || item.documentId === documentId)
       .filter((item) => !collectionId || item.collectionId === collectionId)
+      .filter((item) => !activeDocumentIds.size || activeDocumentIds.has(item.documentId))
       .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
     const rankedSeeds = scopedEntities
       .map((entity) => ({ entity, score: scoreGraphEntity(entity, queryTokens, cleanToken) }))

@@ -1289,6 +1289,16 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openKnowledgeDocumentsDialog(node);
         },
       }, icon("folder_open", "sm"), documentState.loading ? "Documents..." : `${documentCount} Document${documentCount === 1 ? "" : "s"}`),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear derived Knowledge memory for this document scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeDocumentMemoryClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Memory"),
       _.label(
         {
           class: "tl-flow-kdoc-replay-toggle",
@@ -1355,6 +1365,52 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeGraphQueryScope(node),
+      renderInlineNodeSettings(node),
+      _.span(
+        { class: "tl-flow-node-metrics" },
+        _.em(`${view.runtime.eventsPerMin}/min`),
+        _.em(`${view.runtime.latency || 0}ms`),
+        _.em(`${view.metrics.listeners || 0} listeners`)
+      ),
+    ];
+  }
+  if (isKnowledgeDictionaryBuilderNode(node)) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Knowledge Dictionary records for this scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeDictionaryClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Dictionary"),
+      renderInlineNodeSettings(node),
+      _.span(
+        { class: "tl-flow-node-metrics" },
+        _.em(`${view.runtime.eventsPerMin}/min`),
+        _.em(`${view.runtime.latency || 0}ms`),
+        _.em(`${view.metrics.listeners || 0} listeners`)
+      ),
+    ];
+  }
+  if (isKnowledgeEventBuilderNode(node)) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Knowledge Event records for this scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeEventsClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Events"),
       renderInlineNodeSettings(node),
       _.span(
         { class: "tl-flow-node-metrics" },
@@ -2765,6 +2821,22 @@ const documentStoreReplayAllEnabledForNode = (node = {}) => {
     config.emitAllDocuments === "true";
 };
 
+const knowledgeClearScopeForNode = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const documentId = String(config.documentId || "").trim();
+  const rawGraphScope = String(config.graphScope || "").toLowerCase();
+  const graphScope = rawGraphScope === "document" && !documentId && collectionId
+    ? "collection"
+    : rawGraphScope || (documentId ? "document" : collectionId ? "collection" : "workspace");
+  return {
+    workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+    collectionId,
+    documentId,
+    graphScope,
+  };
+};
+
 const isKnowledgeDocumentEnabled = (document = {}) => {
   const values = [document?.enabled, document?.metadata?.enabled].filter((value) => value !== undefined && value !== null && value !== "");
   return !values.some((value) => value === false || String(value).toLowerCase() === "false" || String(value) === "0");
@@ -3104,7 +3176,7 @@ const knowledgeDocumentRecordsForNode = async (node = {}) => {
 };
 
 const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}) => {
-  if (!node?.id || !document?.id) return { document: 0, chunks: 0, embeddings: 0, entities: 0, relations: 0, dictionary: 0, sources: 0, metrics: 0 };
+  if (!node?.id || !document?.id) return { document: 0, chunks: 0, embeddings: 0, entities: 0, relations: 0, dictionary: 0, events: 0, queries: 0, sources: 0, metrics: 0 };
   const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
   const stores = {
     documents: knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents"),
@@ -3113,15 +3185,19 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
     entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
     relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
     dictionary: knowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
+    events: knowledgeTableName("TL_KNOWLEDGE_EVENTS", "tl_knowledge_events"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
     sources: knowledgeTableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
     metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
   };
-  const [chunks, embeddings, entities, relations, dictionary, sources, metrics] = await Promise.all([
+  const [chunks, embeddings, entities, relations, dictionary, events, queries, sources, metrics] = await Promise.all([
     readKnowledgeInspectorStore(stores.chunks),
     readKnowledgeInspectorStore(stores.embeddings),
     readKnowledgeInspectorStore(stores.entities),
     readKnowledgeInspectorStore(stores.relations),
     readKnowledgeInspectorStore(stores.dictionary),
+    readKnowledgeInspectorStore(stores.events),
+    readKnowledgeInspectorStore(stores.queries),
     readKnowledgeInspectorStore(stores.sources),
     readKnowledgeInspectorStore(stores.metrics),
   ]);
@@ -3147,6 +3223,16 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
   const staleDictionary = (dictionary || [])
     .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
     .filter((entry) => entry.documentId === documentId || chunkIds.has(entry.chunkId));
+  const staleEvents = (events || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => entry.documentId === documentId || chunkIds.has(entry.chunkId));
+  const staleQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) =>
+      query.documentId === documentId ||
+      query.scope?.documentId === documentId ||
+      (Array.isArray(query.scope?.documentIds) && query.scope.documentIds.includes(documentId))
+    );
   const staleSources = (sources || [])
     .filter((source) => (source.workspaceId || "workspace_global") === workspaceId)
     .filter((source) => source.documentId === documentId);
@@ -3157,6 +3243,8 @@ const deleteKnowledgeDocumentRecord = async ({ node = {}, document = null } = {}
     deleteKnowledgeInspectorStoreRecords(stores.relations, staleRelations.map((relation) => relation.id)),
     deleteKnowledgeInspectorStoreRecords(stores.entities, [...entityIds]),
     deleteKnowledgeInspectorStoreRecords(stores.dictionary, staleDictionary.map((entry) => entry.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.events, staleEvents.map((entry) => entry.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, staleQueries.map((query) => query.id)),
     deleteKnowledgeInspectorStoreRecords(stores.embeddings, staleEmbeddings.map((embedding) => embedding.id)),
     deleteKnowledgeInspectorStoreRecords(stores.chunks, [...chunkIds]),
     deleteKnowledgeInspectorStoreRecords(stores.sources, staleSources.map((source) => source.id)),
@@ -3750,6 +3838,11 @@ const renderInspectorKnowledgeDocument = (node = {}) => {
           title: "View uploaded documents",
           onclick: () => openKnowledgeDocumentsDialog(node),
         }, icon("folder_open", "sm"), "View Documents"),
+        btn({
+          class: "is-danger is-compact",
+          title: "Clear derived Knowledge memory",
+          onclick: () => requestKnowledgeDocumentMemoryClear(node),
+        }, icon("delete_sweep", "sm"), "Clear Memory"),
         documentRecord ? copyRuntimeButton(documentRecord, "Copy document record") : null,
         btn({
           class: "is-ghost is-compact",
@@ -3825,6 +3918,11 @@ const renderInspectorKnowledgeDictionary = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(exportPayload, "Copy dictionary export"),
+        btn({
+          class: "is-danger is-compact",
+          title: "Clear Knowledge dictionary records",
+          onclick: () => requestKnowledgeDictionaryClear(node),
+        }, icon("delete_sweep", "sm"), "Clear Dictionary"),
         btn({
           class: "is-ghost is-compact",
           title: "Refresh Knowledge dictionary",
@@ -3908,6 +4006,11 @@ const renderInspectorKnowledgeEvents = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(exportPayload, "Copy event export"),
+        btn({
+          class: "is-danger is-compact",
+          title: "Clear Knowledge event records",
+          onclick: () => requestKnowledgeEventsClear(node),
+        }, icon("delete_sweep", "sm"), "Clear Events"),
         btn({
           class: "is-ghost is-compact",
           title: "Refresh Knowledge events",
@@ -4206,14 +4309,7 @@ const isKnowledgeGraphSampleDocumentFallback = (configuredDocumentId = "", effec
 
 const clearKnowledgeGraphIndexForNode = async (node = {}) => {
   if (!node?.id) return null;
-  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
-  const config = nodeRuntimeConfig(node);
-  const collectionId = String(config.collectionId || "").trim();
-  const documentId = String(config.documentId || "").trim();
-  const rawGraphScope = String(config.graphScope || "").toLowerCase();
-  const graphScope = rawGraphScope === "document" && !documentId && collectionId
-    ? "collection"
-    : rawGraphScope || (documentId ? "document" : collectionId ? "collection" : "workspace");
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
   if (window.TrackerLensKnowledgeRuntime?.clearGraphIndex) {
     return window.TrackerLensKnowledgeRuntime.clearGraphIndex({ workspaceId, collectionId, documentId, graphScope });
   }
@@ -4221,11 +4317,13 @@ const clearKnowledgeGraphIndexForNode = async (node = {}) => {
     entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
     relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
     metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
   };
-  const [entities, relations, metrics] = await Promise.all([
+  const [entities, relations, metrics, queries] = await Promise.all([
     readKnowledgeInspectorStore(stores.entities),
     readKnowledgeInspectorStore(stores.relations),
     readKnowledgeInspectorStore(stores.metrics),
+    readKnowledgeInspectorStore(stores.queries),
   ]);
   const scopedEntities = (entities || [])
     .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
@@ -4247,15 +4345,186 @@ const clearKnowledgeGraphIndexForNode = async (node = {}) => {
     .filter((metric) => metric.metric === "knowledge.graph.snapshot")
     .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
     .filter((metric) => graphScope !== "document" || !documentId || metric.value?.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
   await Promise.all([
     deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((relation) => relation.id)),
     deleteKnowledgeInspectorStoreRecords(stores.entities, scopedEntities.map((entity) => entity.id)),
     deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((metric) => metric.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
   ]);
   return {
     entities: scopedEntities.length,
     relations: scopedRelations.length,
     snapshots: scopedMetrics.length,
+    queries: scopedQueries.length,
+    documentIds: [...documentIds],
+    graphScope,
+    collectionId,
+    documentId: graphScope === "document" ? documentId : "",
+  };
+};
+
+const clearKnowledgeDictionaryForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    dictionary: knowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [dictionary, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.dictionary),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedDictionary = (dictionary || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => !collectionId || entry.collectionId === collectionId || entry.metadata?.collectionId === collectionId)
+    .filter((entry) => graphScope !== "document" || !documentId || entry.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.dictionary, scopedDictionary.map((entry) => entry.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
+  ]);
+  return { dictionary: scopedDictionary.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
+};
+
+const clearKnowledgeEventsForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    events: knowledgeTableName("TL_KNOWLEDGE_EVENTS", "tl_knowledge_events"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [events, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.events),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedEvents = (events || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => !collectionId || entry.collectionId === collectionId || entry.metadata?.collectionId === collectionId)
+    .filter((entry) => graphScope !== "document" || !documentId || entry.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.events, scopedEvents.map((entry) => entry.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
+  ]);
+  return { events: scopedEvents.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
+};
+
+const clearKnowledgeDocumentMemoryForNode = async (node = {}) => {
+  if (!node?.id || !isKnowledgeDocumentStoreNode(node)) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    documents: knowledgeTableName("TL_KNOWLEDGE_DOCUMENTS", "tl_knowledge_documents"),
+    chunks: knowledgeTableName("TL_KNOWLEDGE_CHUNKS", "tl_knowledge_chunks"),
+    embeddings: knowledgeTableName("TL_KNOWLEDGE_EMBEDDINGS", "tl_knowledge_embeddings"),
+    entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    dictionary: knowledgeTableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
+    events: knowledgeTableName("TL_KNOWLEDGE_EVENTS", "tl_knowledge_events"),
+    sources: knowledgeTableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [documents, chunks, embeddings, entities, relations, dictionary, events, sources, metrics, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.documents),
+    readKnowledgeInspectorStore(stores.chunks),
+    readKnowledgeInspectorStore(stores.embeddings),
+    readKnowledgeInspectorStore(stores.entities),
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.dictionary),
+    readKnowledgeInspectorStore(stores.events),
+    readKnowledgeInspectorStore(stores.sources),
+    readKnowledgeInspectorStore(stores.metrics),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedDocuments = (documents || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => !collectionId || item.collectionId === collectionId || item.metadata?.collectionId === collectionId)
+    .filter((item) => graphScope !== "document" || !documentId || item.id === documentId);
+  const documentIds = new Set(scopedDocuments.map((item) => item.id).filter(Boolean));
+  if (documentId) documentIds.add(documentId);
+  const scopedChunks = (chunks || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => !documentIds.size || documentIds.has(item.documentId))
+    .filter((item) => !collectionId || item.metadata?.collectionId === collectionId);
+  const chunkIds = new Set(scopedChunks.map((item) => item.id).filter(Boolean));
+  const scopedEntities = (entities || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => documentIds.has(item.documentId) || chunkIds.has(item.chunkId))
+    .filter((item) => !collectionId || item.metadata?.collectionId === collectionId);
+  const entityIds = new Set(scopedEntities.map((item) => item.id).filter(Boolean));
+  const scopedRelations = (relations || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) =>
+      documentIds.has(item.documentId) ||
+      chunkIds.has(item.chunkId) ||
+      entityIds.has(item.sourceEntityId) ||
+      entityIds.has(item.targetEntityId)
+    )
+    .filter((item) => !collectionId || item.metadata?.collectionId === collectionId);
+  const scopedEmbeddings = (embeddings || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => documentIds.has(item.documentId) || chunkIds.has(item.chunkId));
+  const scopedDictionary = (dictionary || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => documentIds.has(item.documentId) || chunkIds.has(item.chunkId))
+    .filter((item) => !collectionId || item.collectionId === collectionId || item.metadata?.collectionId === collectionId);
+  const scopedEvents = (events || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => documentIds.has(item.documentId) || chunkIds.has(item.chunkId))
+    .filter((item) => !collectionId || item.collectionId === collectionId || item.metadata?.collectionId === collectionId);
+  const scopedSources = (sources || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => documentIds.has(item.documentId));
+  const scopedMetrics = (metrics || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => graphScope === "document"
+      ? documentIds.has(item.value?.documentId)
+      : collectionId
+        ? item.value?.collectionId === collectionId
+        : true);
+  const scopedQueries = (queries || [])
+    .filter((item) => (item.workspaceId || "workspace_global") === workspaceId)
+    .filter((item) => graphScope === "document"
+      ? (
+        documentIds.has(item.documentId) ||
+        documentIds.has(item.scope?.documentId) ||
+        (Array.isArray(item.scope?.documentIds) && item.scope.documentIds.some((id) => documentIds.has(id)))
+      )
+      : collectionId
+        ? item.scope?.collectionId === collectionId || item.collectionId === collectionId
+        : true);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.entities, scopedEntities.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.dictionary, scopedDictionary.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.events, scopedEvents.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.embeddings, scopedEmbeddings.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.chunks, scopedChunks.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.sources, scopedSources.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((item) => item.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((item) => item.id)),
+  ]);
+  return {
+    documentsPreserved: scopedDocuments.length,
+    chunks: scopedChunks.length,
+    embeddings: scopedEmbeddings.length,
+    entities: scopedEntities.length,
+    relations: scopedRelations.length,
+    dictionary: scopedDictionary.length,
+    events: scopedEvents.length,
+    sources: scopedSources.length,
+    metrics: scopedMetrics.length,
+    queries: scopedQueries.length,
     documentIds: [...documentIds],
     graphScope,
     collectionId,
@@ -4265,13 +4534,7 @@ const clearKnowledgeGraphIndexForNode = async (node = {}) => {
 
 const requestKnowledgeGraphClear = (node = {}) => {
   if (!node?.id) return;
-  const config = nodeRuntimeConfig(node);
-  const collectionId = String(config.collectionId || "").trim();
-  const documentId = String(config.documentId || "").trim();
-  const rawGraphScope = String(config.graphScope || "").toLowerCase();
-  const graphScope = rawGraphScope === "document" && !documentId && collectionId
-    ? "collection"
-    : rawGraphScope || (documentId ? "document" : collectionId ? "collection" : "workspace");
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
   const dialog = _.Dialog({
     class: "tl-flow-edge-delete-dialog",
     panelClass: "tl-flow-edge-delete-panel",
@@ -4295,7 +4558,7 @@ const requestKnowledgeGraphClear = (node = {}) => {
         onclick: async () => {
           const result = await clearKnowledgeGraphIndexForNode(node);
           await recordFlowAction({
-            workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+            workspaceId,
             nodeId: node.id,
             message: `Knowledge graph index cleared: ${node.label || node.id}`,
             context: { action: "knowledge-graph-clear-index", ...(result || {}) },
@@ -4309,6 +4572,88 @@ const requestKnowledgeGraphClear = (node = {}) => {
   });
   dialog.open();
 };
+
+const requestKnowledgeStoreClear = (node = {}, options = {}) => {
+  if (!node?.id) return;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const title = options.title || "Clear Knowledge store?";
+  const actionLabel = options.actionLabel || "Clear";
+  const action = options.action || "knowledge-store-clear";
+  const message = options.message || `Knowledge store cleared: ${node.label || node.id}`;
+  const clearFn = options.clearFn;
+  if (typeof clearFn !== "function") return;
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title,
+    subtitle: node.label || node.id,
+    icon: options.icon || "delete_sweep",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      _.p(options.description || "Verranno rimossi i record Knowledge derivati per questo scope."),
+      _.div(_.span("Scope"), _.strong(graphScope || "workspace")),
+      _.div(_.span("Collection"), _.strong(collectionId || "all")),
+      _.div(_.span("Document"), _.strong(graphScope === "document" ? documentId || "all" : "all"))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        class: "is-danger",
+        onclick: async () => {
+          const result = await clearFn(node);
+          await recordFlowAction({
+            workspaceId,
+            nodeId: node.id,
+            message,
+            context: { action, ...(result || {}) },
+          });
+          state.previewPayloads = { ...state.previewPayloads, [node.id]: null };
+          state.previewClearedAt = { ...state.previewClearedAt, [node.id]: Date.now() };
+          close();
+          if (isKnowledgeDocumentStoreNode(node)) await loadKnowledgeInspectorDocument(node, { force: true });
+          if (isKnowledgeDictionaryBuilderNode(node)) await loadKnowledgeInspectorDictionary(node, { force: true });
+          if (isKnowledgeEventBuilderNode(node)) await loadKnowledgeInspectorEvents(node, { force: true });
+          if (nodeCategory(node) === "knowledge") await loadKnowledgeInspectorGraph(node, { force: true });
+          mount({ preserveScroll: true });
+        },
+      }, icon(options.icon || "delete_sweep", "sm"), actionLabel)
+    ),
+  });
+  dialog.open();
+};
+
+const requestKnowledgeDocumentMemoryClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear document Knowledge memory?",
+    actionLabel: "Clear Memory",
+    action: "knowledge-document-clear-memory",
+    message: `Knowledge document memory cleared: ${node.label || node.id}`,
+    description: "Verranno rimossi chunk, embedding, entità, relazioni, dictionary, eventi, query e snapshot derivati. I documenti caricati restano salvati e potranno rigenerare tutto con Play.",
+    clearFn: clearKnowledgeDocumentMemoryForNode,
+  });
+
+const requestKnowledgeDictionaryClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear Knowledge dictionary?",
+    actionLabel: "Clear Dictionary",
+    action: "knowledge-dictionary-clear",
+    message: `Knowledge dictionary cleared: ${node.label || node.id}`,
+    description: "Verranno rimossi i termini Dictionary e le query derivate per questo scope. Documenti, chunk, eventi e grafo restano intatti.",
+    clearFn: clearKnowledgeDictionaryForNode,
+  });
+
+const requestKnowledgeEventsClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear Knowledge events?",
+    actionLabel: "Clear Events",
+    action: "knowledge-events-clear",
+    message: `Knowledge events cleared: ${node.label || node.id}`,
+    description: "Verranno rimossi gli eventi narrativi e le query derivate per questo scope. Documenti, chunk, dictionary e grafo restano intatti.",
+    clearFn: clearKnowledgeEventsForNode,
+  });
 
 const knowledgeGraphExportData = (graphData = {}, { includeIsolated = false } = {}) => {
   const relations = graphData.relations || [];
