@@ -691,6 +691,16 @@ const configFieldDefinitions = (node = {}) => {
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
       ]);
     }
+    if (subtype === "knowledge-reasoning-composer") {
+      return [
+        { key: "intentMode", label: "Intent mode", type: "select", options: ["auto", "mechanism", "definition", "timeline", "comparison", "fact"], defaultValue: "auto" },
+        { key: "maxFacts", label: "Max facts", placeholder: "8" },
+        { key: "maxEvents", label: "Max events", placeholder: "12" },
+        { key: "includeBackground", label: "Include background", type: "checkbox", defaultValue: false },
+        { key: "maxContextChars", label: "Max context chars", placeholder: "4800" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
+      ];
+    }
     return [
       { key: "title", label: "Title", placeholder: "Knowledge Document" },
       { key: "sourceType", label: "Source type", placeholder: "manual" },
@@ -1822,6 +1832,13 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "data_object", label: "Top K", value: config.topK || "12" },
       { iconName: "article", label: "Evidence", value: config.maxEvidence || "6" },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
+    ],
+    "knowledge-reasoning-composer": [
+      { iconName: "schema", label: "Intent", value: config.intentMode || "auto" },
+      { iconName: "fact_check", label: "Facts", value: config.maxFacts || "8" },
+      { iconName: "timeline", label: "Events", value: config.maxEvents || "12" },
+      { iconName: "article", label: "Background", value: boolInlineConfigValue(config.includeBackground ?? false) },
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
     ],
   }[subtype] || [];

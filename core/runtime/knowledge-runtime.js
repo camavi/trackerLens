@@ -1634,6 +1634,39 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const sentenceHasNarrativeAction = (sentence = "", eventType = "") => narrativeActionCueIndex(sentence, eventType) >= 0;
 
+  const knowledgePronounPattern = /^(?:i|me|you|he|she|it|we|they|him|her|them|lui|lei|egli|ella|esso|essa|noi|voi|loro|essi|esse|lo|la|li|le|gli|elles|ils|elle|eux|ellos|ellas|el|ella)$/i;
+
+  const isKnowledgePronounMention = (value = "") =>
+    knowledgePronounPattern.test(normalizeEntityToken(value));
+
+  const narrativeSubjectDictionaryEntries = (dictionaryEntries = []) =>
+    dictionaryEntries
+      .filter((entry) => ["core", "typed"].includes(entry.tier || "") || entry.usableAsSeed)
+      .filter((entry) => ["proper-noun", "role"].includes(String(entry.typeCandidates?.[0]?.type || "").toLowerCase()))
+      .map((entry) => entry.term || entry.lemma || "")
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+
+  const isNarrativeParticipantMention = (term = "", dictionaryEntries = []) => {
+    const normalizedTerm = normalizeEntityToken(term);
+    if (!normalizedTerm || isKnowledgePronounMention(normalizedTerm)) return false;
+    return dictionaryEntries.some((entry) =>
+      ["proper-noun", "role"].includes(String(entry.typeCandidates?.[0]?.type || "").toLowerCase()) &&
+      normalizeEntityToken(entry.term || entry.lemma || "") === normalizedTerm
+    );
+  };
+
+  const firstNarrativeToken = (sentence = "") =>
+    normalizeEntityToken(sentence).split(/\s+/).filter(Boolean)[0] || "";
+
+  const narrativeSubjectResolution = ({ subject = "", method = "unresolved", confidence = 0, sentence = "", sourceMention = "", participants = [] } = {}) => ({
+    method,
+    confidence: Math.max(0, Math.min(1, Number(confidence || 0))),
+    evidenceSpan: String(sentence || "").slice(0, 260),
+    sourceMention: sourceMention || subject || "",
+    participants: unique(participants.filter(Boolean)),
+  });
+
   const narrativeObjectPosition = (sentence = "", term = "") => {
     const key = normalizeEntityToken(term);
     if (!key) return -1;
@@ -1672,13 +1705,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return [{ eventType, objects: narrowNarrativeEventObjects(sentence, eventType, objects) }];
   };
 
-  const inferNarrativeEventSubject = (sentence = "", dictionaryEntries = [], eventType = "", previousSubject = "") => {
-    const properEntries = dictionaryEntries
-      .filter((entry) => ["core", "typed"].includes(entry.tier || "") || entry.usableAsSeed)
-      .filter((entry) => ["proper-noun", "role"].includes(String(entry.typeCandidates?.[0]?.type || "").toLowerCase()))
-      .map((entry) => entry.term || entry.lemma || "")
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length);
+  const inferNarrativeEventSubjectResolution = (sentence = "", dictionaryEntries = [], eventType = "", previous = {}) => {
+    const properEntries = narrativeSubjectDictionaryEntries(dictionaryEntries);
     const normalizedSentence = normalizeEntityToken(sentence);
     const actionIndex = narrativeActionCueIndex(sentence, eventType);
     const found = properEntries.find((term) => {
@@ -1689,14 +1717,68 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const entityIndex = match.index || 0;
       return actionIndex < 0 || entityIndex <= actionIndex || entityIndex <= 8;
     });
-    if (found) return found;
-    if (/^(?:trovarono|corsero|riempirono|immersero|presero|andarono|arrivarono|scesero|they|found|ran|filled|went|arrived)\b/.test(normalizedSentence)) return "they";
-    if (previousSubject && /^(?:lui|lei|egli|ella|he|she)\b/.test(normalizedSentence)) return previousSubject;
-    if (previousSubject && eventType === "speaks" && /\b(?:sua bocca|his mouth|her mouth|sa bouche)\b/.test(normalizedSentence)) return previousSubject;
-    if (previousSubject && actionIndex <= 2 && !/\b(?:lo|la|lui|lei|egli|ella|he|she|il|elle)\b/.test(normalizedSentence)) return previousSubject;
-    if (/\b(?:loro|essi|they|ellos|elles|ils)\b/.test(normalizedSentence)) return "they";
-    return "";
+    if (found) {
+      return {
+        subject: found,
+        participants: [found],
+        subjectResolution: narrativeSubjectResolution({ subject: found, method: "explicit", confidence: 0.94, sentence, sourceMention: found, participants: [found] }),
+      };
+    }
+    const firstToken = firstNarrativeToken(sentence);
+    const previousSubject = previous.subject && !isKnowledgePronounMention(previous.subject) ? previous.subject : "";
+    const previousParticipants = unique((previous.participants || []).filter((item) => item && !isKnowledgePronounMention(item)));
+    const pluralMention = /^(?:trovarono|corsero|riempirono|immersero|presero|andarono|arrivarono|scesero|they|found|ran|filled|went|arrived|loro|essi|elles|ils|ellos|ellas)\b/.test(normalizedSentence);
+    if (pluralMention) {
+      if (previousParticipants.length > 1) {
+        return {
+          subject: previousParticipants.join(", "),
+          participants: previousParticipants,
+          subjectResolution: narrativeSubjectResolution({ subject: previousParticipants.join(", "), method: "coreference", confidence: 0.78, sentence, sourceMention: firstToken || "they", participants: previousParticipants }),
+        };
+      }
+      return {
+        subject: "",
+        participants: [],
+        subjectResolution: narrativeSubjectResolution({ method: "unresolved", confidence: 0.2, sentence, sourceMention: firstToken || "they" }),
+      };
+    }
+    if (previousSubject && /^(?:lui|lei|egli|ella|he|she|elle)\b/.test(normalizedSentence)) {
+      return {
+        subject: previousSubject,
+        participants: [previousSubject],
+        subjectResolution: narrativeSubjectResolution({ subject: previousSubject, method: "coreference", confidence: 0.82, sentence, sourceMention: firstToken, participants: [previousSubject] }),
+      };
+    }
+    if (previousSubject && eventType === "speaks" && /\b(?:sua bocca|his mouth|her mouth|sa bouche)\b/.test(normalizedSentence)) {
+      return {
+        subject: previousSubject,
+        participants: [previousSubject],
+        subjectResolution: narrativeSubjectResolution({ subject: previousSubject, method: "context-window", confidence: 0.76, sentence, sourceMention: "mouth", participants: [previousSubject] }),
+      };
+    }
+    if (previousSubject && actionIndex <= 2 && !/\b(?:lo|la|lui|lei|egli|ella|he|she|elle)\b/.test(normalizedSentence)) {
+      return {
+        subject: previousSubject,
+        participants: [previousSubject],
+        subjectResolution: narrativeSubjectResolution({ subject: previousSubject, method: "context-window", confidence: 0.68, sentence, sourceMention: firstToken, participants: [previousSubject] }),
+      };
+    }
+    if (/\b(?:loro|essi|they|ellos|elles|ils)\b/.test(normalizedSentence)) {
+      return {
+        subject: "",
+        participants: [],
+        subjectResolution: narrativeSubjectResolution({ method: "unresolved", confidence: 0.2, sentence, sourceMention: firstToken || "they" }),
+      };
+    }
+    return {
+      subject: "",
+      participants: [],
+      subjectResolution: narrativeSubjectResolution({ method: "unresolved", confidence: 0, sentence }),
+    };
   };
+
+  const inferNarrativeEventSubject = (sentence = "", dictionaryEntries = [], eventType = "", previousSubject = "") =>
+    inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, eventType, { subject: previousSubject }).subject;
 
   const inferNarrativeEventObjects = (sentence = "", dictionaryEntries = []) => {
     const normalizedSentence = normalizeEntityToken(sentence);
@@ -1732,6 +1814,61 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }[eventType] || 0.55;
     if (/\b(?:tazza|cup|t[eé]|tea|acqua|water|fiore|flower|sorgente|source|voce|voice|guar|heal|cure)\b/.test(normalized)) score += 0.08;
     return Math.min(0.98, score);
+  };
+
+  const knowledgeEventPolarityForEvidence = (sentence = "", eventType = "") => {
+    const normalized = normalizeEntityToken(sentence);
+    if (eventType === "cannot_speak") return "negative";
+    if (/\b(?:not|never|no|failed|fail|non|mai|nessun|niente|sin|pas|ne)\b.{0,80}\b(?:open|speak|drink|take|go|find|parlare|aprire|bere|prendere|trovare)\b/.test(normalized)) return "negative";
+    return "positive";
+  };
+
+  const knowledgeEventModalityForEvidence = (sentence = "") => {
+    const normalized = normalizeEntityToken(sentence);
+    if (/\b(?:try|tried|tries|attempt|attempted|tent[oò]|tentava|cerc[oò]\s+di|prov[oò]|riprov[oò])\b/.test(normalized)) return "attempt";
+    if (/\b(?:must|should|shall|deve|doveva|dovrebbe|obblig|required|may|might|could|can|pu[oò]|potrebbe|potra|potrà|would|will)\b/.test(normalized)) return "modal";
+    if (/\b(?:said|claimed|states|reported|dice|disse|afferm[oò]|sostiene|secondo)\b/.test(normalized)) return "claim";
+    return "asserted";
+  };
+
+  const knowledgeEventAspectForEvidence = (sentence = "", modality = "asserted") => {
+    if (modality === "attempt") return "attempted";
+    if (modality === "modal") return "prospective";
+    if (modality === "claim") return "reported";
+    if (/\b(?:started|began|inizi[oò]|iniziava|cominci[oò])\b/.test(normalizeEntityToken(sentence))) return "started";
+    return "completed";
+  };
+
+  const knowledgeEventRolesFor = ({ eventType = "", subject = "", objects = [], participants = [], contextObjects = [] } = {}) => {
+    const cleanSubject = subject && !isKnowledgePronounMention(subject) ? subject : "";
+    const cleanObjects = (objects || []).filter(Boolean);
+    const cleanContextObjects = (contextObjects || []).filter(Boolean);
+    const roles = {
+      agent: cleanSubject ? [cleanSubject] : [],
+      patient: [],
+      object: cleanObjects,
+      instrument: [],
+      source: [],
+      destination: [],
+      location: [],
+      beneficiary: [],
+    };
+    if (["moves"].includes(eventType)) {
+      roles.destination = cleanObjects;
+      roles.object = [];
+    }
+    if (["takes", "drinks", "immerses", "fills", "transforms"].includes(eventType)) {
+      roles.patient = cleanObjects;
+    }
+    if (eventType === "immerses") {
+      roles.destination = unique(cleanContextObjects.filter(isNarrativeLiquidOrContainer));
+    }
+    if (eventType === "has_property") {
+      roles.object = [];
+      roles.patient = cleanSubject ? [cleanSubject] : [];
+    }
+    roles.participants = unique([...(participants || []), cleanSubject, ...cleanObjects, ...roles.destination].filter(Boolean));
+    return roles;
   };
 
   const knowledgeEventTypes = new Set([
@@ -1921,7 +2058,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const wantsAi = ["ai", "hybrid"].includes(extractionMode);
     const wantsRules = true;
     const ruleCandidates = [];
-    let previousSubject = "";
+    let previousContext = { subject: "", participants: [] };
     if (wantsRules) {
       for (const chunk of scopedChunks) {
         const sentences = narrativeSentenceSplit(chunk.text || "");
@@ -1933,10 +2070,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
           const eventSpecs = buildNarrativeEventSpecs(sentence, eventType, objects);
           for (const spec of eventSpecs) {
             if (ruleCandidates.length >= maxEvents) break;
-            const subject = inferNarrativeEventSubject(sentence, dictionaryEntries, spec.eventType, previousSubject);
+            const subjectInfo = inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, spec.eventType, previousContext);
+            const subject = subjectInfo.subject || "";
             const confidence = narrativeEventImportance(spec.eventType, spec.objects, sentence);
             if (confidence < minConfidence) continue;
             const offsets = knowledgeEventQuoteOffsets(chunk, sentence);
+            const modality = knowledgeEventModalityForEvidence(sentence);
+            const polarity = knowledgeEventPolarityForEvidence(sentence, spec.eventType);
             ruleCandidates.push({
               chunk,
               chunkId: chunk.id || "",
@@ -1945,6 +2085,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
               eventType: spec.eventType,
               subject,
               objects: spec.objects,
+              participants: subjectInfo.participants || [],
+              subjectResolution: subjectInfo.subjectResolution,
+              roles: knowledgeEventRolesFor({ eventType: spec.eventType, subject, objects: spec.objects, participants: subjectInfo.participants || [], contextObjects: objects }),
+              polarity,
+              modality,
+              aspect: knowledgeEventAspectForEvidence(sentence, modality),
               confidence,
               evidence: {
                 text: sentence,
@@ -1961,7 +2107,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
               },
               explanation: "",
             });
-            if (subject && subject !== "they") previousSubject = subject;
+            if (subject && !isKnowledgePronounMention(subject)) {
+              previousContext = {
+                subject,
+                participants: unique([subject, ...(subjectInfo.participants || []), ...spec.objects.filter((item) => isNarrativeParticipantMention(item, dictionaryEntries))]
+                  .filter((item) => item && !isKnowledgePronounMention(item))),
+              };
+            }
           }
         }
       }
@@ -1989,8 +2141,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const confidence = Math.min(0.98, Number(item.confidence || 0));
         if (confidence < minConfidence) continue;
         const objects = normalizeKnowledgeEventObjects(item.objects || item.object || item.target || []);
-        const subject = String(item.subject || item.actor || "").replace(/\s+/g, " ").trim().slice(0, 96);
+        const rawSubject = String(item.subject || item.actor || "").replace(/\s+/g, " ").trim().slice(0, 96);
+        const aiSubjectInfo = rawSubject && !isKnowledgePronounMention(rawSubject)
+          ? {
+            subject: rawSubject,
+            participants: [rawSubject],
+            subjectResolution: narrativeSubjectResolution({ subject: rawSubject, method: "explicit", confidence: 0.76, sentence: quote, sourceMention: rawSubject, participants: [rawSubject] }),
+          }
+          : inferNarrativeEventSubjectResolution(quote, dictionaryEntries, eventType, { subject: "", participants: [] });
+        const subject = aiSubjectInfo.subject || "";
         const offsets = knowledgeEventQuoteOffsets(chunk, quote);
+        const modality = knowledgeEventModalityForEvidence(quote);
+        const polarity = knowledgeEventPolarityForEvidence(quote, eventType);
         aiCandidates.push({
           chunk,
           chunkId: chunk.id || "",
@@ -1999,6 +2161,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
           eventType,
           subject,
           objects,
+          participants: aiSubjectInfo.participants || [],
+          subjectResolution: aiSubjectInfo.subjectResolution,
+          roles: knowledgeEventRolesFor({ eventType, subject, objects, participants: aiSubjectInfo.participants || [], contextObjects: objects }),
+          polarity,
+          modality,
+          aspect: knowledgeEventAspectForEvidence(quote, modality),
           confidence,
           evidence: {
             text: quote,
@@ -2045,6 +2213,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const eventType = normalizeKnowledgeEventType(candidate.eventType);
       const objects = normalizeKnowledgeEventObjects(candidate.objects);
       const subject = String(candidate.subject || "").replace(/\s+/g, " ").trim().slice(0, 96);
+      const participants = unique([
+        ...(candidate.participants || []),
+        subject,
+        ...objects,
+      ].filter((item) => item && !isKnowledgePronounMention(item)));
+      const subjectResolution = candidate.subjectResolution || narrativeSubjectResolution({
+        subject,
+        method: subject ? "explicit" : "unresolved",
+        confidence: subject ? 0.6 : 0,
+        sentence: candidate.evidence?.quote || candidate.evidence?.text || "",
+        sourceMention: subject,
+        participants: subject ? [subject] : [],
+      });
+      const roles = candidate.roles || knowledgeEventRolesFor({ eventType, subject, objects, participants, contextObjects: candidate.contextObjects || objects });
+      const modality = candidate.modality || knowledgeEventModalityForEvidence(candidate.evidence?.quote || candidate.evidence?.text || "");
+      const polarity = candidate.polarity || knowledgeEventPolarityForEvidence(candidate.evidence?.quote || candidate.evidence?.text || "", eventType);
       const record = {
         id: `kevent_${safeId(workspaceId)}_${safeId(selectedDocumentId || "doc")}_${String(sequence).padStart(4, "0")}_${safeId(eventType)}`,
         workspaceId,
@@ -2058,7 +2242,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
         subject,
         action: eventType,
         objects,
-        participants: unique([subject, ...objects].filter(Boolean)),
+        participants,
+        roles,
+        subjectResolution,
+        polarity,
+        modality,
+        aspect: candidate.aspect || knowledgeEventAspectForEvidence(candidate.evidence?.quote || candidate.evidence?.text || "", modality),
         confidence: Math.max(minConfidence, Math.min(0.98, Number(candidate.confidence || minConfidence))),
         evidence: candidate.evidence,
         links: {
@@ -2080,7 +2269,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           ...(chunk.metadata || {}),
           language: chunk.metadata?.language || detectLanguage(chunk.text || "", config.language || ""),
           dictionaryEntryIds: dictionaryEntries
-            .filter((entry) => [subject, ...objects].some((term) => normalizeEntityToken(term) === normalizeEntityToken(entry.term || entry.lemma || "")))
+            .filter((entry) => [subject, ...objects, ...participants].some((term) => normalizeEntityToken(term) === normalizeEntityToken(entry.term || entry.lemma || "")))
             .map((entry) => entry.id)
             .slice(0, 12),
           explanation: candidate.explanation || "",
@@ -2117,6 +2306,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       subject: entry.subject,
       objects: entry.objects,
       participants: entry.participants,
+      roles: entry.roles,
+      subjectResolution: entry.subjectResolution,
+      polarity: entry.polarity,
+      modality: entry.modality,
+      aspect: entry.aspect,
       confidence: entry.confidence,
       evidence: entry.evidence,
       source: entry.source,
@@ -4974,6 +5168,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       subject: item.subject,
       objects: item.objects || [],
       participants: item.participants || [],
+      roles: item.roles || {},
+      subjectResolution: item.subjectResolution || null,
+      polarity: item.polarity || "positive",
+      modality: item.modality || "asserted",
+      aspect: item.aspect || "completed",
       confidence: item.confidence,
       evidence: item.evidence,
       score,
@@ -5083,6 +5282,244 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
     await putRecord(STORES.queries, record);
     return record;
+  };
+
+  const reasoningStopWords = new Set([
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "by", "is", "are", "was", "were",
+    "il", "lo", "la", "i", "gli", "le", "un", "una", "e", "o", "di", "del", "della", "che", "con", "per", "come", "cosa", "chi",
+    "el", "la", "los", "las", "un", "una", "y", "o", "de", "que", "con", "por", "como",
+    "le", "la", "les", "un", "une", "et", "ou", "de", "des", "que", "avec", "pour", "comment",
+  ]);
+
+  const reasoningTokens = (value = "") =>
+    unique(normalizeEntityToken(value)
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 3 && !reasoningStopWords.has(item)));
+
+  const reasoningTokenOverlap = (tokens = [], value = "") => {
+    const normalized = normalizeEntityToken(value);
+    if (!normalized || !tokens.length) return 0;
+    return tokens.reduce((score, token) => score + (new RegExp(`\\b${escapedRegExp(token)}\\b`).test(normalized) ? 1 : 0), 0);
+  };
+
+  const detectReasoningIntent = (query = "", config = {}) => {
+    const configured = String(config.intentMode || "auto").toLowerCase().trim();
+    if (configured && configured !== "auto") return configured;
+    const normalized = normalizeEntityToken(query);
+    if (/^(?:how|come|como|comment|wie)\b/.test(normalized) || /\b(?:why|perche|perché|porque|por que|pourquoi|warum)\b/.test(normalized)) return "mechanism";
+    if (/^(?:when|quando|cu[aá]ndo|quand|wann)\b/.test(normalized) || /\b(?:timeline|sequence|ordine|sequenza|chronolog)\b/.test(normalized)) return "timeline";
+    if (/^(?:who|what|chi|cosa|che cosa|que|qué|qui|quoi)\b/.test(normalized)) return "definition";
+    if (/\b(?:compare|comparison|difference|differenza|diferencia|diff[eé]rence|versus|vs)\b/.test(normalized)) return "comparison";
+    return "fact";
+  };
+
+  const eventReasoningText = (event = {}) => [
+    event.eventType,
+    event.subject,
+    ...(event.objects || []),
+    ...(event.participants || []),
+    ...(event.roles?.agent || []),
+    ...(event.roles?.patient || []),
+    ...(event.roles?.object || []),
+    ...(event.roles?.destination || []),
+    event.evidence?.quote || event.evidence?.text || event.evidence || "",
+  ].filter(Boolean).join(" ");
+
+  const scoreReasoningEvent = (event = {}, tokens = [], intent = "fact") => {
+    let score = Math.min(12, Number(event.score || 0));
+    score += reasoningTokenOverlap(tokens, eventReasoningText(event)) * 12;
+    if (event.evidence?.quote || event.evidence?.text || event.evidence) score += 4;
+    if (event.roles?.patient?.length || event.roles?.destination?.length) score += 3;
+    if (intent === "mechanism" && ["fills", "immerses", "transforms", "takes", "drinks", "gives_to", "receives_from", "causes", "leads_to", "speaks", "heals"].includes(event.eventType)) score += 8;
+    if (intent === "mechanism" && event.eventType === "cannot_speak") score -= 6;
+    return score;
+  };
+
+  const mechanismProcessEventTypes = new Set(["fills", "immerses", "transforms", "takes", "drinks", "gives_to", "receives_from", "uses", "heals", "speaks"]);
+
+  const mechanismCoreStartEventTypes = new Set(["fills", "immerses", "transforms", "causes", "leads_to", "has_property"]);
+
+  const mechanismOperationalStartEventTypes = new Set(["fills", "immerses", "transforms", "uses", "gives_to", "receives_from", "takes", "drinks"]);
+
+  const mechanismOutcomeEventTypes = new Set(["drinks", "speaks", "heals", "causes", "leads_to"]);
+
+  const mechanismEventsForReasoning = (events = [], tokens = [], maxEvents = 12) => {
+    const ordered = [...events].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+    const operationalStart = ordered.find((item) =>
+      mechanismOperationalStartEventTypes.has(item.eventType) &&
+      Boolean(item.evidence?.quote || item.evidence?.text || item.evidence)
+    );
+    const coreStart = operationalStart || ordered.find((item) => mechanismCoreStartEventTypes.has(item.eventType));
+    if (!coreStart) {
+      return ordered
+        .filter((item) => reasoningTokenOverlap(tokens, eventReasoningText(item)) > 0)
+        .filter((item) => item.evidence?.quote || item.evidence?.text || item.evidence)
+        .slice(0, maxEvents);
+    }
+    const startSequence = Number(coreStart.sequence || 0);
+    const outcome = ordered.find((item) =>
+      Number(item.sequence || 0) >= startSequence &&
+      mechanismOutcomeEventTypes.has(item.eventType) &&
+      (reasoningTokenOverlap(tokens, eventReasoningText(item)) > 0 || ["drinks", "heals"].includes(item.eventType))
+    );
+    const endSequence = Number(outcome?.sequence || 0) || startSequence + 8;
+    return ordered
+      .filter((item) => {
+        const sequence = Number(item.sequence || 0);
+        if (sequence < startSequence || sequence > endSequence + 1) return false;
+        if (!mechanismProcessEventTypes.has(item.eventType) && !mechanismCoreStartEventTypes.has(item.eventType)) return false;
+        return Boolean(item.evidence?.quote || item.evidence?.text || item.evidence);
+      })
+      .slice(0, maxEvents);
+  };
+
+  const enrichMechanismEventRoles = (event = {}, allEvents = []) => {
+    if (event.eventType !== "immerses" || event.roles?.destination?.length) return event.roles || {};
+    const eventEvidence = String(event.evidence?.quote || event.evidence?.text || event.evidence || "");
+    const companion = allEvents.find((item) =>
+      item.eventType === "fills" &&
+      String(item.evidence?.quote || item.evidence?.text || item.evidence || "") === eventEvidence
+    );
+    if (!companion) return event.roles || {};
+    const destination = unique([...(companion.roles?.patient || []), ...(companion.objects || [])].filter(isNarrativeLiquidOrContainer));
+    return {
+      ...(event.roles || {}),
+      destination,
+      participants: unique([...(event.roles?.participants || []), ...destination].filter(Boolean)),
+    };
+  };
+
+  const relationReasoningText = (relation = {}) => [
+    relation.relationType,
+    relation.sourceLabel,
+    relation.targetLabel,
+    relation.source,
+    relation.target,
+    relation.evidence?.quote || relation.evidence?.text || relation.metadata?.evidence?.quote || relation.evidence || "",
+    relation.metadata?.explanation || relation.explanation || "",
+  ].filter(Boolean).join(" ");
+
+  const scoreReasoningRelation = (relation = {}, tokens = [], intent = "fact") => {
+    let score = Number(relation.score || 0);
+    score += reasoningTokenOverlap(tokens, relationReasoningText(relation)) * 10;
+    if (relation.direct) score += 4;
+    if (relation.semantic || relation.metadata?.semantic) score += 4;
+    if (relation.evidence || relation.evidence?.quote || relation.metadata?.evidence?.quote) score += 3;
+    if (intent === "mechanism" && ["healed_by", "causes", "leads_to"].includes(relation.relationType)) score += 4;
+    if (intent === "mechanism" && ["appears_in", "context_for", "co_occurs", "associated_with"].includes(relation.relationType)) score -= 8;
+    return score;
+  };
+
+  const reasoningFactFromEvent = (event = {}, index = 0, allEvents = []) => ({
+    id: event.id || `event_${index + 1}`,
+    kind: "event",
+    sequence: event.sequence ?? null,
+    eventType: event.eventType || "",
+    subject: event.subject || "",
+    objects: event.objects || [],
+    roles: enrichMechanismEventRoles(event, allEvents),
+    modality: event.modality || "asserted",
+    aspect: event.aspect || "completed",
+    polarity: event.polarity || "positive",
+    confidence: Number(event.confidence || 0),
+    evidence: event.evidence?.quote || event.evidence?.text || event.evidence || "",
+    instruction: "Use this fact only as supported by its evidence.",
+  });
+
+  const reasoningFactFromRelation = (relation = {}, index = 0) => ({
+    id: relation.id || `relation_${index + 1}`,
+    kind: "relation",
+    relationType: relation.relationType || relation.type || "",
+    source: relation.sourceLabel || relation.source || "",
+    target: relation.targetLabel || relation.target || "",
+    confidence: Number(relation.confidence || 0),
+    evidence: relation.evidence?.quote || relation.evidence?.text || relation.metadata?.evidence?.quote || relation.evidence || "",
+    instruction: "Use as supporting relation, not as a replacement for a more precise event chain.",
+  });
+
+  const composeKnowledgeReasoningPlan = ({ workspaceId = "", node = {}, payload = {}, event = {}, config = {} } = {}) => {
+    const query = String(payload?.query || payload?.question || payload?.text || config.query || "").trim();
+    const intent = detectReasoningIntent(query, config);
+    const tokens = reasoningTokens(query);
+    const maxFacts = Math.max(1, Math.min(24, Number(config.maxFacts || payload?.maxFacts || 8)));
+    const maxEvents = Math.max(1, Math.min(30, Number(config.maxEvents || payload?.maxEvents || 12)));
+    const includeBackground = config.includeBackground === true || config.includeBackground === "true" || payload?.includeBackground === true;
+    const events = Array.isArray(payload?.events) ? payload.events : [];
+    const relations = Array.isArray(payload?.relations) ? payload.relations : [];
+    const selectedEvents = intent === "mechanism"
+      ? mechanismEventsForReasoning(events, tokens, maxEvents)
+      : events
+        .map((item) => ({ item, score: scoreReasoningEvent(item, tokens, intent) }))
+        .filter(({ score }) => score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxEvents)
+        .sort((a, b) => Number(a.item.sequence || 0) - Number(b.item.sequence || 0))
+        .map(({ item }) => item);
+    const eventFacts = selectedEvents.map((item, index) => reasoningFactFromEvent(item, index, events));
+    const rankedRelations = relations
+      .map((item) => ({ item, score: scoreReasoningRelation(item, tokens, intent) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score);
+    const supportingRelations = (intent === "mechanism" && eventFacts.length ? [] : rankedRelations)
+      .filter(({ item }) => includeBackground || !["appears_in", "context_for", "co_occurs", "associated_with"].includes(item.relationType || item.type || ""))
+      .slice(0, Math.max(0, maxFacts - Math.min(eventFacts.length, maxFacts)))
+      .map(({ item }, index) => reasoningFactFromRelation(item, index));
+    const requiredFacts = [...eventFacts, ...supportingRelations].slice(0, maxFacts);
+    const excludedContext = [
+      intent === "mechanism" ? "Do not append later aftermath, celebration, movement or background context unless the user asked for consequences." : "",
+      intent === "mechanism" ? "Do not replace the concrete event chain with a broad summary relation." : "",
+      "Do not introduce subjects, containers, tools, places or causal links that are not present in required facts or evidence.",
+    ].filter(Boolean);
+    const primaryEvidenceText = unique(eventFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).join("\n\n");
+    const plan = {
+      id: uniqueId("kreason"),
+      workspaceId,
+      query,
+      intent,
+      status: requiredFacts.length ? "ready" : "empty",
+      requiredFacts,
+      eventChain: eventFacts,
+      supportingRelations,
+      excludedContext,
+      evidenceQuotes: unique(requiredFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).slice(0, 12),
+      primaryEvidenceText,
+      sourceQueryId: payload?.queryId || payload?.id || "",
+      sourceNodeId: event?.sourceNodeId || "",
+      createdAt: nowIso(),
+    };
+    const eventLines = eventFacts.map((fact, index) => {
+      const destination = fact.roles?.destination?.length ? ` destination=${fact.roles.destination.join(", ")}` : "";
+      const patient = fact.roles?.patient?.length ? ` patient=${fact.roles.patient.join(", ")}` : "";
+      return `[F${index + 1}] seq=${fact.sequence ?? ""} ${fact.subject || "event"} -${fact.eventType}-> ${(fact.objects || []).join(", ") || "context"}${patient}${destination} evidence="${String(fact.evidence || "").slice(0, 220)}"`;
+    });
+    const relationLines = supportingRelations.map((fact, index) =>
+      `[R${index + 1}] ${fact.source || "source"} -${fact.relationType}-> ${fact.target || "target"} evidence="${String(fact.evidence || "").slice(0, 180)}"`
+    );
+    const reasoningContext = [
+      `Knowledge Reasoning Plan: ${intent}`,
+      query ? `Question: ${query}` : "",
+      plan.primaryEvidenceText ? `Primary evidence text:\n${plan.primaryEvidenceText}` : "",
+      eventLines.length ? `Required event chain:\n${eventLines.join("\n")}` : "",
+      relationLines.length ? `Supporting relations:\n${relationLines.join("\n")}` : "",
+      excludedContext.length ? `Boundaries:\n- ${excludedContext.join("\n- ")}` : "",
+    ].filter(Boolean).join("\n\n");
+    const maxContextChars = Math.max(1200, Math.min(12000, Number(config.maxContextChars || payload?.maxContextChars || 4800)));
+    const composedContext = [
+      reasoningContext,
+      includeBackground && payload?.context ? `Source graph context:\n${String(payload.context).slice(0, maxContextChars)}` : "",
+    ].filter(Boolean).join("\n\n");
+    return {
+      ...payload,
+      id: plan.id,
+      queryId: payload?.queryId || payload?.id || "",
+      query,
+      reasoningPlan: plan,
+      context: composedContext.length > maxContextChars ? `${composedContext.slice(0, maxContextChars)}\n...` : composedContext,
+      contextType: "knowledge-reasoning",
+      status: plan.status,
+      createdAt: plan.createdAt,
+    };
   };
 
   class KnowledgeRuntime {
@@ -5433,6 +5870,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
             result = await queryGraph({ workspaceId: this.workspaceId, query, payload, config });
           }
           outputChannel = nodeOutput(node, config, "knowledge.graph.context");
+        } else if (subtype === "knowledge-reasoning-composer") {
+          result = composeKnowledgeReasoningPlan({ workspaceId: this.workspaceId, node, payload, event, config });
+          await this.bus.emit("knowledge.reasoning.plan", result, {
+            workspaceId: this.workspaceId,
+            eventType: "knowledge_reasoning_plan",
+            sourceNodeId: node.id,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          outputChannel = nodeOutput(node, config, "knowledge.graph.context");
         } else if (subtype === "rag-search") {
           const query = payload?.query || payload?.text || payload?.question || config.query || "";
           if (!String(query || "").trim()) {
@@ -5534,6 +5987,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return instances.get(key);
   };
 
+  const debugNormalizeEventSentence = ({ sentence = "", dictionaryEntries = [], previous = {}, eventType = "" } = {}) => {
+    const type = normalizeKnowledgeEventType(eventType) || inferNarrativeEventType(sentence);
+    const objects = inferNarrativeEventObjects(sentence, dictionaryEntries);
+    const subjectInfo = inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, type, previous);
+    const modality = knowledgeEventModalityForEvidence(sentence);
+    const polarity = knowledgeEventPolarityForEvidence(sentence, type);
+    const participants = unique([
+      ...(subjectInfo.participants || []),
+      subjectInfo.subject,
+      ...objects,
+    ].filter((item) => item && !isKnowledgePronounMention(item)));
+    return {
+      eventType: type,
+      subject: subjectInfo.subject || "",
+      objects,
+      participants,
+      roles: knowledgeEventRolesFor({ eventType: type, subject: subjectInfo.subject || "", objects, participants, contextObjects: objects }),
+      subjectResolution: subjectInfo.subjectResolution,
+      polarity,
+      modality,
+      aspect: knowledgeEventAspectForEvidence(sentence, modality),
+    };
+  };
+
   return {
     STORES,
     ensureStores,
@@ -5548,6 +6025,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     createEmbeddings,
     search,
     queryGraph,
+    debugNormalizeEventSentence,
     normalizeLanguage,
     detectLanguage,
     languageProfiles,

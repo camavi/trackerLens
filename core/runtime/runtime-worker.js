@@ -35,8 +35,8 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260703-flow-agent-clean-1",
-    "ai-agent-runtime.js?v=kg-20260626-knowledge-events-ai-5",
+    "knowledge-runtime.js?v=kg-20260711-reasoning-composer-1",
+    "ai-agent-runtime.js?v=kg-20260711-reasoning-composer-1",
     "orchestrator-agent-runtime.js"
   );
 };

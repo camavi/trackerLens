@@ -160,7 +160,10 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const isGraphContextEvent = ({ payload = {}, event = {} } = {}) =>
     event?.channel === "knowledge.graph.context" ||
+    event?.channel === "knowledge.reasoning.plan" ||
     (event?.eventType === "knowledge_emit" && event?.meta?.subtype === "graph-query" && payload?.context !== undefined) ||
+    (event?.eventType === "knowledge_reasoning_plan" && payload?.reasoningPlan) ||
+    (event?.eventType === "knowledge_emit" && event?.meta?.subtype === "knowledge-reasoning-composer" && payload?.reasoningPlan) ||
     (payload?.queryId && Array.isArray(payload?.entities) && Array.isArray(payload?.relations) && payload?.context !== undefined);
 
   const normalizeRagContext = ({ payload = {}, event = {} } = {}) => {
@@ -254,6 +257,11 @@ window.TrackerLensAiAgentRuntime = (() => {
         subject: item.subject || "",
         objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
         participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+        roles: item.roles || {},
+        subjectResolution: item.subjectResolution || null,
+        polarity: item.polarity || "",
+        modality: item.modality || "",
+        aspect: item.aspect || "",
         confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
         score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
         evidence: item.evidence?.quote || item.evidence?.text || "",
@@ -265,6 +273,8 @@ window.TrackerLensAiAgentRuntime = (() => {
         text: compactText(item.text, 520),
         metadata: item.metadata || {},
       })),
+      reasoningPlan: payload.reasoningPlan || null,
+      contextType: payload.contextType || (payload.reasoningPlan ? "knowledge-reasoning" : "knowledge-graph"),
       scope: payload.scope || {},
       inputChannel: event?.channel || "",
       inputEventId: event?.id || "",
@@ -273,7 +283,24 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const renderGraphPromptBlock = (graphContext = null) => {
     if (!graphContext) return "";
-    const relationLines = (graphContext.relations || []).slice(0, 16).map((relation, index) => {
+    const reasoningPlan = graphContext.reasoningPlan || null;
+    const primaryEvidenceText = String(reasoningPlan?.primaryEvidenceText || "").trim();
+    const reasoningLines = reasoningPlan?.requiredFacts?.length
+      ? reasoningPlan.requiredFacts.slice(0, 12).map((fact, index) => {
+        if (fact.kind === "event") {
+          const patient = fact.roles?.patient?.length ? ` patient=${fact.roles.patient.join(", ")}` : "";
+          const destination = fact.roles?.destination?.length ? ` destination=${fact.roles.destination.join(", ")}` : "";
+          const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence).slice(0, 360)}` : "";
+          return `[F${index + 1}] seq=${fact.sequence ?? ""} ${fact.subject || "event"} -${fact.eventType}-> ${(fact.objects || []).join(", ") || "context"}${patient}${destination}${evidence}`;
+        }
+        const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence).slice(0, 260)}` : "";
+        return `[F${index + 1}] ${fact.source || "source"} -${fact.relationType || "related_to"}-> ${fact.target || "target"}${evidence}`;
+      }).join("\n")
+      : "";
+    const reasoningBoundaries = reasoningPlan?.excludedContext?.length
+      ? reasoningPlan.excludedContext.map((item) => `- ${item}`).join("\n")
+      : "";
+    const relationLines = reasoningPlan ? "" : (graphContext.relations || []).slice(0, 16).map((relation, index) => {
       const flags = [
         relation.direct ? "direct" : "",
         relation.semantic ? "semantic" : "",
@@ -284,24 +311,35 @@ window.TrackerLensAiAgentRuntime = (() => {
       const explanation = relation.explanation ? `\n  explanation: ${String(relation.explanation).slice(0, 180)}` : "";
       return `[R${index + 1}${flags ? ` ${flags}` : ""}] ${relation.sourceLabel || relation.sourceEntityId} -${relation.relationType}-> ${relation.targetLabel || relation.targetEntityId}${evidence}${explanation}`;
     }).join("\n");
-    const evidenceLines = (graphContext.evidence || []).map((source, index) =>
+    const evidenceLines = reasoningPlan && primaryEvidenceText ? "" : (graphContext.evidence || []).map((source, index) =>
       `[${index + 1}] document=${source.documentId || ""} chunk=${source.chunkId || ""}\n${String(source.text || "").slice(0, 520)}`
     ).join("\n\n");
-    const eventLines = (graphContext.events || []).slice(0, 16).map((item, index) => {
+    const eventLines = reasoningPlan ? "" : (graphContext.events || []).slice(0, 16).map((item, index) => {
       const sequence = item.sequence !== null && item.sequence !== undefined ? ` seq=${item.sequence}` : "";
       const score = item.score !== null && item.score !== undefined ? ` score=${Number(item.score || 0).toFixed(2)}` : "";
       const objects = (item.objects || []).join(", ") || "context";
+      const flags = [item.aspect, item.modality, item.polarity].filter(Boolean).join(" ");
+      const roles = item.roles?.agent?.length || item.roles?.patient?.length || item.roles?.destination?.length
+        ? `\n  roles: agent=${(item.roles.agent || []).join(", ") || "?"}; patient=${(item.roles.patient || []).join(", ") || "?"}; object=${(item.roles.object || []).join(", ") || "?"}; destination=${(item.roles.destination || []).join(", ") || "?"}`
+        : "";
+      const resolution = item.subjectResolution?.method
+        ? `\n  subjectResolution: ${item.subjectResolution.method} confidence=${Number(item.subjectResolution.confidence || 0).toFixed(2)}`
+        : "";
       const evidence = item.evidence ? `\n  evidence: ${String(item.evidence).slice(0, 360)}` : "";
-      return `[EV${index + 1}${sequence}${score}] ${item.subject || "event"} -${item.eventType}-> ${objects}${evidence}`;
+      return `[EV${index + 1}${sequence}${score}${flags ? ` ${flags}` : ""}] ${item.subject || "event"} -${item.eventType}-> ${objects}${roles}${resolution}${evidence}`;
     }).join("\n");
     return [
       "Knowledge Graph context:",
       graphContext.query ? `Query: ${graphContext.query}` : "",
-      graphContext.context ? `Graph neighborhood:\n${graphContext.context}` : "",
+      reasoningPlan ? `Reasoning intent: ${reasoningPlan.intent || "fact"}` : "",
+      primaryEvidenceText ? `Primary evidence text:\n${primaryEvidenceText.slice(0, 3600)}` : "",
+      reasoningLines ? `Reasoning required facts:\n${reasoningLines}` : "",
+      reasoningBoundaries ? `Reasoning boundaries:\n${reasoningBoundaries}` : "",
+      !reasoningPlan && graphContext.context ? `Graph neighborhood:\n${graphContext.context}` : "",
       relationLines ? `Structured relations:\n${relationLines}` : "",
       eventLines ? `Structured events:\n${eventLines}` : "",
       evidenceLines ? `Evidence:\n${evidenceLines}` : "",
-      "Use direct semantic relations and ordered Structured events as primary evidence when they answer the query. For how/why questions, prefer the ordered event chain over isolated entity relations. If a direct relation or event has an evidence quote, answer from it instead of saying evidence is missing. Prefer explicit relations, events and evidence over generic assumptions. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
+      "If a Reasoning Plan is present, answer primarily from Primary evidence text when it is available. Treat Reasoning required facts as a navigation and verification layer over that text, and Reasoning boundaries as hard limits. Use graph relations/events only to clarify the focused evidence, not to override it. Use direct semantic relations and ordered Structured events as primary evidence when no Primary evidence text is available. For how/why questions, the final answer must include the concrete ordered event chain when evidence provides one; do not answer only with a broad summary relation such as healed_by/causes if the events explain the mechanism. Use broad relations only when they directly clarify the same mechanism; do not append later aftermath, news, celebration, location movement or background summaries unless the user asks for consequences/context. Stop once the asked mechanism and first successful outcome are explained. If focused evidence is present, answer from it instead of saying evidence is missing. Prefer explicit evidence over generic assumptions. Do not relocate actions, containers, tools or places while paraphrasing: if evidence says an object is put in a cup, answer with the cup; do not move it to a nearby source/location unless a quote explicitly says so. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
     ].filter(Boolean).join("\n\n");
   };
 
@@ -352,6 +390,11 @@ window.TrackerLensAiAgentRuntime = (() => {
     subject: item.subject || "",
     objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
     participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+    roles: item.roles || {},
+    subjectResolution: item.subjectResolution || null,
+    polarity: item.polarity || "",
+    modality: item.modality || "",
+    aspect: item.aspect || "",
     confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
     score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
     evidence: item.evidence?.quote || item.evidence?.text || item.evidence || "",
@@ -387,7 +430,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     if (graphContext) {
       return {
         ...base,
-        contextType: "knowledge-graph",
+        contextType: graphContext.contextType || "knowledge-graph",
         question: graphContext.query || "",
         graph: {
           queryId: graphContext.queryId || "",
@@ -395,10 +438,18 @@ window.TrackerLensAiAgentRuntime = (() => {
           relationCount: graphContext.relationCount ?? 0,
           eventCount: graphContext.eventCount ?? 0,
           scope: graphContext.scope || {},
-          entities: (graphContext.entities || []).slice(0, 10).map(cleanEntity),
-          relations: (graphContext.relations || []).slice(0, 16).map(cleanRelation),
-          events: (graphContext.events || []).slice(0, 16).map(cleanEvent),
-          evidence: (graphContext.evidence || []).slice(0, 4).map(cleanEvidence),
+          reasoningPlan: graphContext.reasoningPlan ? {
+            id: graphContext.reasoningPlan.id || "",
+            intent: graphContext.reasoningPlan.intent || "",
+            status: graphContext.reasoningPlan.status || "",
+            primaryEvidenceText: compactTextValue(graphContext.reasoningPlan.primaryEvidenceText || "", 2200),
+            requiredFacts: (graphContext.reasoningPlan.requiredFacts || []).slice(0, 12),
+            excludedContext: (graphContext.reasoningPlan.excludedContext || []).slice(0, 8),
+          } : null,
+          entities: (graphContext.entities || []).slice(0, graphContext.reasoningPlan ? 4 : 10).map(cleanEntity),
+          relations: (graphContext.relations || []).slice(0, graphContext.reasoningPlan ? 4 : 16).map(cleanRelation),
+          events: (graphContext.events || []).slice(0, graphContext.reasoningPlan ? 6 : 16).map(cleanEvent),
+          evidence: (graphContext.evidence || []).slice(0, graphContext.reasoningPlan ? 2 : 4).map(cleanEvidence),
         },
       };
     }
