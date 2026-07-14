@@ -34,11 +34,11 @@ window.TrackerLensAiAgentEditor = (() => {
   const AI_EXECUTION_MODES = ["on_event", "interval", "continuous", "manual", "scheduled"];
   const AI_DROP_POLICIES = ["queue", "reject", "latest"];
   const AI_INPUT_DATA_MODES = ["off", "latest", "history", "latest_history"];
-  const AI_AGENT_STATUSES = ["active", "paused", "disabled", "experimental"];
+  const AI_AGENT_STATUSES = ["active", "idle", "running", "warning", "paused", "error", "disconnected", "disabled", "experimental"];
   const AI_RESPONSE_FORMATS = ["text", "json", "markdown", "structured", "signal"];
   const AI_PROMPT_STRATEGIES = ["simple", "contextual", "memory-aware", "multi-step", "chain-of-thought", "structured-output"];
   const AI_MEMORY_MODES = ["none", "short", "workspace", "persistent"];
-  const AI_PROVIDER_TYPES = ["openai", "claude", "gemini", "ollama", "lm-studio", "custom"];
+  const AI_PROVIDER_TYPES = ["local", "openai", "claude", "gemini", "ollama", "lm-studio", "custom"];
   const AI_PERMISSION_FIELDS = [
     ["canAccessWeb", "Can Access Web"],
     ["canAccessMemory", "Can Access Memory"],
@@ -159,7 +159,7 @@ window.TrackerLensAiAgentEditor = (() => {
 
   const agentInput = (label, name, value = "", extra = {}) =>
     _.Input({ label, name, value: value ?? "", ...extra });
-  const agentSelect = (label, name, value, options) =>
+  const agentSelect = (label, name, value, options, extra = {}) =>
     _.div(
       { class: "tl-ai-agent-field" },
       _.input({ type: "hidden", name, value: value ?? "" }),
@@ -169,8 +169,10 @@ window.TrackerLensAiAgentEditor = (() => {
         options: optionItems(options),
         slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
         onChange: (nextValue) => {
+          const value = selectValueOf(nextValue);
           const input = document.querySelector(`.tl-ai-agent-runtime-editor input[name='${name}']`);
           if (input) input.value = selectValueOf(nextValue);
+          extra.onChange?.(value);
         },
       })
     );
@@ -179,7 +181,70 @@ window.TrackerLensAiAgentEditor = (() => {
   const agentTextarea = (label, name, value = "", rows = 5, placeholder = "") =>
     _.label({ class: "tl-ai-agent-textarea-field" }, _.span(label), _.textarea({ name, rows, placeholder, value: value || "" }));
 
-  const open = ({ agent = null, providers = [], title = "", subtitle = "", onSave = null, footerActions = null } = {}) => {
+  const openRuntimeEditorShell = ({
+    title = "AI Runtime Agent Editor",
+    subtitle = "Flow Map runtime node",
+    icon: iconName = "psychology",
+    formId = `tl-ai-runtime-editor-${Date.now()}`,
+    tabs = [],
+    initialTab = "general",
+    formClass = "",
+    dialogClass = "",
+    panelClass = "",
+    saveLabel = "Salva Runtime Agent",
+    cancelLabel = "Annulla",
+    footerActions = null,
+    onSave = null,
+  } = {}) => {
+    const tabModel = window.CMSwift.reactive.signal(initialTab || tabs[0]?.name || "general");
+    let dialog = null;
+    const saveFromForm = async ({ close }) => {
+      await onSave?.({ form: document.getElementById(formId), close, dialog, formId });
+    };
+    dialog = _.Dialog({
+      class: ["tl-ai-agent-dialog", dialogClass].filter(Boolean).join(" "),
+      panelClass: ["tl-ai-agent-runtime-panel", panelClass].filter(Boolean).join(" "),
+      size: "xl",
+      title,
+      subtitle,
+      icon: iconName,
+      closeButton: true,
+      closeOnOutside: false,
+      closeOnBackdrop: false,
+      scrollable: true,
+      bodyMaxHeight: "76vh",
+      content: ({ close }) => _.form(
+        {
+          id: formId,
+          class: ["tl-ai-agent-runtime-editor", formClass].filter(Boolean).join(" "),
+          onsubmit: async (event) => {
+            event.preventDefault();
+            await saveFromForm({ close });
+          },
+        },
+        _.TabPanel({
+          class: "tl-ai-agent-tabs",
+          model: tabModel,
+          orientation: "horizontal",
+          variant: "soft",
+          tabs,
+        })
+      ),
+      actions: ({ close }) => _.Toolbar(
+        { class: "tl-ai-agent-editor-footer", align: "end", gap: 8 },
+        typeof footerActions === "function" ? footerActions({ close, formId, dialog }) : null,
+        btn({ onclick: close }, cancelLabel),
+        btn({
+          class: "tl-ai-save-btn",
+          onclick: async () => saveFromForm({ close }),
+        }, icon("save", "sm"), saveLabel)
+      ),
+    });
+    dialog.open();
+    return dialog;
+  };
+
+  const open = ({ agent = null, providers = [], title = "", subtitle = "", onSave = null, footerActions = null, customTabs = [], saveLabel = "Salva Runtime Agent", cancelLabel = "Annulla" } = {}) => {
     const raw = rawAgent(agent);
     const runtime = agentNested(agent, "runtime");
     const provider = agentNested(agent, "provider");
@@ -223,6 +288,152 @@ window.TrackerLensAiAgentEditor = (() => {
       }
       await onSave?.({ payload, form, close, agent, dialog });
     };
+    const tabs = [
+      {
+        name: "general",
+        label: "General",
+        icon: "badge",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentSelect("Agent Scope", "scope", values.scope, [{ value: "template", label: "Library Agent Template" }, { value: "runtime", label: "Runtime Agent Instance" }]),
+          agentInput("Name", "name", values.name, { required: true, placeholder: "Runtime Data Analyzer" }),
+          agentInput("Description", "description", values.description, { placeholder: "Analyzes runtime events and emits AI insight channels" }),
+          agentInput("Icon", "icon", values.icon),
+          agentSelect("Color", "color", values.color, ["gold", "green", "blue"]),
+          agentInput("Category", "category", values.category),
+          agentInput("Tags", "tags", values.tags, { placeholder: "operations, events, risk" }),
+          agentInput("Version", "version", values.version),
+          agentSelect("Status", "status", values.status, AI_AGENT_STATUSES),
+          agentInput("Workspace ID", "workspaceId", values.workspaceId, { placeholder: "workspace_global" }),
+          agentInput("Template ID", "templateId", values.templateId, { placeholder: "agent template id for runtime instances" })
+        ),
+      },
+      {
+        name: "runtime",
+        label: "Runtime",
+        icon: "hub",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentSelect("Agent Type", "agentType", runtime.agentType || runtime.type || "analyzer", AI_AGENT_TYPES),
+          agentSelect("Execution Mode", "executionMode", runtime.executionMode || "on_event", AI_EXECUTION_MODES),
+          agentInput("Runtime Priority", "priority", runtime.priority ?? 5, { type: "number" }),
+          agentSelect("Retry Policy", "retryPolicy", runtime.retryPolicy || "exponential", ["none", "linear", "exponential", "dead-letter"]),
+          agentInput("Timeout (ms)", "timeoutMs", runtime.timeoutMs ?? 120000, { type: "number" }),
+          agentInput("Cooldown (ms)", "cooldownMs", runtime.cooldownMs ?? 0, { type: "number" }),
+          agentInput("Queue Limit", "queueLimit", runtime.queueLimit ?? 25, { type: "number" }),
+          agentInput("Parallel Jobs", "parallelJobs", runtime.parallelJobs ?? 1, { type: "number" }),
+          agentSelect("Drop Policy", "dropPolicy", runtime.dropPolicy || "queue", AI_DROP_POLICIES)
+        ),
+      },
+      {
+        name: "provider",
+        label: "AI Provider",
+        icon: "dns",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentSelect("Provider Profile", "providerProfile", selectedProviderId(agent), providerProfiles, {
+            onChange: (providerId) => {
+              const selected = providers.find((item) => item.id === providerId);
+              if (!selected) return;
+              const form = document.querySelector(".tl-ai-agent-runtime-editor");
+              const providerType = form?.querySelector?.("input[name='providerType']");
+              const model = form?.querySelector?.("input[name='model']");
+              if (providerType) providerType.value = selected.providerType || selected.provider || providerType.value || "local";
+              if (model) model.value = selected.model || selected.defaultModel || model.value || "local-model";
+            },
+          }),
+          agentSelect("Provider Type", "providerType", provider.providerType || provider.provider || "ollama", AI_PROVIDER_TYPES),
+          agentInput("Model", "model", provider.model || "local-model"),
+          agentInput("Temperature", "temperature", provider.temperature ?? 0.2, { type: "number", step: "0.1" }),
+          agentInput("Max Tokens", "maxTokens", provider.maxTokens ?? 800, { type: "number" }),
+          agentInput("Top P", "topP", provider.topP ?? 0.9, { type: "number", step: "0.05" }),
+          agentBooleanSelect("Streaming", "streaming", Boolean(provider.streaming)),
+          agentSelect("Response Format", "responseFormat", provider.responseFormat || "json", AI_RESPONSE_FORMATS)
+        ),
+      },
+      ...customTabs,
+      {
+        name: "inputs",
+        label: "Inputs",
+        icon: "input",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentInput("Input Channels", "inputChannels", csvOf(inputChannels), { placeholder: "source.value, events.recent" }),
+          agentInput("Required Inputs", "requiredInputs", csvOf(channels.requiredInputs || []), { placeholder: "source.value" }),
+          agentInput("Context Sources", "contextSources", csvOf(channels.contextSources || []), { placeholder: "workspace, memory, last-event" }),
+          agentInput("Event Triggers", "eventTriggers", csvOf(channels.eventTriggers || inputChannels), { placeholder: "channel.emit, manual.test" }),
+          agentSelect("Input Data Request", "inputDataMode", channels.inputDataMode || raw.inputDataMode || "latest", AI_INPUT_DATA_MODES),
+          agentInput("Input History Limit", "inputHistoryLimit", channels.inputHistoryLimit ?? raw.inputHistoryLimit ?? 5, { type: "number" }),
+          agentTextarea("Payload Mapping", "payloadMapping", channels.payloadMapping || "source.value -> observed_value\nevents.recent -> latest_events", 5),
+          _.div({ class: "tl-ai-agent-preview-card" }, _.strong("Input Preview"), _.p("Last event, frequency and schema are populated by runtime channel telemetry."), _.code(`channels: ${csvOf(inputChannels) || "task"}`))
+        ),
+      },
+      {
+        name: "prompt",
+        label: "Prompt",
+        icon: "article",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid is-wide" },
+          agentTextarea("System Prompt", "systemPrompt", promptConfig.systemPrompt || "You are a runtime intelligence worker. Analyze events and emit operational output.", 5),
+          agentTextarea("Prompt Template", "promptTemplate", promptConfig.template || "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}", 7),
+          agentInput("Dynamic Variables", "dynamicVariables", csvOf(promptConfig.variables || ["{{channel}}", "{{timestamp}}", "{{workspace}}", "{{memory}}", "{{event}}", "{{payload}}"])),
+          agentSelect("Prompt Strategy", "promptStrategy", promptConfig.strategy || "contextual", AI_PROMPT_STRATEGIES),
+          agentTextarea("Output Instructions", "outputInstructions", promptConfig.outputInstructions || "Return structured runtime output ready for channel emission.", 4)
+        ),
+      },
+      {
+        name: "memory",
+        label: "Memory",
+        icon: "memory",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentSelect("Memory Mode", "memoryMode", memoryConfig.mode || "workspace", AI_MEMORY_MODES),
+          agentInput("Memory Size", "memorySize", memoryConfig.size ?? 20, { type: "number" }),
+          agentInput("Expiration", "memoryExpiration", memoryConfig.expiration || "24h"),
+          agentSelect("Persistence", "memoryPersistence", memoryConfig.persistence || "workspace", ["none", "short", "workspace", "persistent"]),
+          agentSelect("Compression", "memoryCompression", memoryConfig.compression || "summary", ["none", "summary", "semantic", "rolling-window"]),
+          agentInput("Context Window", "contextWindow", memoryConfig.contextWindow ?? 6, { type: "number" })
+        ),
+      },
+      {
+        name: "outputs",
+        label: "Outputs",
+        icon: "output",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          agentInput("Output Channel", "outputChannel", outputChannel, { placeholder: "ai.market.analysis" }),
+          agentSelect("Output Format", "outputFormat", channels.outputFormat || provider.responseFormat || "json", AI_RESPONSE_FORMATS),
+          agentSelect("Emit Strategy", "emitStrategy", channels.emitStrategy || "on_success", ["on_success", "always", "on_change", "threshold", "manual"]),
+          agentSelect("Event Priority", "eventPriority", channels.eventPriority || "normal", ["low", "normal", "high", "critical"]),
+          _.div({ class: "tl-ai-agent-preview-card" }, _.strong("Runtime Flow"), _.p("Channel consumer -> prompt generation -> provider call -> memory update -> output channel emit."), _.code(`${csvOf(inputChannels) || "task"} -> ${outputChannel}`))
+        ),
+      },
+      {
+        name: "permissions",
+        label: "Permissions",
+        icon: "shield",
+        content: _.div(
+          { class: "tl-ai-agent-permission-grid" },
+          ...AI_PERMISSION_FIELDS.map(([key, label]) => agentBooleanSelect(label, key, permissions[key] ?? (key === "canEmitChannels" || key === "canReadWorkspace")))
+        ),
+      },
+      {
+        name: "debug",
+        label: "Debug",
+        icon: "bug_report",
+        content: _.div(
+          { class: "tl-ai-agent-tab-grid" },
+          ...AI_DEBUG_FIELDS.map(([key, label]) => agentBooleanSelect(label, key, debug[key] ?? key !== "debugMode")),
+          agentInput("Execution Count", "executionCount", agentMetrics.executionCount ?? 0, { type: "number" }),
+          agentInput("Avg Response Time (ms)", "avgResponseTimeMs", agentMetrics.avgResponseTimeMs ?? 0, { type: "number" }),
+          agentInput("Token Usage", "tokenUsage", agentMetrics.tokenUsage ?? 0, { type: "number" }),
+          agentInput("Success Rate", "successRate", agentMetrics.successRate ?? 0, { type: "number" }),
+          agentInput("Queue Size", "queueSize", agentMetrics.queueSize ?? 0, { type: "number" }),
+          agentInput("Active Jobs", "activeJobs", agentMetrics.activeJobs ?? 0, { type: "number" }),
+          agentInput("Memory Usage", "memoryUsage", agentMetrics.memoryUsage ?? 0, { type: "number" })
+        ),
+      },
+    ];
     dialog = _.Dialog({
       class: "tl-ai-agent-dialog",
       panelClass: "tl-ai-agent-runtime-panel",
@@ -249,152 +460,18 @@ window.TrackerLensAiAgentEditor = (() => {
           model: tabModel,
           orientation: "horizontal",
           variant: "soft",
-          tabs: [
-            {
-              name: "general",
-              label: "General",
-              icon: "badge",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentSelect("Agent Scope", "scope", values.scope, [{ value: "template", label: "Library Agent Template" }, { value: "runtime", label: "Runtime Agent Instance" }]),
-                agentInput("Name", "name", values.name, { required: true, placeholder: "Runtime Data Analyzer" }),
-                agentInput("Description", "description", values.description, { placeholder: "Analyzes runtime events and emits AI insight channels" }),
-                agentInput("Icon", "icon", values.icon),
-                agentSelect("Color", "color", values.color, ["gold", "green", "blue"]),
-                agentInput("Category", "category", values.category),
-                agentInput("Tags", "tags", values.tags, { placeholder: "operations, events, risk" }),
-                agentInput("Version", "version", values.version),
-                agentSelect("Status", "status", values.status, AI_AGENT_STATUSES),
-                agentInput("Workspace ID", "workspaceId", values.workspaceId, { placeholder: "workspace_global" }),
-                agentInput("Template ID", "templateId", values.templateId, { placeholder: "agent template id for runtime instances" })
-              ),
-            },
-            {
-              name: "runtime",
-              label: "Runtime",
-              icon: "hub",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentSelect("Agent Type", "agentType", runtime.agentType || runtime.type || "analyzer", AI_AGENT_TYPES),
-                agentSelect("Execution Mode", "executionMode", runtime.executionMode || "on_event", AI_EXECUTION_MODES),
-                agentInput("Runtime Priority", "priority", runtime.priority ?? 5, { type: "number" }),
-                agentSelect("Retry Policy", "retryPolicy", runtime.retryPolicy || "exponential", ["none", "linear", "exponential", "dead-letter"]),
-                agentInput("Timeout (ms)", "timeoutMs", runtime.timeoutMs ?? 120000, { type: "number" }),
-                agentInput("Cooldown (ms)", "cooldownMs", runtime.cooldownMs ?? 0, { type: "number" }),
-                agentInput("Queue Limit", "queueLimit", runtime.queueLimit ?? 25, { type: "number" }),
-                agentInput("Parallel Jobs", "parallelJobs", runtime.parallelJobs ?? 1, { type: "number" }),
-                agentSelect("Drop Policy", "dropPolicy", runtime.dropPolicy || "queue", AI_DROP_POLICIES)
-              ),
-            },
-            {
-              name: "provider",
-              label: "AI Provider",
-              icon: "dns",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentSelect("Provider Profile", "providerProfile", selectedProviderId(agent), providerProfiles),
-                agentSelect("Provider Type", "providerType", provider.providerType || provider.provider || "ollama", AI_PROVIDER_TYPES),
-                agentInput("Model", "model", provider.model || "local-model"),
-                agentInput("Temperature", "temperature", provider.temperature ?? 0.2, { type: "number", step: "0.1" }),
-                agentInput("Max Tokens", "maxTokens", provider.maxTokens ?? 800, { type: "number" }),
-                agentInput("Top P", "topP", provider.topP ?? 0.9, { type: "number", step: "0.05" }),
-                agentBooleanSelect("Streaming", "streaming", Boolean(provider.streaming)),
-                agentSelect("Response Format", "responseFormat", provider.responseFormat || "json", AI_RESPONSE_FORMATS)
-              ),
-            },
-            {
-              name: "inputs",
-              label: "Inputs",
-              icon: "input",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentInput("Input Channels", "inputChannels", csvOf(inputChannels), { placeholder: "source.value, events.recent" }),
-                agentInput("Required Inputs", "requiredInputs", csvOf(channels.requiredInputs || []), { placeholder: "source.value" }),
-                agentInput("Context Sources", "contextSources", csvOf(channels.contextSources || []), { placeholder: "workspace, memory, last-event" }),
-                agentInput("Event Triggers", "eventTriggers", csvOf(channels.eventTriggers || inputChannels), { placeholder: "channel.emit, manual.test" }),
-                agentSelect("Input Data Request", "inputDataMode", channels.inputDataMode || raw.inputDataMode || "latest", AI_INPUT_DATA_MODES),
-                agentInput("Input History Limit", "inputHistoryLimit", channels.inputHistoryLimit ?? raw.inputHistoryLimit ?? 5, { type: "number" }),
-                agentTextarea("Payload Mapping", "payloadMapping", channels.payloadMapping || "source.value -> observed_value\nevents.recent -> latest_events", 5),
-                _.div({ class: "tl-ai-agent-preview-card" }, _.strong("Input Preview"), _.p("Last event, frequency and schema are populated by runtime channel telemetry."), _.code(`channels: ${csvOf(inputChannels) || "task"}`))
-              ),
-            },
-            {
-              name: "prompt",
-              label: "Prompt",
-              icon: "article",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid is-wide" },
-                agentTextarea("System Prompt", "systemPrompt", promptConfig.systemPrompt || "You are a runtime intelligence worker. Analyze events and emit operational output.", 5),
-                agentTextarea("Prompt Template", "promptTemplate", promptConfig.template || "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}", 7),
-                agentInput("Dynamic Variables", "dynamicVariables", csvOf(promptConfig.variables || ["{{channel}}", "{{timestamp}}", "{{workspace}}", "{{memory}}", "{{event}}", "{{payload}}"])),
-                agentSelect("Prompt Strategy", "promptStrategy", promptConfig.strategy || "contextual", AI_PROMPT_STRATEGIES),
-                agentTextarea("Output Instructions", "outputInstructions", promptConfig.outputInstructions || "Return structured runtime output ready for channel emission.", 4)
-              ),
-            },
-            {
-              name: "memory",
-              label: "Memory",
-              icon: "memory",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentSelect("Memory Mode", "memoryMode", memoryConfig.mode || "workspace", AI_MEMORY_MODES),
-                agentInput("Memory Size", "memorySize", memoryConfig.size ?? 20, { type: "number" }),
-                agentInput("Expiration", "memoryExpiration", memoryConfig.expiration || "24h"),
-                agentSelect("Persistence", "memoryPersistence", memoryConfig.persistence || "workspace", ["none", "short", "workspace", "persistent"]),
-                agentSelect("Compression", "memoryCompression", memoryConfig.compression || "summary", ["none", "summary", "semantic", "rolling-window"]),
-                agentInput("Context Window", "contextWindow", memoryConfig.contextWindow ?? 6, { type: "number" })
-              ),
-            },
-            {
-              name: "outputs",
-              label: "Outputs",
-              icon: "output",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                agentInput("Output Channel", "outputChannel", outputChannel, { placeholder: "ai.market.analysis" }),
-                agentSelect("Output Format", "outputFormat", channels.outputFormat || provider.responseFormat || "json", AI_RESPONSE_FORMATS),
-                agentSelect("Emit Strategy", "emitStrategy", channels.emitStrategy || "on_success", ["on_success", "always", "on_change", "threshold", "manual"]),
-                agentSelect("Event Priority", "eventPriority", channels.eventPriority || "normal", ["low", "normal", "high", "critical"]),
-                _.div({ class: "tl-ai-agent-preview-card" }, _.strong("Runtime Flow"), _.p("Channel consumer -> prompt generation -> provider call -> memory update -> output channel emit."), _.code(`${csvOf(inputChannels) || "task"} -> ${outputChannel}`))
-              ),
-            },
-            {
-              name: "permissions",
-              label: "Permissions",
-              icon: "shield",
-              content: _.div(
-                { class: "tl-ai-agent-permission-grid" },
-                ...AI_PERMISSION_FIELDS.map(([key, label]) => agentBooleanSelect(label, key, permissions[key] ?? (key === "canEmitChannels" || key === "canReadWorkspace")))
-              ),
-            },
-            {
-              name: "debug",
-              label: "Debug",
-              icon: "bug_report",
-              content: _.div(
-                { class: "tl-ai-agent-tab-grid" },
-                ...AI_DEBUG_FIELDS.map(([key, label]) => agentBooleanSelect(label, key, debug[key] ?? key !== "debugMode")),
-                agentInput("Execution Count", "executionCount", agentMetrics.executionCount ?? 0, { type: "number" }),
-                agentInput("Avg Response Time (ms)", "avgResponseTimeMs", agentMetrics.avgResponseTimeMs ?? 0, { type: "number" }),
-                agentInput("Token Usage", "tokenUsage", agentMetrics.tokenUsage ?? 0, { type: "number" }),
-                agentInput("Success Rate", "successRate", agentMetrics.successRate ?? 0, { type: "number" }),
-                agentInput("Queue Size", "queueSize", agentMetrics.queueSize ?? 0, { type: "number" }),
-                agentInput("Active Jobs", "activeJobs", agentMetrics.activeJobs ?? 0, { type: "number" }),
-                agentInput("Memory Usage", "memoryUsage", agentMetrics.memoryUsage ?? 0, { type: "number" })
-              ),
-            },
-          ],
+          tabs,
         })
       ),
       actions: ({ close }) => _.Toolbar(
         { class: "tl-ai-agent-editor-footer", align: "end", gap: 8 },
         typeof footerActions === "function" ? footerActions({ close, formId, dialog }) : null,
-        btn({ onclick: close }, "Annulla"),
+        btn({ onclick: close }, cancelLabel),
         btn({
           class: "tl-ai-save-btn",
           "data-ai-agent-save": "true",
           onclick: async () => saveFromForm({ form: document.getElementById(formId), close }),
-        }, icon("save", "sm"), "Salva Runtime Agent")
+        }, icon("save", "sm"), saveLabel)
       ),
     });
     dialog.open();
@@ -403,6 +480,7 @@ window.TrackerLensAiAgentEditor = (() => {
 
   return {
     open,
+    openRuntimeEditorShell,
     contractFromForm,
     splitList,
   };

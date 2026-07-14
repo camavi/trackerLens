@@ -55,10 +55,6 @@ const configureNode = (node) => {
     openPaletteNode(item, node);
     return;
   }
-  if (node?.type === "aiAgent" && nodeSubtype(node) === "orchestrator" && !node.metadata?.library) {
-    requestOrchestratorAgentConfig(node);
-    return;
-  }
   if (node?.type === "aiAgent" && !node.metadata?.library) {
     requestAiAgentRuntimeConfig(node);
     return;
@@ -339,6 +335,62 @@ const runtimeContractSchemaFields = (schema = {}) =>
     ? window.TrackerLensRuntimeContract.normalizeSettingsSchema(schema)
     : Object.entries(schema || {}).map(([key, type]) => ({ key, label: key, type: String(type || "string") }));
 
+const AI_PROVIDER_CONFIG_KEYS = new Set(["providerProfile", "providerType", "model", "temperature", "maxTokens", "topP", "streaming", "responseFormat"]);
+const AI_PROMPT_CONFIG_KEYS = new Set(["systemPrompt", "promptTemplate", "outputInstructions"]);
+const AI_PROVIDER_FIELD_DEFINITIONS = Object.freeze([
+  { key: "providerProfile", label: "Provider Profile", type: "ai-provider-profile" },
+  { key: "providerType", label: "Provider Type", type: "ai-provider-type" },
+  { key: "model", label: "Model", type: "ai-model" },
+  { key: "temperature", label: "Temperature", type: "number", placeholder: "0.2", defaultValue: "0.2", step: "0.1" },
+  { key: "maxTokens", label: "Max Tokens", type: "number", placeholder: "800", defaultValue: "800" },
+  { key: "topP", label: "Top P", type: "number", placeholder: "0.9", defaultValue: "0.9", step: "0.05" },
+  { key: "streaming", label: "Streaming", type: "select", options: ["false", "true"], defaultValue: "false" },
+  { key: "responseFormat", label: "Response Format", type: "select", options: ["json", "structured", "text", "markdown"], defaultValue: "json" },
+]);
+
+const withAiProviderConfigFields = (fields = [], { includeAdvanced = true } = {}) => [
+  ...AI_PROVIDER_FIELD_DEFINITIONS.filter((field) => includeAdvanced || ["providerProfile", "providerType", "model"].includes(field.key)),
+  ...fields.filter((field) => !AI_PROVIDER_CONFIG_KEYS.has(field.key)),
+];
+
+const knowledgeAiPromptDefaults = (subtype = "") => {
+  if (subtype === "knowledge-event-builder") {
+    return {
+      systemPrompt: "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks.",
+      promptTemplate: "Use only provided chunks and dictionary terms. Return strict JSON with events, rejectedCandidates, exact evidence quotes, source-language labels, ordered event types and short explanations.",
+      outputInstructions: "Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, evidence.quote and explanation. Do not invent facts outside evidence.",
+    };
+  }
+  if (subtype === "semantic-relation-enricher") {
+    return {
+      systemPrompt: "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence.",
+      promptTemplate: "Use only candidate evidence text. Prefer explicit semantic relations over generic links and reject unsupported pairs.",
+      outputInstructions: "Return strict JSON with relations containing candidateId, relationType, confidence and explanation.",
+    };
+  }
+  if (subtype === "knowledge-graph-builder-agent") {
+    return {
+      systemPrompt: "You are a Knowledge Graph Builder Agent. Build a verified graph from local document chunks with evidence-backed entities and relations.",
+      promptTemplate: "Use chunks, existing entities and relations as context. Prefer precise domain relations, preserve source-language labels and reject weak or absent evidence.",
+      outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include an exact evidence quote.",
+    };
+  }
+  return {
+    systemPrompt: "You are a Trackers Lens Knowledge AI node. Use only provided runtime context and return structured, evidence-backed output.",
+    promptTemplate: "Process the provided payload according to this node's Knowledge contract.",
+    outputInstructions: "Return strict JSON only.",
+  };
+};
+
+const knowledgeAiPromptFieldDefinitions = (subtype = "") => {
+  const defaults = knowledgeAiPromptDefaults(subtype);
+  return [
+    { key: "systemPrompt", label: "System Prompt", type: "textarea", rows: 6, defaultValue: defaults.systemPrompt },
+    { key: "promptTemplate", label: "Prompt Template", type: "textarea", rows: 7, defaultValue: defaults.promptTemplate },
+    { key: "outputInstructions", label: "Output Instructions", type: "textarea", rows: 5, defaultValue: defaults.outputInstructions },
+  ];
+};
+
 const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const label = values.label ?? defaults.label;
@@ -565,13 +617,11 @@ const configFieldDefinitions = (node = {}) => {
       ];
     }
     if (subtype === "embedding-generator" || subtype === "vector-memory") {
-      return [
-        { key: "providerProfile", label: "Provider profile", placeholder: "local-hash, local_ollama, local_lm_studio" },
-        { key: "model", label: "Model", placeholder: "tl-local-hash-v1" },
+      return withAiProviderConfigFields([
         { key: "dimensions", label: "Dimensions", placeholder: "96" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.embedding.created" },
-      ];
+      ], { includeAdvanced: false });
     }
     if (subtype === "rag-search") {
       return [
@@ -617,10 +667,9 @@ const configFieldDefinitions = (node = {}) => {
       ];
     }
     if (subtype === "knowledge-event-builder") {
-      return [
+      return withAiProviderConfigFields([
         { key: "extractionMode", label: "Extraction mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
-        { key: "providerProfile", label: "Provider profile", placeholder: "optional for ai/hybrid" },
-        { key: "model", label: "Model", placeholder: "optional" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxEvents", label: "Max events", placeholder: "80" },
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
         { key: "previewEvents", label: "Preview events", placeholder: "16" },
@@ -629,7 +678,7 @@ const configFieldDefinitions = (node = {}) => {
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.events.updated" },
-      ];
+      ]);
     }
     if (subtype === "knowledge-graph") {
       return [
@@ -643,22 +692,20 @@ const configFieldDefinitions = (node = {}) => {
       ];
     }
     if (subtype === "semantic-relation-enricher") {
-      return [
+      return withAiProviderConfigFields([
         { key: "enrichmentMode", label: "Enrichment mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
-        { key: "providerProfile", label: "Provider profile", placeholder: "local_ollama, local_lm_studio" },
-        { key: "model", label: "Model", placeholder: "local-model" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxRelations", label: "Max semantic relations", placeholder: "48" },
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
         { key: "relationTypes", label: "Allowed relation types", placeholder: "friend_of,helps,tries_to_help" },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.semantic.relations" },
-      ];
+      ]);
     }
     if (subtype === "knowledge-graph-builder-agent") {
-      return [
-        { key: "providerProfile", label: "Provider profile", placeholder: "local_ollama, local_lm_studio" },
-        { key: "model", label: "Model", placeholder: "local-model" },
+      return withAiProviderConfigFields([
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "domainHint", label: "Domain hint", type: "textarea", placeholder: "technical documentation, narrative story, theology, API docs..." },
         { key: "maxChunks", label: "Max chunks", placeholder: "6" },
         { key: "maxChunkChars", label: "Max chars per chunk", placeholder: "1800" },
@@ -671,7 +718,7 @@ const configFieldDefinitions = (node = {}) => {
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.proposed" },
-      ];
+      ]);
     }
     if (subtype === "graph-query") {
       return mergeSchemaFields([
@@ -1059,8 +1106,60 @@ const testTelegramActionNode = async (node = {}, event = null) => {
 const previewRecordForNode = (node = {}) =>
   state.previewPayloads[node.id] || null;
 
-const clearPreviewNodePayload = (node = {}) => {
-  markPreviewNodeClean(node, { remount: true });
+const clearTargetsForNode = (node = {}) => {
+  if (!node?.id) return [];
+  if (typeof downstreamNodeTree === "function") {
+    const tree = downstreamNodeTree(node);
+    if (tree.nodes?.length) return tree.nodes;
+  }
+  return [node];
+};
+
+const clearPreviewNodePayload = (node = {}, { cascade = false } = {}) => {
+  markPreviewNodesClean(cascade ? clearTargetsForNode(node) : [node], { remount: true });
+};
+
+const requestClearPreviewNodePayload = (node = {}) => {
+  if (!node?.id) return;
+  const targets = clearTargetsForNode(node);
+  const childCount = Math.max(0, targets.length - 1);
+  if (!childCount || typeof _?.Dialog !== "function") {
+    clearPreviewNodePayload(node, { cascade: false });
+    return;
+  }
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title: "Clear preview payload?",
+    subtitle: node.label || node.id,
+    icon: "delete_sweep",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      _.p("Scegli se pulire solo questo nodo o anche tutti i figli collegati."),
+      _.div(_.span("Node"), _.strong(node.label || node.id)),
+      _.div(_.span("Children"), _.strong(String(childCount)))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        onclick: () => {
+          clearPreviewNodePayload(node, { cascade: false });
+          close();
+        },
+      }, icon("delete_sweep", "sm"), "Solo Node"),
+      btn({
+        class: "is-danger",
+        onclick: () => {
+          clearPreviewNodePayload(node, { cascade: true });
+          close();
+        },
+      }, icon("account_tree", "sm"), "Node + figli")
+    ),
+  });
+  dialog.open();
 };
 
 const previewValueText = (value, mode = "auto") => {
@@ -1544,7 +1643,7 @@ const renderPreviewNodePanel = (node = {}) => {
           onclick: (event) => {
             event.preventDefault();
             event.stopPropagation();
-            clearPreviewNodePayload(node);
+            requestClearPreviewNodePayload(node);
           },
         }, icon("delete_sweep", "sm")) : null
       )
@@ -2481,7 +2580,14 @@ const flowAiConfigValue = (value = "") => Array.isArray(value) ? value.join(", "
 const aiAgentFromRuntimeNode = (node = {}) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const config = defaults.configObject || {};
-  const agentType = config.agentType || nodeSubtype(node) || "analyzer";
+  const subtype = nodeSubtype(node);
+  const knowledgeAgentType =
+    subtype === "knowledge-event-builder" ? "classifier" :
+    subtype === "semantic-relation-enricher" ? "classifier" :
+    subtype === "knowledge-graph-builder-agent" ? "planner" :
+    subtype === "orchestrator" ? "planner" :
+    "";
+  const agentType = config.agentType || knowledgeAgentType || subtype || "analyzer";
   const split = window.TrackerLensAiAgentEditor?.splitList || ((value) => String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean));
   return {
     id: config.runtimeAgentId || `runtime_agent_${node.workspaceId || state.filters.workspaceId || "workspace_global"}_${node.id}`,
@@ -2533,11 +2639,11 @@ const aiAgentFromRuntimeNode = (node = {}) => {
       eventPriority: config.eventPriority || "normal",
     },
     promptConfig: {
-      systemPrompt: config.systemPrompt || "You are a runtime intelligence worker. Analyze events and emit operational output.",
-      template: config.promptTemplate || config.prompt || "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}",
+      systemPrompt: config.systemPrompt || knowledgeAiPromptDefaults(subtype).systemPrompt || "You are a runtime intelligence worker. Analyze events and emit operational output.",
+      template: config.promptTemplate || config.prompt || knowledgeAiPromptDefaults(subtype).promptTemplate || "Analyze this runtime event:\n\nChannel: {{channel}}\nPayload: {{payload}}\nMemory: {{memory}}",
       variables: split(config.dynamicVariables || "{{channel}}, {{timestamp}}, {{workspace}}, {{memory}}, {{event}}, {{payload}}"),
       strategy: config.promptStrategy || "contextual",
-      outputInstructions: config.outputInstructions || "Return structured runtime output ready for channel emission.",
+      outputInstructions: config.outputInstructions || knowledgeAiPromptDefaults(subtype).outputInstructions || "Return structured runtime output ready for channel emission.",
     },
     memory: {
       mode: config.memoryMode || "workspace",
@@ -2628,6 +2734,46 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   ...payload.metrics,
 });
 
+const persistKnowledgeAiEditorPayload = async ({ node, payload, form, close }) => {
+  const defaults = runtimeNodeConfigDefaults(node);
+  const agentConfig = aiAgentPayloadConfig(payload);
+  const customConfig = readConfigMap(form);
+  const input = payload.channels?.inputs?.[0] || defaults.input;
+  const output = payload.channels?.outputChannel || payload.channels?.outputs?.[0] || defaults.output;
+  const update = runtimeNodeUpdateFromValues({
+    node,
+    values: {
+      label: payload.name || defaults.label,
+      input,
+      output,
+      mode: nodeSubtype(node) || defaults.mode,
+      runtimeStatus: payload.status || defaults.runtimeStatus,
+      config: {
+        ...defaults.configObject,
+        ...agentConfig,
+        ...customConfig,
+      },
+    },
+  });
+  const nextNode = update.node;
+  await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+  await window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode?.({ node: nextNode });
+  await recordFlowAction({
+    workspaceId: nextNode.workspaceId || state.filters.workspaceId || "workspace_global",
+    nodeId: nextNode.id,
+    message: `Knowledge AI node configured: ${nextNode.label || nextNode.id}`,
+    context: {
+      action: "knowledge-ai-node-configured",
+      subtype: nodeSubtype(nextNode),
+      providerProfile: nextNode.metadata?.config?.providerProfile || "",
+      model: nextNode.metadata?.config?.model || "",
+      channels: update.channels,
+    },
+  });
+  close?.();
+  await loadRuntime({ force: true });
+};
+
 const findSavedAiAgent = async (agentId = "") => {
   if (!agentId) return null;
   try {
@@ -2652,7 +2798,8 @@ const resolveAiAgentEditorRecord = async (node = {}) => {
   };
 };
 
-const persistAiAgentEditorPayload = async ({ node, payload, close }) => {
+const persistAiAgentEditorPayload = async ({ node, payload, form, close }) => {
+  const customConfig = readConfigMap(form);
   if (node.metadata?.aiAgentAlias) {
     if (payload.scope === "runtime") {
       await window.TrackerLensAiRuntimeStore?.upsertRuntimeAgent?.(payload);
@@ -2734,7 +2881,7 @@ const persistAiAgentEditorPayload = async ({ node, payload, close }) => {
       output: outputChannel,
       mode: payload.runtime?.agentType || nodeSubtype(node),
       runtimeStatus: payload.status || "active",
-      config: { ...nodeConfigObject(node), ...aiAgentPayloadConfig(payload) },
+      config: { ...nodeConfigObject(node), ...aiAgentPayloadConfig(payload), ...customConfig },
     },
   });
   await window.TrackerLensAiRuntimeStore?.upsertRuntimeAgent?.({
@@ -2765,6 +2912,137 @@ const persistAiAgentEditorPayload = async ({ node, payload, close }) => {
   });
   close?.();
   await loadRuntime();
+};
+
+const persistOrchestratorAiEditorPayload = async ({ node, payload, form, close }) => {
+  const previousMetadata = node.metadata || {};
+  const baseConfig = {
+    ...nodeConfigObject(node),
+    ...aiAgentPayloadConfig(payload),
+    ...readConfigMap(form),
+  };
+  const boolString = (value, fallback = false) => String(value === true || value === "true" || value === "on" || (!value && fallback));
+  const input = payload.channels?.inputs?.[0] || baseConfig.taskInput || "task";
+  const outputs = [
+    baseConfig.outputDecision || "decision",
+    baseConfig.outputAction || "action",
+    baseConfig.outputDone || "done",
+    baseConfig.outputError || "error",
+  ].filter(Boolean);
+  const runtimeStatus = payload.status || previousMetadata.runtimeStatus || node.runtime?.status || node.status || "active";
+  const normalizedConfig = {
+    ...baseConfig,
+    goal: baseConfig.goal || "Decide which connected nodes should run for each incoming payload.",
+    taskInput: input,
+    executionMode: payload.runtime?.executionMode || baseConfig.executionMode || "on_event",
+    autonomousMode: boolString(baseConfig.autonomousMode, false),
+    requireConfirmation: boolString(baseConfig.requireConfirmation, false),
+    verboseTrace: boolString(baseConfig.verboseTrace, true),
+    savePrompts: boolString(baseConfig.savePrompts, true),
+    saveDecisions: boolString(baseConfig.saveDecisions, true),
+    debugMode: boolString(baseConfig.debugMode, false),
+    maxIterations: String(baseConfig.maxIterations || "5"),
+    iterationDelayMs: String(baseConfig.iterationDelayMs || "1200"),
+    stopCondition: baseConfig.stopCondition || "completed",
+    feedbackWindow: String(baseConfig.feedbackWindow || "12"),
+    allowedNodeTypes: baseConfig.allowedNodeTypes || "processors, ai-agents, actions, storage, lens, dev",
+    dispatchStrategy: baseConfig.dispatchStrategy || "linked_order",
+    plannerStrategy: baseConfig.plannerStrategy || "ai-first",
+    routePolicy: baseConfig.routePolicy || "direct-linked-only",
+    maxSteps: String(baseConfig.maxSteps || "6"),
+    maxConcurrentTasks: String(baseConfig.maxConcurrentTasks || baseConfig.parallelJobs || "1"),
+    queueLimit: String(baseConfig.queueLimit || "10"),
+    timeoutMs: String(baseConfig.timeoutMs || "30000"),
+    dropPolicy: baseConfig.dropPolicy || "queue",
+    outputDecision: outputs[0] || "decision",
+    outputAction: outputs[1] || "action",
+    outputDone: outputs[2] || "done",
+    outputError: outputs[3] || "error",
+  };
+  const manifest = nodeManifest({
+    type: "aiAgent",
+    subtype: "orchestrator",
+    category: "ai-agents",
+    inputs: [input],
+    outputs,
+    permissions: ["ai.invoke", "graph.dispatch", "channel.emit"],
+    settingsSchema: {
+      goal: "string",
+      systemPrompt: "string",
+      providerProfile: "string",
+      providerType: "string",
+      model: "string",
+      executionMode: "manual|on_event|continuous|autonomous",
+      autonomousMode: "boolean",
+      maxIterations: "number",
+      iterationDelayMs: "number",
+      stopCondition: "string",
+      feedbackWindow: "number",
+      allowedNodeTypes: "array",
+      dispatchStrategy: "linked_order|priority|first_success|all",
+      plannerStrategy: "ai-first|graph-first|goal-first|feedback-first|legacy",
+      routePolicy: "direct-linked-only|agent-control|all-linked",
+      maxSteps: "number",
+      maxConcurrentTasks: "number",
+      queueLimit: "number",
+      timeoutMs: "number",
+      dropPolicy: "queue|reject|latest",
+      outputDecision: "string",
+      outputAction: "string",
+      outputDone: "string",
+      outputError: "string",
+      requireConfirmation: "boolean",
+      verboseTrace: "boolean",
+      savePrompts: "boolean",
+      saveDecisions: "boolean",
+      debugMode: "boolean",
+    },
+    runtime: {
+      executionMode: normalizedConfig.executionMode,
+      orchestrator: true,
+      autonomous: normalizedConfig.autonomousMode === "true",
+    },
+  });
+  const nextNode = {
+    ...node,
+    label: payload.name || node.label || "Orchestrator Agent",
+    inputs: [input],
+    outputs,
+    channels: [...new Set([input, ...outputs])],
+    status: runtimeStatus,
+    runtime: {
+      ...(node.runtime || {}),
+      status: runtimeStatus,
+      active: !["paused", "disabled"].includes(runtimeStatus),
+    },
+    metadata: {
+      ...previousMetadata,
+      draft: false,
+      configured: true,
+      mode: "Orchestrator",
+      config: normalizedConfig,
+      runtimeStatus,
+      subtype: "orchestrator",
+      category: "ai-agents",
+      manifest,
+      permissions: manifest.permissions,
+      settingsSchema: manifest.settingsSchema,
+      runtimeMetadata: manifest.runtime,
+      agentRole: "orchestrator",
+      description: payload.description || "Central runtime brain that decides and dispatches connected nodes.",
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+  await window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode?.({ node: nextNode });
+  await recordFlowAction({
+    workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+    nodeId: node.id,
+    message: `Orchestrator Agent configured: ${nextNode.label || node.id}`,
+    context: { action: "orchestrator-config", config: normalizedConfig },
+  });
+  close?.();
+  await loadRuntime({ force: true });
 };
 
 const detachAiAgentAliasNode = async ({ node, close = null } = {}) => {
@@ -2849,6 +3127,66 @@ const requestAiAgentRuntimeConfig = async (node) => {
   } catch (error) {
     console.warn("Provider AI non caricati per Flow Map:", error);
   }
+  const subtype = nodeSubtype(node);
+  const config = nodeConfigObject(node);
+  const configInput = (label, key, fallback = "", extra = {}) => _.label(
+    { class: "tl-flow-config-field" },
+    _.span(label),
+    _.input({
+      "data-config-key": key,
+      value: config[key] ?? fallback,
+      autocomplete: "off",
+      type: extra.type || "text",
+      placeholder: extra.placeholder || "",
+      ...(extra.step ? { step: extra.step } : {}),
+    })
+  );
+  const configTextarea = (label, key, fallback = "", rows = 4) => _.label(
+    { class: "tl-flow-config-field is-wide" },
+    _.span(label),
+    _.textarea({
+      "data-config-key": key,
+      rows,
+      value: config[key] ?? fallback,
+    })
+  );
+  const configSelect = (label, key, fallback = "", options = []) => {
+    const value = String(config[key] ?? fallback);
+    return _.label(
+      { class: "tl-flow-config-field" },
+      _.span(label),
+      _.select(
+        { "data-config-key": key, value },
+        ...options.map((option) => _.option({ value: option, selected: option === value }, option))
+      )
+    );
+  };
+  const orchestratorTabs = subtype === "orchestrator" ? [
+    {
+      name: "orchestrator",
+      label: "Orchestrator",
+      icon: "hub",
+      content: _.div(
+        { class: "tl-ai-agent-tab-grid is-wide" },
+        configTextarea("Goal", "goal", "Decide which connected nodes should run for each incoming payload.", 5),
+        configSelect("Planner strategy", "plannerStrategy", "ai-first", ["ai-first", "graph-first", "goal-first", "feedback-first", "legacy"]),
+        configSelect("Dispatch strategy", "dispatchStrategy", "linked_order", ["linked_order", "priority", "first_success", "all"]),
+        configSelect("Route policy", "routePolicy", "direct-linked-only", ["direct-linked-only", "agent-control", "all-linked"]),
+        configInput("Allowed node types", "allowedNodeTypes", "processors, ai-agents, actions, storage, lens, dev"),
+        configInput("Max steps per iteration", "maxSteps", "6", { type: "number" }),
+        configSelect("Autonomous mode", "autonomousMode", "false", ["false", "true"]),
+        configInput("Max iterations", "maxIterations", "5", { type: "number" }),
+        configInput("Delay between iterations (ms)", "iterationDelayMs", "1200", { type: "number" }),
+        configInput("Stop condition", "stopCondition", "completed"),
+        configInput("Feedback events", "feedbackWindow", "12", { type: "number" }),
+        configSelect("Require confirmation", "requireConfirmation", "false", ["false", "true"]),
+        configInput("Decision output", "outputDecision", "decision"),
+        configInput("Action output", "outputAction", "action"),
+        configInput("Done output", "outputDone", "done"),
+        configInput("Error output", "outputError", "error")
+      ),
+    },
+  ] : [];
   window.TrackerLensAiAgentEditor.open({
     agent: await resolveAiAgentEditorRecord(node),
     providers,
@@ -2861,7 +3199,10 @@ const requestAiAgentRuntimeConfig = async (node) => {
         onclick: () => detachAiAgentAliasNode({ node, close }),
       }, icon("link_off", "sm"), "Make Copy")
       : null,
-    onSave: ({ payload, close }) => persistAiAgentEditorPayload({ node, payload, close }),
+    customTabs: orchestratorTabs,
+    onSave: ({ payload, form, close }) => subtype === "orchestrator"
+      ? persistOrchestratorAiEditorPayload({ node, payload, form, close })
+      : persistAiAgentEditorPayload({ node, payload, form, close }),
   });
 };
 
@@ -3616,7 +3957,36 @@ const requestOrchestratorAgentConfig = (node) => {
   dialog.open();
 };
 
-const requestRuntimeNodeConfig = (node) => {
+const providerLabelForRuntimeConfig = (provider = {}) => {
+  const name = provider.name || provider.provider || provider.id || "AI Provider";
+  const model = provider.model || provider.defaultModel || "";
+  const type = provider.provider || provider.providerType || "";
+  return [name, model || type].filter(Boolean).join(" · ");
+};
+
+const aiProviderTypeOptions = (providers = []) => [
+  ...new Set([
+    "local",
+    "ollama",
+    "lm-studio",
+    "openai",
+    "anthropic",
+    "gemini",
+    "custom",
+    ...providers.map((provider) => provider.provider || provider.providerType || "").filter(Boolean),
+  ]),
+];
+
+const knowledgeAiNodeTabMeta = (subtype = "") => {
+  if (subtype === "embedding-generator") return { label: "Embedding", icon: "scatter_plot" };
+  if (subtype === "vector-memory") return { label: "Vector Memory", icon: "memory" };
+  if (subtype === "knowledge-event-builder") return { label: "Event Builder", icon: "timeline" };
+  if (subtype === "semantic-relation-enricher") return { label: "Semantic", icon: "psychology" };
+  if (subtype === "knowledge-graph-builder-agent") return { label: "Graph Builder", icon: "auto_awesome" };
+  return { label: "Knowledge", icon: "schema" };
+};
+
+const requestRuntimeNodeConfig = async (node) => {
   if (!node?.id) return;
   const defaults = runtimeNodeConfigDefaults(node);
   const subtype = nodeSubtype(node);
@@ -3625,6 +3995,15 @@ const requestRuntimeNodeConfig = (node) => {
   const capabilityFields = agentCapabilityFieldDefinitions(node);
   const formId = `tl-flow-config-${String(node.id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
   let formRef = null;
+  let aiProviders = [];
+  if (configFields.some((definition) => String(definition.type || "").startsWith("ai-"))) {
+    try {
+      aiProviders = (await window.TrackerLensAiRuntimeStore?.list?.())?.providers || [];
+    } catch (error) {
+      console.warn("Provider AI non caricati per configurazione runtime:", error);
+    }
+    if (!aiProviders.length) aiProviders = window.TrackerLensAiRuntimeStore?.localProviderDefaults?.() || [];
+  }
   const field = (name, label, value, placeholder = "") =>
     _.label(
       { class: "tl-flow-config-field" },
@@ -3665,10 +4044,60 @@ const requestRuntimeNodeConfig = (node) => {
     const targetInput = formRef?.querySelector?.('[data-config-key="target"]');
     if (targetInput) targetInput.value = url;
   };
+  const syncAiProviderConfigFields = (providerId = "") => {
+    const provider = aiProviders.find((item) => item.id === providerId) || null;
+    if (!provider || !formRef) return;
+    const typeInput = formRef.querySelector('[data-config-key="providerType"]');
+    const modelInput = formRef.querySelector('[data-config-key="model"]');
+    if (typeInput) typeInput.value = provider.provider || provider.providerType || typeInput.value || "local";
+    if (modelInput) modelInput.value = provider.model || provider.defaultModel || modelInput.value || "local-model";
+  };
   const configField = (definition) => {
     const value = defaults[definition.key] ?? defaults.configObject?.[definition.key] ??
       (definition.key === "previewMode" ? defaults.configObject?.mode : undefined) ??
       definition.defaultValue ?? "";
+    if (definition.type === "ai-provider-profile") {
+      const options = [
+        { value: "", label: "Auto / local-first" },
+        ...aiProviders.map((provider) => ({ value: provider.id, label: providerLabelForRuntimeConfig(provider) })),
+      ];
+      return _.label(
+        { class: "tl-flow-config-field" },
+        _.span(definition.label),
+        _.select(
+          {
+            "data-config-key": definition.key,
+            value,
+            onchange: (event) => syncAiProviderConfigFields(event.currentTarget.value),
+          },
+          ...options.map((option) => _.option({ value: option.value, selected: option.value === value }, option.label))
+        )
+      );
+    }
+    if (definition.type === "ai-provider-type") {
+      const options = aiProviderTypeOptions(aiProviders);
+      return _.label(
+        { class: "tl-flow-config-field" },
+        _.span(definition.label),
+        _.select(
+          { "data-config-key": definition.key, value: value || options[0] || "local" },
+          ...options.map((option) => _.option({ value: option, selected: option === value }, option))
+        )
+      );
+    }
+    if (definition.type === "ai-model") {
+      const selectedProvider = aiProviders.find((provider) => provider.id === defaults.configObject?.providerProfile) || null;
+      return _.label(
+        { class: "tl-flow-config-field" },
+        _.span(definition.label),
+        _.input({
+          "data-config-key": definition.key,
+          value: value || selectedProvider?.model || "",
+          placeholder: selectedProvider?.model || "auto from provider profile",
+          autocomplete: "off",
+        })
+      );
+    }
     if (definition.type === "checkbox") {
       const inputId = `${formId}-${definition.key}`;
       return _.div(
@@ -3709,7 +4138,7 @@ const requestRuntimeNodeConfig = (node) => {
       return _.label(
         { class: "tl-flow-config-field is-wide" },
         _.span(definition.label),
-        _.textarea({ "data-config-key": definition.key, rows: 4, placeholder: definition.placeholder || "", value })
+        _.textarea({ "data-config-key": definition.key, rows: definition.rows || 4, placeholder: definition.placeholder || "", value })
       );
     }
     if (subtype === "telegram" && definition.key === "chatId") {
@@ -3788,9 +4217,48 @@ const requestRuntimeNodeConfig = (node) => {
     return _.label(
       { class: "tl-flow-config-field" },
       _.span(definition.label),
-      _.input({ "data-config-key": definition.key, value, placeholder: definition.placeholder || "", autocomplete: "off", type: subtype === "telegram" && definition.key === "botToken" ? "password" : "text" })
+      _.input({
+        "data-config-key": definition.key,
+        value,
+        placeholder: definition.placeholder || "",
+        autocomplete: "off",
+        type: definition.type === "number" ? "number" : subtype === "telegram" && definition.key === "botToken" ? "password" : "text",
+        ...(definition.step ? { step: definition.step } : {}),
+      })
     );
   };
+  const hasAiProviderConfig = configFields.some((definition) => AI_PROVIDER_CONFIG_KEYS.has(definition.key));
+  if (hasAiProviderConfig) {
+    const knowledgeFields = configFields.filter((definition) =>
+      !AI_PROVIDER_CONFIG_KEYS.has(definition.key) &&
+      !AI_PROMPT_CONFIG_KEYS.has(definition.key) &&
+      definition.key !== "outputChannel"
+    );
+    const nodeTab = knowledgeAiNodeTabMeta(subtype);
+    if (window.TrackerLensAiAgentEditor?.open) {
+      window.TrackerLensAiAgentEditor.open({
+        agent: aiAgentFromRuntimeNode(node),
+        providers: aiProviders,
+        title: `Configure ${subtype}`,
+        subtitle: `${node.label || node.id} · Knowledge AI runtime node`,
+        saveLabel: "Save Node",
+        cancelLabel: "Cancel",
+        customTabs: knowledgeFields.length ? [
+          {
+            name: "knowledge-node",
+            label: nodeTab.label,
+            icon: nodeTab.icon,
+            content: _.div(
+              { class: "tl-ai-agent-tab-grid is-wide" },
+              ...knowledgeFields.map(configField)
+            ),
+          },
+        ] : [],
+        onSave: ({ payload, form, close }) => persistKnowledgeAiEditorPayload({ node, payload, form, close }),
+      });
+      return;
+    }
+  }
   const dialog = _.Dialog({
     class: "tl-flow-config-dialog",
     panelClass: "tl-flow-config-panel",

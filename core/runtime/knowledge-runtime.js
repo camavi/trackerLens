@@ -1647,6 +1647,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter(Boolean)
       .sort((a, b) => b.length - a.length);
 
+  const narrativeMentionedParticipants = (sentence = "", dictionaryEntries = []) => {
+    const normalizedSentence = normalizeEntityToken(sentence);
+    if (!normalizedSentence) return [];
+    return unique(narrativeSubjectDictionaryEntries(dictionaryEntries)
+      .filter((term) => {
+        const key = normalizeEntityToken(term);
+        return key && new RegExp(`\\b${escapedRegExp(key)}\\b`).test(normalizedSentence);
+      }))
+      .slice(0, 6);
+  };
+
+  const hasObjectOrIndirectPronounMention = (sentence = "") =>
+    /\b(?:gli|lui|lei|him|her|them|loro|elle|eux|ellos|ellas)\b/.test(normalizeEntityToken(sentence));
+
+  const recentNarrativeParticipants = (previous = {}, sentence = "", dictionaryEntries = []) => {
+    const mentioned = narrativeMentionedParticipants(sentence, dictionaryEntries);
+    const recent = unique([
+      ...(previous.recentParticipants || []),
+      ...(previous.participants || []),
+      ...(previous.subject ? [previous.subject] : []),
+    ].filter((item) => item && !isKnowledgePronounMention(item)));
+    const withMentioned = unique([...mentioned, ...recent].filter(Boolean));
+    return withMentioned.slice(0, 6);
+  };
+
   const isNarrativeParticipantMention = (term = "", dictionaryEntries = []) => {
     const normalizedTerm = normalizeEntityToken(term);
     if (!normalizedTerm || isKnowledgePronounMention(normalizedTerm)) return false;
@@ -1709,6 +1734,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const properEntries = narrativeSubjectDictionaryEntries(dictionaryEntries);
     const normalizedSentence = normalizeEntityToken(sentence);
     const actionIndex = narrativeActionCueIndex(sentence, eventType);
+    const mentionedParticipants = narrativeMentionedParticipants(sentence, dictionaryEntries);
+    const recentParticipants = recentNarrativeParticipants(previous, sentence, dictionaryEntries);
     const found = properEntries.find((term) => {
       const key = normalizeEntityToken(term);
       if (!key) return false;
@@ -1718,22 +1745,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return actionIndex < 0 || entityIndex <= actionIndex || entityIndex <= 8;
     });
     if (found) {
+      const previousSubject = previous.subject && !isKnowledgePronounMention(previous.subject) ? previous.subject : "";
+      const previousObjectCandidate = previousSubject ||
+        (previous.recentParticipants || []).find((item) => item && item !== found && !isKnowledgePronounMention(item)) ||
+        "";
+      const participants = unique([
+        found,
+        ...mentionedParticipants,
+        ...(previousObjectCandidate && previousObjectCandidate !== found && hasObjectOrIndirectPronounMention(sentence) ? [previousObjectCandidate] : []),
+      ].filter(Boolean));
       return {
         subject: found,
-        participants: [found],
-        subjectResolution: narrativeSubjectResolution({ subject: found, method: "explicit", confidence: 0.94, sentence, sourceMention: found, participants: [found] }),
+        participants,
+        subjectResolution: narrativeSubjectResolution({ subject: found, method: "explicit", confidence: 0.94, sentence, sourceMention: found, participants }),
       };
     }
     const firstToken = firstNarrativeToken(sentence);
     const previousSubject = previous.subject && !isKnowledgePronounMention(previous.subject) ? previous.subject : "";
-    const previousParticipants = unique((previous.participants || []).filter((item) => item && !isKnowledgePronounMention(item)));
+    const previousParticipants = unique(recentParticipants.filter((item) => item && !isKnowledgePronounMention(item)));
     const pluralMention = /^(?:trovarono|corsero|riempirono|immersero|presero|andarono|arrivarono|scesero|they|found|ran|filled|went|arrived|loro|essi|elles|ils|ellos|ellas)\b/.test(normalizedSentence);
     if (pluralMention) {
       if (previousParticipants.length > 1) {
         return {
           subject: previousParticipants.join(", "),
           participants: previousParticipants,
-          subjectResolution: narrativeSubjectResolution({ subject: previousParticipants.join(", "), method: "coreference", confidence: 0.78, sentence, sourceMention: firstToken || "they", participants: previousParticipants }),
+          subjectResolution: narrativeSubjectResolution({ subject: previousParticipants.join(", "), method: "context-window", confidence: 0.72, sentence, sourceMention: firstToken || "they", participants: previousParticipants }),
         };
       }
       return {
@@ -1882,6 +1918,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return knowledgeEventTypes.has(type) ? type : "";
   };
 
+  const knowledgeAiTextConfig = (value = "", fallback = "") => {
+    const text = String(value || "").replace(/\r\n/g, "\n").trim();
+    return text || fallback;
+  };
+
+  const knowledgeAiNumberConfig = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  };
+
   const normalizeKnowledgeEventObjects = (value = []) => {
     const source = Array.isArray(value) ? value : String(value || "").split(/[,;|]/);
     return unique(source
@@ -1938,6 +1984,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const allowedTypes = [...knowledgeEventTypes];
+    const systemPrompt = knowledgeAiTextConfig(
+      config.systemPrompt,
+      "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks."
+    );
+    const promptTemplate = knowledgeAiTextConfig(
+      config.promptTemplate,
+      "Use only provided chunks and dictionary terms. Return strict JSON with events, rejectedCandidates, exact evidence quotes, source-language labels, ordered event types and short explanations."
+    );
+    const outputInstructions = knowledgeAiTextConfig(
+      config.outputInstructions,
+      "Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, evidence.quote and explanation. Do not invent facts outside evidence."
+    );
     const promptFor = ({ mode: promptMode = "full" } = {}) => {
       const compact = promptMode === "compact";
       const micro = promptMode === "micro";
@@ -1956,7 +2014,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         rejectedCandidates: [],
       };
       return [
-        "Extract ordered narrative/semantic events from the provided chunks. Return strict JSON only.",
+        systemPrompt,
+        promptTemplate,
+        outputInstructions,
         "Use only facts explicitly supported by the text. Do not infer outside the quote.",
         "Every event MUST include evidence.quote copied verbatim from exactly one chunk.",
         "Split compound sentences into separate ordered events when they contain separate actions.",
@@ -1991,8 +2051,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       for (const promptMode of ["full", "compact", "micro"]) {
         const prompt = promptFor({ mode: promptMode });
         const body = providerType === "ollama"
-          ? { model, prompt, stream: false }
-          : { model, messages: [{ role: "user", content: prompt }], temperature: 0.05 };
+          ? {
+            model,
+            prompt,
+            stream: false,
+            options: {
+              temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+              top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+              num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1200)),
+            },
+          }
+          : {
+            model,
+            messages: [{ role: "user", content: prompt }],
+            temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+            max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1200)),
+            top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+          };
         const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         if (!response.ok) {
           const errorText = await chatErrorText(response);
@@ -2107,13 +2182,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
               },
               explanation: "",
             });
-            if (subject && !isKnowledgePronounMention(subject)) {
-              previousContext = {
-                subject,
-                participants: unique([subject, ...(subjectInfo.participants || []), ...spec.objects.filter((item) => isNarrativeParticipantMention(item, dictionaryEntries))]
-                  .filter((item) => item && !isKnowledgePronounMention(item))),
-              };
-            }
+            const mentionedParticipants = narrativeMentionedParticipants(sentence, dictionaryEntries);
+            const candidateParticipants = unique([
+              ...(subjectInfo.participants || []),
+              subject,
+              ...mentionedParticipants,
+              ...spec.objects.filter((item) => isNarrativeParticipantMention(item, dictionaryEntries)),
+            ].filter((item) => item && !isKnowledgePronounMention(item)));
+            previousContext = {
+              subject: subject && !isKnowledgePronounMention(subject) ? subject : previousContext.subject || "",
+              participants: candidateParticipants,
+              recentParticipants: unique([
+                ...candidateParticipants,
+                ...(previousContext.recentParticipants || []),
+                ...(previousContext.participants || []),
+              ].filter((item) => item && !isKnowledgePronounMention(item))).slice(0, 6),
+            };
           }
         }
       }
@@ -3733,8 +3817,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!provider) return { relations: [], provider: "", model: "", error: "provider-not-found" };
     const providerType = String(provider.provider || provider.providerType || config.providerType || config.provider || "").toLowerCase();
     const model = String(config.model || provider.model || (providerType === "ollama" ? "llama3.1" : "local-model")).trim();
+    const systemPrompt = knowledgeAiTextConfig(
+      config.systemPrompt,
+      "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence."
+    );
+    const promptTemplate = knowledgeAiTextConfig(
+      config.promptTemplate,
+      "Use only candidate evidence text. Prefer explicit semantic relations over generic links and reject unsupported pairs."
+    );
+    const outputInstructions = knowledgeAiTextConfig(
+      config.outputInstructions,
+      "Return strict JSON with relations containing candidateId, relationType, confidence and explanation."
+    );
     const prompt = [
-      "Extract semantic relation types from the candidate entity pairs.",
+      systemPrompt,
+      promptTemplate,
+      outputInstructions,
       `Allowed relation types: ${[...semanticRelationTypes].join(", ")}`,
       "Return strict JSON only: {\"relations\":[{\"candidateId\":\"...\",\"relationType\":\"helps\",\"confidence\":0.0,\"explanation\":\"short evidence reason\"}]}",
       "Use only the provided evidence text. Do not invent facts.",
@@ -3746,8 +3844,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ? `${endpoint}/api/generate`
         : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
       const body = providerType === "ollama"
-        ? { model, prompt, stream: false }
-        : { model, messages: [{ role: "user", content: prompt }], temperature: 0.1 };
+        ? {
+          model,
+          prompt,
+          stream: false,
+          options: {
+            temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
+            top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+            num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+          },
+        }
+        : {
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
+          max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+          top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+        };
       const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
       if (!response.ok) return { relations: [], provider: provider.id || providerType, model, error: `HTTP ${response.status}` };
       const data = await response.json();
@@ -3780,6 +3893,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const allowedRelationTypes = [...builderAllowedRelationTypes(config)];
     const maxEntities = Math.max(1, Math.min(120, Number(config.maxEntities || 40)));
     const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
+    const systemPrompt = knowledgeAiTextConfig(
+      config.systemPrompt,
+      "You are a Knowledge Graph Builder Agent. Build a verified knowledge graph from local document chunks with evidence-backed entities and relations."
+    );
+    const promptTemplate = knowledgeAiTextConfig(
+      config.promptTemplate,
+      "Use chunks, existing entities and relations as context. Prefer precise domain relations, preserve source-language labels and reject weak or absent evidence."
+    );
+    const outputInstructions = knowledgeAiTextConfig(
+      config.outputInstructions,
+      "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include an exact evidence quote."
+    );
     const promptFor = ({ mode = "full" } = {}) => {
       const compact = mode === "compact";
       const micro = mode === "micro";
@@ -3795,9 +3920,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         rejectedCandidates: [],
       };
       return [
-        micro
-          ? "Build a tiny verified knowledge graph. Return JSON only."
-          : "You are building a verified knowledge graph from local document chunks.",
+        micro ? "Build a tiny verified knowledge graph. Return JSON only." : systemPrompt,
+        promptTemplate,
+        outputInstructions,
         "Every accepted entity and relation must include evidence.quote copied verbatim from one provided chunk.",
         "Reject weak or absent evidence. Do not invent facts.",
         "Prefer high-signal semantic relations over generic mentions/contains. For stories, prefer friend_of, helps, reveals, protects, opposes, healed_by, asks_for, gives_to, receives_from when explicit evidence supports them.",
@@ -3828,8 +3953,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
         usedMode = mode;
         const prompt = promptFor({ mode });
         const body = providerType === "ollama"
-          ? { model, prompt, stream: false }
-          : { model, messages: [{ role: "user", content: prompt }], temperature: 0.05 };
+          ? {
+            model,
+            prompt,
+            stream: false,
+            options: {
+              temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+              top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+              num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
+            },
+          }
+          : {
+            model,
+            messages: [{ role: "user", content: prompt }],
+            temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+            max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
+            top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+          };
         response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         if (response.ok) {
           const data = await response.json();

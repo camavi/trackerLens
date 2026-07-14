@@ -2717,10 +2717,11 @@ const runKnowledgeSampleTest = async () => {
     icon: "scatter_plot",
     subtype: "embedding-generator",
     category: "knowledge",
-    settingsSchema: { providerProfile: "string", model: "string", dimensions: "number", outputChannel: "string" },
+    settingsSchema: { providerProfile: "string", providerType: "string", model: "string", dimensions: "number", outputChannel: "string" },
     paletteLabel: "Embedding Generator",
     config: {
       providerProfile: "local-hash",
+      providerType: "local",
       model: "tl-local-hash-v1",
       dimensions: 96,
       collectionId,

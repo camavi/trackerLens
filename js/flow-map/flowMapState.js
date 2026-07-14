@@ -65,16 +65,30 @@ const saveStoredPreviewClears = (workspaceId = "", clears = {}) => {
   }
 };
 
-const markPreviewNodeClean = (node = {}, { remount = false } = {}) => {
-  if (!node?.id) return;
-  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
-  state.previewClearedAt = {
-    ...loadStoredPreviewClears(workspaceId),
-    [node.id]: new Date().toISOString(),
-  };
-  saveStoredPreviewClears(workspaceId, state.previewClearedAt);
-  delete state.previewPayloads[node.id];
+const markPreviewNodesClean = (nodes = [], { remount = false } = {}) => {
+  const targets = [...new Map((Array.isArray(nodes) ? nodes : [nodes]).filter((node) => node?.id).map((node) => [node.id, node])).values()];
+  if (!targets.length) return;
+  const clearedAt = new Date().toISOString();
+  const byWorkspace = targets.reduce((acc, node) => {
+    const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+    if (!acc.has(workspaceId)) acc.set(workspaceId, []);
+    acc.get(workspaceId).push(node);
+    return acc;
+  }, new Map());
+  byWorkspace.forEach((workspaceNodes, workspaceId) => {
+    const stored = loadStoredPreviewClears(workspaceId);
+    workspaceNodes.forEach((node) => {
+      stored[node.id] = clearedAt;
+      state.previewClearedAt[node.id] = clearedAt;
+      delete state.previewPayloads[node.id];
+    });
+    saveStoredPreviewClears(workspaceId, stored);
+  });
   if (remount && typeof mount === "function") mount({ preserveScroll: true });
+};
+
+const markPreviewNodeClean = (node = {}, { remount = false } = {}) => {
+  markPreviewNodesClean([node], { remount });
 };
 
 const state = {

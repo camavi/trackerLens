@@ -4532,9 +4532,95 @@ const clearKnowledgeDocumentMemoryForNode = async (node = {}) => {
   };
 };
 
+const clearCascadeTargetsForNode = (node = {}) => {
+  if (!node?.id) return [];
+  if (typeof downstreamNodeTree === "function") {
+    const tree = downstreamNodeTree(node);
+    if (tree.nodes?.length) return tree.nodes;
+  }
+  return [node];
+};
+
+const invalidateClearUiStateForNodes = (nodes = []) => {
+  const targets = [...new Map((nodes || []).filter((node) => node?.id).map((node) => [node.id, node])).values()];
+  if (!targets.length) return;
+  markPreviewNodesClean(targets, { remount: false });
+  const ids = new Set(targets.map((node) => node.id));
+  [
+    "storageInspectorRecords",
+    "aiInspectorJobs",
+    "knowledgeInspectorGraph",
+    "knowledgeInspectorDocuments",
+    "knowledgeInspectorDictionaries",
+    "knowledgeInspectorEvents",
+  ].forEach((key) => {
+    state[key] = { ...(state[key] || {}) };
+    ids.forEach((id) => delete state[key][id]);
+  });
+};
+
+const clearKnowledgeCascadeForNode = async (rootNode = {}) => {
+  const targets = clearCascadeTargetsForNode(rootNode);
+  invalidateClearUiStateForNodes(targets);
+  const descendants = targets.filter((node) => node.id !== rootNode.id);
+  const cleared = [];
+  for (const child of descendants) {
+    let result = null;
+    let action = "";
+    if (isKnowledgeDocumentStoreNode(child)) {
+      action = "knowledge-document-clear-memory";
+      result = await clearKnowledgeDocumentMemoryForNode(child);
+    } else if (nodeCategory(child) === "knowledge" && nodeSubtype(child) === "knowledge-graph") {
+      action = "knowledge-graph-clear-index";
+      result = await clearKnowledgeGraphIndexForNode(child);
+    } else if (isKnowledgeDictionaryBuilderNode(child)) {
+      action = "knowledge-dictionary-clear";
+      result = await clearKnowledgeDictionaryForNode(child);
+    } else if (isKnowledgeEventBuilderNode(child)) {
+      action = "knowledge-events-clear";
+      result = await clearKnowledgeEventsForNode(child);
+    }
+    if (action) {
+      cleared.push({
+        nodeId: child.id,
+        label: child.label || child.id,
+        subtype: nodeSubtype(child),
+        action,
+        result: result || {},
+      });
+    }
+  }
+  return {
+    cascadeNodes: Math.max(0, targets.length - 1),
+    cascadeClears: cleared,
+    cascadeNodeIds: descendants.map((node) => node.id),
+  };
+};
+
+const emptyClearCascadeResult = () => ({
+  cascadeNodes: 0,
+  cascadeClears: [],
+  cascadeNodeIds: [],
+});
+
 const requestKnowledgeGraphClear = (node = {}) => {
   if (!node?.id) return;
   const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const cascadeTargets = clearCascadeTargetsForNode(node);
+  const childCount = Math.max(0, cascadeTargets.length - 1);
+  const performClear = async ({ close, cascade = false } = {}) => {
+    const result = await clearKnowledgeGraphIndexForNode(node);
+    const cascadeResult = cascade ? await clearKnowledgeCascadeForNode(node) : (invalidateClearUiStateForNodes([node]), emptyClearCascadeResult());
+    await recordFlowAction({
+      workspaceId,
+      nodeId: node.id,
+      message: `Knowledge graph index cleared: ${node.label || node.id}`,
+      context: { action: "knowledge-graph-clear-index", scope: cascade ? "node-and-children" : "node-only", ...(result || {}), ...cascadeResult },
+    });
+    close?.();
+    await loadKnowledgeInspectorGraph(node, { force: true });
+    mount({ preserveScroll: true });
+  };
   const dialog = _.Dialog({
     class: "tl-flow-edge-delete-dialog",
     panelClass: "tl-flow-edge-delete-panel",
@@ -4546,6 +4632,7 @@ const requestKnowledgeGraphClear = (node = {}) => {
     content: () => _.div(
       { class: "tl-flow-edge-delete-body" },
       _.p("Verranno rimossi entità, relazioni e snapshot del grafo per questo scope. Documenti, chunk, dictionary, eventi ed embedding restano intatti."),
+      childCount ? _.p(`Il Clear verra propagato anche a ${childCount} nodi figli collegati.`) : null,
       _.div(_.span("Scope"), _.strong(graphScope || "document")),
       _.div(_.span("Collection"), _.strong(collectionId || "all")),
       _.div(_.span("Document"), _.strong(graphScope === "document" ? documentId || "all" : "all"))
@@ -4553,21 +4640,13 @@ const requestKnowledgeGraphClear = (node = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
+      childCount ? btn({
+        onclick: () => performClear({ close, cascade: false }),
+      }, icon("delete_sweep", "sm"), "Solo Node") : null,
       btn({
         class: "is-danger",
-        onclick: async () => {
-          const result = await clearKnowledgeGraphIndexForNode(node);
-          await recordFlowAction({
-            workspaceId,
-            nodeId: node.id,
-            message: `Knowledge graph index cleared: ${node.label || node.id}`,
-            context: { action: "knowledge-graph-clear-index", ...(result || {}) },
-          });
-          close();
-          await loadKnowledgeInspectorGraph(node, { force: true });
-          mount({ preserveScroll: true });
-        },
-      }, icon("delete_sweep", "sm"), "Clear Graph")
+        onclick: () => performClear({ close, cascade: Boolean(childCount) }),
+      }, icon(childCount ? "account_tree" : "delete_sweep", "sm"), childCount ? "Node + figli" : "Clear Graph")
     ),
   });
   dialog.open();
@@ -4576,12 +4655,30 @@ const requestKnowledgeGraphClear = (node = {}) => {
 const requestKnowledgeStoreClear = (node = {}, options = {}) => {
   if (!node?.id) return;
   const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const cascadeTargets = clearCascadeTargetsForNode(node);
+  const childCount = Math.max(0, cascadeTargets.length - 1);
   const title = options.title || "Clear Knowledge store?";
   const actionLabel = options.actionLabel || "Clear";
   const action = options.action || "knowledge-store-clear";
   const message = options.message || `Knowledge store cleared: ${node.label || node.id}`;
   const clearFn = options.clearFn;
   if (typeof clearFn !== "function") return;
+  const performClear = async ({ close, cascade = false } = {}) => {
+    const result = await clearFn(node);
+    const cascadeResult = cascade ? await clearKnowledgeCascadeForNode(node) : (invalidateClearUiStateForNodes([node]), emptyClearCascadeResult());
+    await recordFlowAction({
+      workspaceId,
+      nodeId: node.id,
+      message,
+      context: { action, scope: cascade ? "node-and-children" : "node-only", ...(result || {}), ...cascadeResult },
+    });
+    close?.();
+    if (isKnowledgeDocumentStoreNode(node)) await loadKnowledgeInspectorDocument(node, { force: true });
+    if (isKnowledgeDictionaryBuilderNode(node)) await loadKnowledgeInspectorDictionary(node, { force: true });
+    if (isKnowledgeEventBuilderNode(node)) await loadKnowledgeInspectorEvents(node, { force: true });
+    if (nodeCategory(node) === "knowledge") await loadKnowledgeInspectorGraph(node, { force: true });
+    mount({ preserveScroll: true });
+  };
   const dialog = _.Dialog({
     class: "tl-flow-edge-delete-dialog",
     panelClass: "tl-flow-edge-delete-panel",
@@ -4593,6 +4690,7 @@ const requestKnowledgeStoreClear = (node = {}, options = {}) => {
     content: () => _.div(
       { class: "tl-flow-edge-delete-body" },
       _.p(options.description || "Verranno rimossi i record Knowledge derivati per questo scope."),
+      childCount ? _.p(`Il Clear verra propagato anche a ${childCount} nodi figli collegati.`) : null,
       _.div(_.span("Scope"), _.strong(graphScope || "workspace")),
       _.div(_.span("Collection"), _.strong(collectionId || "all")),
       _.div(_.span("Document"), _.strong(graphScope === "document" ? documentId || "all" : "all"))
@@ -4600,26 +4698,13 @@ const requestKnowledgeStoreClear = (node = {}, options = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
+      childCount ? btn({
+        onclick: () => performClear({ close, cascade: false }),
+      }, icon(options.icon || "delete_sweep", "sm"), "Solo Node") : null,
       btn({
         class: "is-danger",
-        onclick: async () => {
-          const result = await clearFn(node);
-          await recordFlowAction({
-            workspaceId,
-            nodeId: node.id,
-            message,
-            context: { action, ...(result || {}) },
-          });
-          state.previewPayloads = { ...state.previewPayloads, [node.id]: null };
-          state.previewClearedAt = { ...state.previewClearedAt, [node.id]: Date.now() };
-          close();
-          if (isKnowledgeDocumentStoreNode(node)) await loadKnowledgeInspectorDocument(node, { force: true });
-          if (isKnowledgeDictionaryBuilderNode(node)) await loadKnowledgeInspectorDictionary(node, { force: true });
-          if (isKnowledgeEventBuilderNode(node)) await loadKnowledgeInspectorEvents(node, { force: true });
-          if (nodeCategory(node) === "knowledge") await loadKnowledgeInspectorGraph(node, { force: true });
-          mount({ preserveScroll: true });
-        },
-      }, icon(options.icon || "delete_sweep", "sm"), actionLabel)
+        onclick: () => performClear({ close, cascade: Boolean(childCount) }),
+      }, icon(childCount ? "account_tree" : options.icon || "delete_sweep", "sm"), childCount ? "Node + figli" : actionLabel)
     ),
   });
   dialog.open();
