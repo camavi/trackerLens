@@ -1,5 +1,6 @@
 window.TrackerLensKnowledgeRuntime = (() => {
   const instances = new Map();
+  const tokenUsageTotals = new Map();
   const graphAutoClearRuns = new Set();
   const DB_NAME = window.tlConfig?.DB_NAME || "TrackersLens";
 
@@ -1220,8 +1221,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
           : [];
     const now = nowIso();
     const records = [];
+    const embeddingUsage = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
     for (const chunk of chunks.filter(Boolean)) {
       const embedding = await resolveEmbeddingVector({ text: chunk.text || "", config });
+      if (embedding.generatedBy === "ai-provider") {
+        const promptTokens = estimateKnowledgeAiTokens(chunk.text || "");
+        embeddingUsage.promptTokens += promptTokens;
+        embeddingUsage.totalTokens += promptTokens;
+      }
       const record = {
         id: `kembed_${safeId(chunk.id)}_${safeId(embedding.model)}`,
         workspaceId,
@@ -1245,6 +1256,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
         createdAt: now,
       };
       records.push(await putRecord(STORES.embeddings, record));
+    }
+    if (embeddingUsage.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({
+        node,
+        usage: embeddingUsage,
+        provider: records[0]?.provider || config.providerProfile || config.provider || "",
+        model: records[0]?.model || config.model || "",
+      });
     }
     return {
       embeddings: records,
@@ -1928,6 +1947,65 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return Number.isFinite(number) ? number : fallback;
   };
 
+  const estimateKnowledgeAiTokens = (value = "") =>
+    Math.max(0, Math.ceil(String(value || "").length / 4));
+
+  const knowledgeAiUsageFromResponse = ({ data = {}, prompt = "", text = "" } = {}) => {
+    const promptTokens = Number(data.usage?.prompt_tokens || data.prompt_eval_count || 0) || estimateKnowledgeAiTokens(prompt);
+    const completionTokens = Number(data.usage?.completion_tokens || data.eval_count || 0) || estimateKnowledgeAiTokens(text);
+    const totalTokens = Number(data.usage?.total_tokens || 0) || promptTokens + completionTokens;
+    return { promptTokens, completionTokens, totalTokens };
+  };
+
+  const addKnowledgeAiUsage = (total = {}, usage = {}) => ({
+    promptTokens: Number(total.promptTokens || 0) + Number(usage.promptTokens || usage.prompt_tokens || 0),
+    completionTokens: Number(total.completionTokens || 0) + Number(usage.completionTokens || usage.completion_tokens || 0),
+    totalTokens: Number(total.totalTokens || 0) + Number(usage.totalTokens || usage.total_tokens || 0),
+  });
+
+  const persistKnowledgeNodeTokenUsage = async ({ node, usage = {}, provider = "", model = "" } = {}) => {
+    const totalTokens = Number(usage.totalTokens || usage.total_tokens || 0);
+    if (!node?.id || !totalTokens) return;
+    const previous = node.metadata?.tokenUsage || {};
+    const previousTotal = tokenUsageTotals.has(node.id)
+      ? Number(tokenUsageTotals.get(node.id) || 0)
+      : Number(previous.totalTokens || 0);
+    const nextUsage = {
+      totalTokens: previousTotal + totalTokens,
+      totalPromptTokens: Number(previous.totalPromptTokens || 0) + Number(usage.promptTokens || usage.prompt_tokens || 0),
+      totalCompletionTokens: Number(previous.totalCompletionTokens || 0) + Number(usage.completionTokens || usage.completion_tokens || 0),
+      lastTokens: totalTokens,
+      lastPromptTokens: Number(usage.promptTokens || usage.prompt_tokens || 0),
+      lastCompletionTokens: Number(usage.completionTokens || usage.completion_tokens || 0),
+      provider: provider || previous.provider || "",
+      model: model || previous.model || "",
+      updatedAt: nowIso(),
+    };
+    tokenUsageTotals.set(node.id, nextUsage.totalTokens);
+    const nextNode = {
+      ...node,
+      metadata: {
+        ...(node.metadata || {}),
+        tokenUsage: nextUsage,
+        config: {
+          ...(node.metadata?.config || {}),
+          tokenUsage: nextUsage.totalTokens,
+          lastTokens: nextUsage.lastTokens,
+        },
+      },
+      updatedAt: nowIso(),
+    };
+    try {
+      await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+      const instance = instances.get(nextNode.workspaceId || node.workspaceId || "workspace_global");
+      if (instance?.runtime?.nodes) {
+        instance.runtime.nodes = (instance.runtime.nodes || []).map((item) => item.id === nextNode.id ? nextNode : item);
+      }
+    } catch (error) {
+      console.warn("Knowledge token usage non persistito", error);
+    }
+  };
+
   const normalizeKnowledgeEventObjects = (value = []) => {
     const source = Array.isArray(value) ? value : String(value || "").split(/[,;|]/);
     return unique(source
@@ -2048,6 +2126,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ? `${endpoint}/api/generate`
         : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
       let lastError = "";
+      let totalUsage = {};
       for (const promptMode of ["full", "compact", "micro"]) {
         const prompt = promptFor({ mode: promptMode });
         const body = providerType === "ollama"
@@ -2078,6 +2157,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         const data = await response.json();
         const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+        const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
+        totalUsage = addKnowledgeAiUsage(totalUsage, usage);
         const proposal = parseAiJsonObject(text);
         if (Array.isArray(proposal?.events)) {
           return {
@@ -2085,15 +2166,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
             rejectedCandidates: Array.isArray(proposal.rejectedCandidates) ? proposal.rejectedCandidates : [],
             provider: provider.id || providerType || "provider",
             model: data.model || model,
+            usage: totalUsage,
             error: "",
             promptMode,
           };
         }
         lastError = "invalid-ai-json";
       }
-      return { events: [], rejectedCandidates: [], provider: provider.id || providerType || "provider", model, error: lastError || "empty-ai-events", promptMode: "" };
+      return { events: [], rejectedCandidates: [], provider: provider.id || providerType || "provider", model, usage: totalUsage, error: lastError || "empty-ai-events", promptMode: "" };
     } catch (error) {
-      return { events: [], rejectedCandidates: [], provider: provider.id || providerType || "provider", model, error: error?.message || "ai-error", promptMode: "" };
+      return { events: [], rejectedCandidates: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "" };
     }
   };
 
@@ -2205,6 +2287,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const aiResult = wantsAi
       ? await callKnowledgeEventAi({ chunks: scopedChunks, dictionaryEntries, config })
       : { events: [], rejectedCandidates: [], provider: "", model: "", error: "", promptMode: "" };
+    if (wantsAi && aiResult.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
+    }
     const rejectedCandidates = Array.isArray(aiResult.rejectedCandidates) ? [...aiResult.rejectedCandidates] : [];
     const aiCandidates = [];
     if (wantsAi) {
@@ -3865,14 +3950,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (!response.ok) return { relations: [], provider: provider.id || providerType, model, error: `HTTP ${response.status}` };
       const data = await response.json();
       const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+      const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
       return {
         relations: parseSemanticAiRelations(text),
         provider: provider.id || providerType || "provider",
         model: data.model || model,
+        usage,
         error: "",
       };
     } catch (error) {
-      return { relations: [], provider: provider.id || providerType || "provider", model, error: error?.message || "ai-error" };
+      return { relations: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error" };
     }
   };
 
@@ -3949,6 +4036,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let lastError = "";
       let usedMode = attemptModes[0];
       let proposal = null;
+      let totalUsage = {};
       for (const mode of attemptModes) {
         usedMode = mode;
         const prompt = promptFor({ mode });
@@ -3974,6 +4062,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (response.ok) {
           const data = await response.json();
           const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+          const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
+          totalUsage = addKnowledgeAiUsage(totalUsage, usage);
           proposal = parseAiJsonObject(text);
           const hasPayload = Array.isArray(proposal?.entities) || Array.isArray(proposal?.relations);
           const hasSignal = (proposal?.entities || []).length || (proposal?.relations || []).length || (proposal?.rejectedCandidates || []).length;
@@ -3982,6 +4072,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               proposal,
               provider: provider.id || providerType || "provider",
               model: data.model || model,
+              usage: totalUsage,
               promptMode: usedMode,
               error: "",
             };
@@ -3995,11 +4086,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (!canShrink) break;
       }
       if (!response?.ok) {
-        return { proposal: null, provider: provider.id || providerType, model, error: lastError || "ai-error" };
+        return { proposal: null, provider: provider.id || providerType, model, usage: totalUsage, error: lastError || "ai-error" };
       }
-      return { proposal, provider: provider.id || providerType || "provider", model, promptMode: usedMode, error: lastError || "empty-ai-proposal" };
+      return { proposal, provider: provider.id || providerType || "provider", model, usage: totalUsage, promptMode: usedMode, error: lastError || "empty-ai-proposal" };
     } catch (error) {
-      return { proposal: null, provider: provider.id || providerType || "provider", model, error: error?.message || "ai-error" };
+      return { proposal: null, provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error" };
     }
   };
 
@@ -4433,6 +4524,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
       .filter((relation) => !selectedDocumentId || relation.documentId === selectedDocumentId);
     const aiResult = await callGraphBuilderAi({ chunks: selectedChunks, entities: workspaceEntities, relations: workspaceRelations, config });
+    if (aiResult.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
+    }
     const proposal = aiResult.proposal && typeof aiResult.proposal === "object" ? aiResult.proposal : {};
     const normalizedProposal = normalizeGraphBuilderProposal({ proposal, selectedChunks, config });
     const proposalEntities = normalizedProposal.entities;
@@ -4709,6 +4803,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         evidence: candidate.text,
       }));
     const aiResult = await callSemanticAi({ candidates: aiInput, config });
+    if (aiResult.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
+    }
     const aiByCandidateId = new Map((aiResult.relations || [])
       .filter((item) => semanticRelationTypes.has(String(item.relationType || "").toLowerCase()))
       .filter((item) => semanticRelationAllowed(item.relationType, config))
@@ -5700,6 +5797,35 @@ window.TrackerLensKnowledgeRuntime = (() => {
       } catch (error) {
         console.warn("Knowledge runtime log non persistito", error);
       }
+    }
+
+    clearTokenUsageForNodes(ids = []) {
+      const targets = new Set((ids || []).filter(Boolean).map(String));
+      if (!targets.size) return;
+      targets.forEach((id) => tokenUsageTotals.set(id, 0));
+      this.runtime.nodes = (this.runtime.nodes || []).map((node) => {
+        if (!targets.has(node.id)) return node;
+        return {
+          ...node,
+          metadata: {
+            ...(node.metadata || {}),
+            tokenUsage: {
+              totalTokens: 0,
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              lastTokens: 0,
+              lastPromptTokens: 0,
+              lastCompletionTokens: 0,
+              clearedAt: nowIso(),
+            },
+            config: {
+              ...(node.metadata?.config || {}),
+              tokenUsage: 0,
+              lastTokens: 0,
+            },
+          },
+        };
+      });
     }
 
     start({ runtime = {}, workspaceId = this.workspaceId } = {}) {

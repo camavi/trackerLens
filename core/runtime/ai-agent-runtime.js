@@ -645,13 +645,10 @@ window.TrackerLensAiAgentRuntime = (() => {
     });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
     const data = await response.json();
+    const text = data.response || "";
     return {
-      text: data.response || "",
-      usage: {
-        promptTokens: data.prompt_eval_count || 0,
-        completionTokens: data.eval_count || 0,
-        totalTokens: Number(data.prompt_eval_count || 0) + Number(data.eval_count || 0),
-      },
+      text,
+      usage: usageFromAiResponse({ data, prompt, text }),
       raw: data,
     };
   };
@@ -699,13 +696,10 @@ window.TrackerLensAiAgentRuntime = (() => {
       throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
     }
     const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || "";
     return {
-      text: data.choices?.[0]?.message?.content || "",
-      usage: {
-        promptTokens: data.usage?.prompt_tokens || 0,
-        completionTokens: data.usage?.completion_tokens || 0,
-        totalTokens: data.usage?.total_tokens || 0,
-      },
+      text,
+      usage: usageFromAiResponse({ data, prompt, text }),
       model: resolvedModel,
       raw: data,
     };
@@ -744,6 +738,16 @@ window.TrackerLensAiAgentRuntime = (() => {
     return { text: clean };
   };
 
+  const estimateAiTokens = (value = "") =>
+    Math.max(0, Math.ceil(String(value || "").length / 4));
+
+  const usageFromAiResponse = ({ data = {}, prompt = "", text = "" } = {}) => {
+    const promptTokens = Number(data.usage?.prompt_tokens || data.prompt_eval_count || 0) || estimateAiTokens(prompt);
+    const completionTokens = Number(data.usage?.completion_tokens || data.eval_count || 0) || estimateAiTokens(text);
+    const totalTokens = Number(data.usage?.total_tokens || 0) || promptTokens + completionTokens;
+    return { promptTokens, completionTokens, totalTokens };
+  };
+
   const estimateCost = ({ usage = {}, provider = {}, config = {} } = {}) => {
     const inputRate = Number(config.inputCostPer1k || provider.inputCostPer1k || provider.promptCostPer1k || 0);
     const outputRate = Number(config.outputCostPer1k || provider.outputCostPer1k || provider.completionCostPer1k || 0);
@@ -755,6 +759,17 @@ window.TrackerLensAiAgentRuntime = (() => {
       inputCostPer1k: inputRate,
       outputCostPer1k: outputRate,
       estimated: Math.round(total * 1000000) / 1000000,
+    };
+  };
+
+  const normalizeTokenUsage = (usage = {}) => {
+    const promptTokens = Number(usage.promptTokens || usage.prompt_tokens || 0);
+    const completionTokens = Number(usage.completionTokens || usage.completion_tokens || 0);
+    const totalTokens = Number(usage.totalTokens || usage.total_tokens || promptTokens + completionTokens || 0);
+    return {
+      promptTokens: Number.isFinite(promptTokens) ? promptTokens : 0,
+      completionTokens: Number.isFinite(completionTokens) ? completionTokens : 0,
+      totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
     };
   };
 
@@ -801,6 +816,71 @@ window.TrackerLensAiAgentRuntime = (() => {
       } catch (error) {
         console.warn("AI agent runtime log non persistito", error);
       }
+    }
+
+    async recordTokenUsage({ node, usage = {}, provider = "", model = "" } = {}) {
+      const normalized = normalizeTokenUsage(usage);
+      if (!node?.id || !normalized.totalTokens) return;
+      const current = (this.runtime.nodes || []).find((item) => item.id === node.id) || node;
+      const previous = current.metadata?.tokenUsage || {};
+      const nextUsage = {
+        totalTokens: Number(previous.totalTokens || 0) + normalized.totalTokens,
+        totalPromptTokens: Number(previous.totalPromptTokens || 0) + normalized.promptTokens,
+        totalCompletionTokens: Number(previous.totalCompletionTokens || 0) + normalized.completionTokens,
+        lastTokens: normalized.totalTokens,
+        lastPromptTokens: normalized.promptTokens,
+        lastCompletionTokens: normalized.completionTokens,
+        provider: provider || previous.provider || "",
+        model: model || previous.model || "",
+        updatedAt: new Date().toISOString(),
+      };
+      const nextNode = {
+        ...current,
+        metadata: {
+          ...(current.metadata || {}),
+          tokenUsage: nextUsage,
+          config: {
+            ...(current.metadata?.config || {}),
+            tokenUsage: nextUsage.totalTokens,
+            lastTokens: nextUsage.lastTokens,
+          },
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      this.runtime.nodes = (this.runtime.nodes || []).map((item) => item.id === nextNode.id ? nextNode : item);
+      try {
+        await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+      } catch (error) {
+        console.warn("AI token usage non persistito", error);
+      }
+    }
+
+    clearTokenUsageForNodes(ids = []) {
+      const targets = new Set((ids || []).filter(Boolean).map(String));
+      if (!targets.size) return;
+      this.runtime.nodes = (this.runtime.nodes || []).map((node) => {
+        if (!targets.has(node.id)) return node;
+        return {
+          ...node,
+          metadata: {
+            ...(node.metadata || {}),
+            tokenUsage: {
+              totalTokens: 0,
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              lastTokens: 0,
+              lastPromptTokens: 0,
+              lastCompletionTokens: 0,
+              clearedAt: new Date().toISOString(),
+            },
+            config: {
+              ...(node.metadata?.config || {}),
+              tokenUsage: 0,
+              lastTokens: 0,
+            },
+          },
+        };
+      });
     }
 
     buildSignature(runtime = {}) {
@@ -982,6 +1062,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           result,
           updatedAt: new Date().toISOString(),
         });
+        await this.recordTokenUsage({ node, usage: result.usage, provider: result.provider, model: result.model });
         return result;
       } catch (error) {
         const latencyMs = Math.round(performance.now() - startedAt);

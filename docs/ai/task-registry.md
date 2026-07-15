@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-02.
+Last updated: 2026-07-15.
 
 ## Active
 
@@ -108,6 +108,7 @@ Current sub-steps:
 - Step 15 Knowledge normalization foundation under `knowledge-normalization-1`: event records and AI graph context now include generic semantic-normalization fields (`roles`, `subjectResolution`, `polarity`, `modality`, `aspect`) so downstream graph/query/AI layers can distinguish completed facts, attempts, modal claims, unresolved pronouns and actual actor/object roles without adding story-specific rules. Follow-up testing removed Italian article `il` from pronoun coreference, preserved shared liquid/container context as `roles.destination` for immersion events, and tightened graph-answer prompts so how/why answers must use concrete ordered event chains instead of collapsing into broad summary relations, relocating containers/tools/places during paraphrase or appending later aftermath/context when the user asked for the mechanism.
 - Step 15 Knowledge reasoning foundation under `reasoning-composer-1`: added `Knowledge Reasoning Composer` as the first answer-grounding node between Graph Query and AI Agent. It builds an evidence-backed `reasoningPlan` with intent, required facts, event chain, supporting relations and excluded context, emits `knowledge.reasoning.plan`, forwards enriched `knowledge.graph.context`, and AI Agent now recognizes both Composer outputs as graph/reasoning context and prioritizes the plan over raw graph context. Mechanism intent now selects a compact process/outcome event window, suppresses competing raw graph prompt sections when a plan exists and trims clean preview graph arrays. The Composer also exposes focused `primaryEvidenceText`, so AI Agent can answer from selected original evidence first while using graph facts only as navigation/verification. User validation confirmed this grounding path produces the expected mechanism answer from the focused source scene.
 - Step 15 Subject resolution follow-up under `subject-resolution-v2`: Event Builder now maintains a bounded narrative participant memory from dictionary-backed proper nouns/roles, resolves plural/implicit action subjects from that memory only when multiple recent participants are available, and carries previous participants through reliable object/indirect pronoun evidence. This is generic context-window coreference and intentionally leaves subjects unresolved when the evidence is weak.
+- Flow Map AI/LLM node observability: AI Agent, Orchestrator Agent and Knowledge AI nodes now persist per-node token usage, show total/last token counts on canvas cards, and provide a clear-token dialog for node-only or node-plus-children cleanup.
 - Italian graph quality filters now reject weak Italian sentence-start tokens, pronouns and numeric-only entity labels before graph persistence.
 - Italian graph quality filters now also reject common capitalized narrative/speech verbs that were entering the graph as false proper nouns.
 - Italian graph quality now classifies common biblical/abstract labels as `concept` and object labels such as `Arca`/`Croce` as `object`.

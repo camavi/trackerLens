@@ -966,6 +966,103 @@ const renderNodeRuntimeBanner = (node = {}, live = null) => {
   );
 };
 
+const tokenUsageForNode = (node = {}) => {
+  const usage = node.metadata?.tokenUsage || {};
+  const config = node.metadata?.config || {};
+  return {
+    totalTokens: Number(usage.totalTokens || config.tokenUsage || 0),
+    totalPromptTokens: Number(usage.totalPromptTokens || 0),
+    totalCompletionTokens: Number(usage.totalCompletionTokens || 0),
+    lastTokens: Number(usage.lastTokens || config.lastTokens || 0),
+    lastPromptTokens: Number(usage.lastPromptTokens || 0),
+    lastCompletionTokens: Number(usage.lastCompletionTokens || 0),
+    provider: usage.provider || config.providerProfile || config.provider || "",
+    model: usage.model || config.model || "",
+    updatedAt: usage.updatedAt || "",
+  };
+};
+
+const nodeHasTokenAccounting = (node = {}) => {
+  const subtype = nodeSubtype(node);
+  if (node.type === "aiAgent" || nodeCategory(node) === "ai-agents") return true;
+  return nodeCategory(node) === "knowledge" && [
+    "knowledge-event-builder",
+    "semantic-relation-enricher",
+    "knowledge-graph-builder-agent",
+    "embedding-generator",
+    "vector-memory",
+  ].includes(subtype);
+};
+
+const formatTokenCount = (value = 0) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return "0";
+  if (number >= 1000000) return `${(number / 1000000).toFixed(number >= 10000000 ? 0 : 1)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}k`;
+  return String(Math.round(number));
+};
+
+const renderNodeTokenMetrics = (node = {}) => {
+  if (!nodeHasTokenAccounting(node)) return null;
+  const usage = tokenUsageForNode(node);
+  const detail = [
+    `Total token: ${usage.totalTokens || 0}`,
+    `Last token: ${usage.lastTokens || 0}`,
+    usage.lastPromptTokens || usage.lastCompletionTokens ? `Prompt/completion: ${usage.lastPromptTokens || 0}/${usage.lastCompletionTokens || 0}` : "",
+    usage.provider || usage.model ? `Provider: ${[usage.provider, usage.model].filter(Boolean).join(" · ")}` : "",
+    usage.updatedAt ? `Updated: ${formatShortDate(usage.updatedAt)}` : "",
+  ].filter(Boolean).join("\n");
+  return _.span(
+    { class: "tl-flow-node-token-metrics", title: detail || "Token usage" },
+    _.span({ class: "tl-flow-node-token-label" }, "total token:"),
+    btn({
+      class: "tl-flow-token-value-btn",
+      title: "Show total token details",
+      onPointerDown: stopNodeControlEvent,
+      onclick: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestTokenUsageDetails(node, "total");
+      },
+    }, formatTokenCount(usage.totalTokens)),
+    _.span({ class: "tl-flow-node-token-label" }, "last token:"),
+    btn({
+      class: "tl-flow-token-value-btn",
+      title: "Show last token details",
+      onPointerDown: stopNodeControlEvent,
+      onclick: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestTokenUsageDetails(node, "last");
+      },
+    }, formatTokenCount(usage.lastTokens)),
+    btn({
+      class: "tl-flow-token-clear-btn",
+      "aria-label": "Clear token usage",
+      title: "Clear token usage",
+      onPointerDown: stopNodeControlEvent,
+      onclick: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestTokenUsageClear(node);
+      },
+    }, icon("cleaning_services", "sm"))
+  );
+};
+
+const renderNodeMetrics = (node = {}, ...labels) => {
+  const metrics = labels.flat().filter((label) => label !== null && label !== undefined && label !== "");
+  return _.span(
+    { class: "tl-flow-node-metrics" },
+    ...metrics.map((label) => _.em(String(label)))
+  );
+};
+
+const renderNodeMetricRows = (node = {}, ...labels) => [
+  renderNodeMetrics(node, ...labels),
+  renderNodeTokenMetrics(node),
+].filter(Boolean);
+
 const replaceRenderedNode = (selector, nextNode, { preserveScroll = false } = {}) => {
   const current = document.querySelector(selector);
   if (!current || !nextNode) return false;
@@ -1205,12 +1302,7 @@ const renderFlowPortNodeBody = (node, view) => {
         icon("edit", "sm")
       ))
     ),
-    _.span(
-      { class: "tl-flow-node-metrics" },
-      _.em(`${ports.length} porte`),
-      _.em(view.runtime.status),
-      _.em(isInputGateway ? "entry" : "exit")
-    )
+    ...renderNodeMetricRows(node, `${ports.length} porte`, view.runtime.status, isInputGateway ? "entry" : "exit")
   );
 };
 
@@ -1319,12 +1411,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       ),
       ...knowledgeUploadProgressNodes(node),
       renderInlineNodeSettings(node),
-      _.span(
-        { class: "tl-flow-node-metrics" },
-        _.em(`${view.runtime.eventsPerMin}/min`),
-        _.em(`${view.runtime.latency || 0}ms`),
-        _.em(`${view.metrics.listeners || 0} listeners`)
-      ),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
   if (nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-graph") {
@@ -1352,12 +1439,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
         },
       }, icon("delete_sweep", "sm"), "Clear Graph"),
       renderInlineNodeSettings(node),
-      _.span(
-        { class: "tl-flow-node-metrics" },
-        _.em(`${view.runtime.eventsPerMin}/min`),
-        _.em(`${view.runtime.latency || 0}ms`),
-        _.em(`${view.metrics.listeners || 0} listeners`)
-      ),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
   if (nodeCategory(node) === "knowledge" && nodeSubtype(node) === "graph-query") {
@@ -1366,12 +1448,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.p(view.description),
       renderKnowledgeGraphQueryScope(node),
       renderInlineNodeSettings(node),
-      _.span(
-        { class: "tl-flow-node-metrics" },
-        _.em(`${view.runtime.eventsPerMin}/min`),
-        _.em(`${view.runtime.latency || 0}ms`),
-        _.em(`${view.metrics.listeners || 0} listeners`)
-      ),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
   if (isKnowledgeDictionaryBuilderNode(node)) {
@@ -1389,12 +1466,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
         },
       }, icon("delete_sweep", "sm"), "Clear Dictionary"),
       renderInlineNodeSettings(node),
-      _.span(
-        { class: "tl-flow-node-metrics" },
-        _.em(`${view.runtime.eventsPerMin}/min`),
-        _.em(`${view.runtime.latency || 0}ms`),
-        _.em(`${view.metrics.listeners || 0} listeners`)
-      ),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
   if (isKnowledgeEventBuilderNode(node)) {
@@ -1412,24 +1484,14 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
         },
       }, icon("delete_sweep", "sm"), "Clear Events"),
       renderInlineNodeSettings(node),
-      _.span(
-        { class: "tl-flow-node-metrics" },
-        _.em(`${view.runtime.eventsPerMin}/min`),
-        _.em(`${view.runtime.latency || 0}ms`),
-        _.em(`${view.metrics.listeners || 0} listeners`)
-      ),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
   return [
     _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
     _.p(view.description),
     renderInlineNodeSettings(node),
-    _.span(
-      { class: "tl-flow-node-metrics" },
-      _.em(`${view.runtime.eventsPerMin}/min`),
-      _.em(`${view.runtime.latency || 0}ms`),
-      _.em(`${view.metrics.listeners || 0} listeners`)
-    ),
+    ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
   ];
 };
 
@@ -4539,6 +4601,142 @@ const clearCascadeTargetsForNode = (node = {}) => {
     if (tree.nodes?.length) return tree.nodes;
   }
   return [node];
+};
+
+const clearTokenUsageForNodes = async (nodes = []) => {
+  const targets = [...new Map((nodes || []).filter((node) => node?.id).map((node) => [node.id, node])).values()];
+  if (!targets.length) return [];
+  const clearedAt = new Date().toISOString();
+  const clearedNodes = targets.map((node) => ({
+    ...node,
+    metadata: {
+      ...(node.metadata || {}),
+      tokenUsage: {
+        totalTokens: 0,
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        lastTokens: 0,
+        lastPromptTokens: 0,
+        lastCompletionTokens: 0,
+        provider: node.metadata?.tokenUsage?.provider || "",
+        model: node.metadata?.tokenUsage?.model || node.metadata?.config?.model || "",
+        clearedAt,
+        updatedAt: clearedAt,
+      },
+      config: {
+        ...(node.metadata?.config || {}),
+        tokenUsage: 0,
+        lastTokens: 0,
+      },
+    },
+    updatedAt: clearedAt,
+  }));
+  await Promise.all(clearedNodes.map((node) => window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node })));
+  const byId = new Map(clearedNodes.map((node) => [node.id, node]));
+  setRuntimeState({
+    ...state.runtime,
+    nodes: (state.runtime.nodes || []).map((node) => byId.get(node.id) || node),
+  });
+  const ids = clearedNodes.map((node) => node.id);
+  const workspaceId = state.filters.workspaceId || clearedNodes[0]?.workspaceId || "workspace_global";
+  window.TrackerLensAiAgentRuntime?.get?.(workspaceId)?.clearTokenUsageForNodes?.(ids);
+  window.TrackerLensOrchestratorAgentRuntime?.get?.(workspaceId)?.clearTokenUsageForNodes?.(ids);
+  window.TrackerLensKnowledgeRuntime?.get?.(workspaceId)?.clearTokenUsageForNodes?.(ids);
+  return clearedNodes;
+};
+
+const requestTokenUsageDetails = (node = {}, scope = "total") => {
+  if (!node?.id) return;
+  const usage = tokenUsageForNode(node);
+  const totalInput = usage.totalPromptTokens || 0;
+  const totalOutput = usage.totalCompletionTokens || 0;
+  const knownTotal = totalInput + totalOutput;
+  const unclassifiedTotal = Math.max(0, Number(usage.totalTokens || 0) - knownTotal);
+  const rows = scope === "last"
+    ? [
+      ["Input token", usage.lastPromptTokens || 0],
+      ["Output token", usage.lastCompletionTokens || 0],
+      ["Last run token", usage.lastTokens || 0],
+    ]
+    : [
+      ["Input token since clear", totalInput],
+      ["Output token since clear", totalOutput],
+      unclassifiedTotal ? ["Old/unclassified token", unclassifiedTotal] : null,
+      ["Total token since clear", usage.totalTokens || 0],
+      ["Last run token", usage.lastTokens || 0],
+    ].filter(Boolean);
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title: scope === "last" ? "Last token usage" : "Total token usage",
+    subtitle: node.label || node.id,
+    icon: "generating_tokens",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      ...rows.map(([label, value]) => _.div(_.span(label), _.strong(String(value || 0)))),
+      _.div(_.span("Provider"), _.strong(usage.provider || "unknown")),
+      _.div(_.span("Model"), _.strong(usage.model || "unknown")),
+      usage.updatedAt ? _.div(_.span("Updated"), _.strong(formatShortDate(usage.updatedAt))) : null
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const requestTokenUsageClear = (node = {}) => {
+  if (!node?.id) return;
+  const cascadeTargets = clearCascadeTargetsForNode(node).filter(nodeHasTokenAccounting);
+  const childCount = Math.max(0, cascadeTargets.filter((target) => target.id !== node.id).length);
+  const performClear = async ({ close, cascade = false } = {}) => {
+    const targets = cascade ? cascadeTargets : [node];
+    const cleared = await clearTokenUsageForNodes(targets);
+    await recordFlowAction({
+      workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+      nodeId: node.id,
+      message: `Token usage cleared: ${node.label || node.id}`,
+      context: {
+        action: "runtime-node-token-usage-clear",
+        scope: cascade ? "node-and-children" : "node-only",
+        clearedNodeIds: cleared.map((target) => target.id),
+      },
+    });
+    close?.();
+    mount({ preserveScroll: true });
+  };
+  const usage = tokenUsageForNode(node);
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "md",
+    title: "Clear token usage?",
+    subtitle: node.label || node.id,
+    icon: "cleaning_services",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-edge-delete-body" },
+      _.p("Scegli se pulire solo la contabilita token di questo nodo o anche quella dei figli collegati."),
+      _.div(_.span("Total token"), _.strong(String(usage.totalTokens || 0))),
+      _.div(_.span("Last token"), _.strong(String(usage.lastTokens || 0))),
+      _.div(_.span("Children"), _.strong(String(childCount)))
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      childCount ? btn({
+        onclick: () => performClear({ close, cascade: false }),
+      }, icon("cleaning_services", "sm"), "Solo Node") : null,
+      btn({
+        class: "is-danger",
+        onclick: () => performClear({ close, cascade: Boolean(childCount) }),
+      }, icon(childCount ? "account_tree" : "cleaning_services", "sm"), childCount ? "Node + figli" : "Clear Token")
+    ),
+  });
+  dialog.open();
 };
 
 const invalidateClearUiStateForNodes = (nodes = []) => {

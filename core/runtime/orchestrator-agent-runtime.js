@@ -321,6 +321,16 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     }
   };
 
+  const estimateAiTokens = (value = "") =>
+    Math.max(0, Math.ceil(String(value || "").length / 4));
+
+  const usageFromAiResponse = ({ data = {}, prompt = "", text = "" } = {}) => {
+    const promptTokens = Number(data.usage?.prompt_tokens || data.prompt_eval_count || 0) || estimateAiTokens(prompt);
+    const completionTokens = Number(data.usage?.completion_tokens || data.eval_count || 0) || estimateAiTokens(text);
+    const totalTokens = Number(data.usage?.total_tokens || 0) || promptTokens + completionTokens;
+    return { promptTokens, completionTokens, totalTokens };
+  };
+
   const callLmStudio = async ({ provider = {}, model = "", prompt = "", config = {} } = {}) => {
     const endpoint = withLmStudioApiBase(provider.endpoint);
     const resolvedModel = await resolveLmStudioModel({ provider, model });
@@ -339,7 +349,8 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
     }
     const data = await response.json();
-    return { text: data.choices?.[0]?.message?.content || "", model: resolvedModel, raw: data };
+    const text = data.choices?.[0]?.message?.content || "";
+    return { text, model: resolvedModel, usage: usageFromAiResponse({ data, prompt, text }), raw: data };
   };
 
   const callOllama = async ({ provider = {}, model = "", prompt = "" } = {}) => {
@@ -351,7 +362,8 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
     const data = await response.json();
-    return { text: data.response || "", model: model || provider.model || "local-model", raw: data };
+    const text = data.response || "";
+    return { text, model: model || provider.model || "local-model", usage: usageFromAiResponse({ data, prompt, text }), raw: data };
   };
 
   const askPlannerAi = async ({ node, runtime, payload, event, phase = "initial", observation = null } = {}) => {
@@ -395,6 +407,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     return {
       provider: provider.name || provider.provider || "local",
       model: ai.model || model,
+      usage: ai.usage || {},
       prompt,
       rawText: ai.text,
       ...plan,
@@ -1064,6 +1077,73 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       }
     }
 
+    async recordTokenUsage({ node, usage = {}, provider = "", model = "" } = {}) {
+      const promptTokens = Number(usage.promptTokens || usage.prompt_tokens || 0);
+      const completionTokens = Number(usage.completionTokens || usage.completion_tokens || 0);
+      const totalTokens = Number(usage.totalTokens || usage.total_tokens || promptTokens + completionTokens || 0);
+      if (!node?.id || !totalTokens) return;
+      const current = (this.runtime.nodes || []).find((item) => item.id === node.id) || node;
+      const previous = current.metadata?.tokenUsage || {};
+      const nextUsage = {
+        totalTokens: Number(previous.totalTokens || 0) + totalTokens,
+        totalPromptTokens: Number(previous.totalPromptTokens || 0) + promptTokens,
+        totalCompletionTokens: Number(previous.totalCompletionTokens || 0) + completionTokens,
+        lastTokens: totalTokens,
+        lastPromptTokens: promptTokens,
+        lastCompletionTokens: completionTokens,
+        provider: provider || previous.provider || "",
+        model: model || previous.model || "",
+        updatedAt: new Date().toISOString(),
+      };
+      const nextNode = {
+        ...current,
+        metadata: {
+          ...(current.metadata || {}),
+          tokenUsage: nextUsage,
+          config: {
+            ...(current.metadata?.config || {}),
+            tokenUsage: nextUsage.totalTokens,
+            lastTokens: nextUsage.lastTokens,
+          },
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      this.runtime.nodes = (this.runtime.nodes || []).map((item) => item.id === nextNode.id ? nextNode : item);
+      try {
+        await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+      } catch (error) {
+        console.warn("Orchestrator token usage non persistito", error);
+      }
+    }
+
+    clearTokenUsageForNodes(ids = []) {
+      const targets = new Set((ids || []).filter(Boolean).map(String));
+      if (!targets.size) return;
+      this.runtime.nodes = (this.runtime.nodes || []).map((node) => {
+        if (!targets.has(node.id)) return node;
+        return {
+          ...node,
+          metadata: {
+            ...(node.metadata || {}),
+            tokenUsage: {
+              totalTokens: 0,
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              lastTokens: 0,
+              lastPromptTokens: 0,
+              lastCompletionTokens: 0,
+              clearedAt: new Date().toISOString(),
+            },
+            config: {
+              ...(node.metadata?.config || {}),
+              tokenUsage: 0,
+              lastTokens: 0,
+            },
+          },
+        };
+      });
+    }
+
     buildSignature(runtime = {}) {
       const orchestrators = (runtime.nodes || [])
         .filter(isRunnableOrchestrator)
@@ -1219,6 +1299,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
         const aiPlan = await askPlannerAi({ node, runtime, payload, event, phase, observation });
         const steps = repairPlannerSteps({ node, runtime, payload, event, steps: aiPlan.steps || [] });
         if (!steps.length) throw new Error("Planner AI senza step eseguibili");
+        await this.recordTokenUsage({ node, usage: aiPlan.usage, provider: aiPlan.provider, model: aiPlan.model });
         return {
           ...fallback,
           ...aiPlan,
@@ -1228,6 +1309,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
             : "blocked",
           steps,
           fallbackUsed: false,
+          usage: aiPlan.usage || {},
           createdAt: new Date().toISOString(),
         };
       } catch (error) {

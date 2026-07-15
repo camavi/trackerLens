@@ -2101,6 +2101,59 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
   white-space: nowrap;
 }
 
+.tl-flow-node-token-metrics {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  width: 100%;
+  color: rgba(241, 245, 249, 0.86);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.tl-flow-node-token-label {
+  min-width: 0;
+  color: rgba(241, 245, 249, 0.86);
+  white-space: nowrap;
+}
+
+.tl-flow-token-value-btn {
+  min-height: 0;
+  min-width: 0;
+  padding: 2px 5px;
+  color: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.16);
+  border-radius: 5px;
+  background: rgba(var(--node-rgb, 214, 226, 235), 0.07);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-token-value-btn:hover {
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.32);
+  background: rgba(var(--node-rgb, 214, 226, 235), 0.12);
+}
+
+.tl-flow-node-token-metrics .tl-flow-token-clear-btn {
+  margin-left: auto;
+  min-height: 20px;
+  min-width: 20px;
+  padding: 0;
+  border-radius: 5px;
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.16);
+  color: rgba(241, 245, 249, 0.9);
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.tl-flow-node-token-metrics .tl-flow-token-clear-btn .material-symbols-rounded {
+  font-size: 13px;
+}
+
 @keyframes tl-node-event-pulse {
   0% {
     box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22), 0 0 10px rgba(var(--node-rgb, 214, 226, 235), 0.08);
