@@ -2633,11 +2633,18 @@ const renderPayloadInlineControl = (node = {}, item = {}) => {
     onPointerDown: stop,
     onclick: stop,
     onInput: oninput,
-    onBeforeInput: stop,
-    onkeydown,
-    onkeypress: stop,
-    onkeyup: stop,
     onBlur: commit,
+    slots: {
+      input: ({ input }) => {
+        input.addEventListener("beforeinput", stop);
+        input.addEventListener("input", stop);
+        input.addEventListener("change", stop);
+        input.addEventListener("keydown", onkeydown);
+        input.addEventListener("keypress", stop);
+        input.addEventListener("keyup", stop);
+        return input;
+      },
+    },
   });
 };
 
