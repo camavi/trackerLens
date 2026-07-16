@@ -6572,7 +6572,7 @@ const renderInspectorLogs = (events = [], flowLogs = []) =>
                 title: "Replay this payload through downstream routes",
                 onclick: () => replayRuntimeEvent(event),
               }, icon("replay", "sm"), "Replay"),
-              copyRuntimeButton(event.payload || {}, "Copy payload")
+              copyRuntimeButton(event.originalPayload ?? event.payload ?? {}, "Copy payload")
             )
           ),
           _.div(
@@ -7001,7 +7001,7 @@ const renderEdgeInspector = (edge) => {
           _.span("Actions"),
           _.strong(
             mappingTransform ? copyRuntimeButton(mappingTransform, "Copy transform") : null,
-            mappedLastEvent ? copyRuntimeButton(mappedLastEvent.payload, "Copy mapped payload") : null
+            mappedLastEvent ? copyRuntimeButton(mappedLastEvent.originalPayload ?? mappedLastEvent.payload, "Copy mapped payload") : null
           )
         )
       ),

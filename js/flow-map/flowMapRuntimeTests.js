@@ -1043,7 +1043,9 @@ const replayRuntimeEvent = async (event = {}) => {
 
   const workspaceId = event.workspaceId || sourceNode.workspaceId || state.filters.workspaceId || "workspace_global";
   const channel = event.channel || nodeOutgoingTestChannels(sourceNode, graph)[0] || "default";
-  const payload = event.payload === undefined ? {} : event.payload;
+  const payload = event.originalPayload !== undefined && event.originalPayload !== null
+    ? event.originalPayload
+    : event.payload === undefined ? {} : event.payload;
   const runId = testRunId().replace("flow_test", "flow_replay");
   const path = downstreamTestPath(graph, [sourceNode.id]);
 
@@ -3194,7 +3196,7 @@ const runKnowledgeGraphSampleTest = async () => {
     depth: 2,
     topK: 12,
     maxRelations: 18,
-    maxEvidence: 3,
+    maxEvidence: 6,
     maxContextChars: 3200,
     includeEvidence: true,
     preferLatestDocument: true,
@@ -3419,13 +3421,17 @@ const runKnowledgeGraphSampleTest = async () => {
     icon: "manage_search",
     subtype: "graph-query",
     category: "knowledge",
-    settingsSchema: { query: "string", depth: "number", topK: "number", maxRelations: "number", maxEvidence: "number", relationTypes: "string", includeEvidence: "boolean", graphScope: "workspace|document|collection", collectionId: "string", documentId: "string", outputChannel: "string" },
+    settingsSchema: { query: "string", depth: "number", topK: "number", maxRelations: "number", maxEvidence: "number", evidenceMode: "focused|balanced|full_ordered|debug_trace", includeAdjacentChunks: "boolean", preserveDocumentOrder: "boolean", protectedEvidence: "boolean", relationTypes: "string", includeEvidence: "boolean", graphScope: "workspace|document|collection", collectionId: "string", documentId: "string", outputChannel: "string" },
     paletteLabel: "Graph Query",
     config: {
       depth: 2,
       topK: 12,
       maxRelations: 18,
-      maxEvidence: 3,
+      maxEvidence: 6,
+      evidenceMode: "balanced",
+      includeAdjacentChunks: false,
+      preserveDocumentOrder: false,
+      protectedEvidence: true,
       maxContextChars: 3200,
       includeEvidence: true,
       graphScope: "collection",

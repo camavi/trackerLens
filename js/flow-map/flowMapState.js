@@ -238,11 +238,16 @@ const summarizeRuntimePayloadForUi = (payload) => {
   return summary;
 };
 
-const sanitizeRuntimeEventForUi = (event = {}) => ({
-  ...event,
-  payload: summarizeRuntimePayloadForUi(event.payload),
-  payloadPreview: event.payloadPreview || stringifyRuntimeValue(event.payload).slice(0, 480),
-});
+const sanitizeRuntimeEventForUi = (event = {}) => {
+  const payload = summarizeRuntimePayloadForUi(event.payload);
+  const truncated = payload?.__truncatedForUi === true;
+  return {
+    ...event,
+    payload,
+    originalPayload: truncated ? event.payload : event.originalPayload,
+    payloadPreview: event.payloadPreview || stringifyRuntimeValue(event.payload).slice(0, 480),
+  };
+};
 
 const sanitizeFlowLogForUi = (log = {}) => ({
   ...log,
@@ -1388,20 +1393,21 @@ const isPreviewPayloadEvent = (event = {}) => {
 
 const updatePreviewPayloads = (event = {}) => {
   if (!isPreviewPayloadEvent(event)) return;
+  const sourcePayload = event.originalPayload !== undefined && event.originalPayload !== null ? event.originalPayload : event.payload;
   previewNodesForEvent(event).forEach((node) => {
     const clearedAt = Date.parse(state.previewClearedAt[node.id] || "");
     const nodeCreatedAt = Date.parse(node.createdAt || "");
     const eventAt = Date.parse(event.createdAt || "");
     const visibleAfter = Math.max(clearedAt || 0, nodeCreatedAt || 0);
     if (visibleAfter && eventAt && eventAt <= visibleAfter) return;
-    const mapped = previewPayloadForNodeEvent(node, event);
+    const mapped = previewPayloadForNodeEvent(node, { ...event, payload: sourcePayload });
     state.previewPayloads[node.id] = {
       eventId: event.id,
       channel: event.channel || "default",
       eventType: event.eventType || "event",
       sourceNodeId: event.sourceNodeId || "",
       payload: mapped.payload,
-      originalPayload: mapped.mappingResult?.changed ? event.payload : null,
+      originalPayload: mapped.mappingResult?.changed || event.originalPayload !== undefined ? sourcePayload : null,
       mapping: mapped.mappingResult?.mapping || null,
       mappingWarnings: mapped.mappingResult?.warnings || [],
       mappingDependencyId: mapped.dependency?.id || "",

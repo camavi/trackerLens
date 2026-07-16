@@ -300,6 +300,9 @@ window.TrackerLensAiAgentRuntime = (() => {
     const reasoningBoundaries = reasoningPlan?.excludedContext?.length
       ? reasoningPlan.excludedContext.map((item) => `- ${item}`).join("\n")
       : "";
+    const reasoningInstructions = reasoningPlan?.responseInstructions?.length
+      ? reasoningPlan.responseInstructions.map((item) => `- ${item}`).join("\n")
+      : "";
     const relationLines = reasoningPlan ? "" : (graphContext.relations || []).slice(0, 16).map((relation, index) => {
       const flags = [
         relation.direct ? "direct" : "",
@@ -334,6 +337,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       reasoningPlan ? `Reasoning intent: ${reasoningPlan.intent || "fact"}` : "",
       primaryEvidenceText ? `Primary evidence text:\n${primaryEvidenceText.slice(0, 3600)}` : "",
       reasoningLines ? `Reasoning required facts:\n${reasoningLines}` : "",
+      reasoningInstructions ? `Reasoning answer instructions:\n${reasoningInstructions}` : "",
       reasoningBoundaries ? `Reasoning boundaries:\n${reasoningBoundaries}` : "",
       !reasoningPlan && graphContext.context ? `Graph neighborhood:\n${graphContext.context}` : "",
       relationLines ? `Structured relations:\n${relationLines}` : "",
@@ -444,6 +448,7 @@ window.TrackerLensAiAgentRuntime = (() => {
             status: graphContext.reasoningPlan.status || "",
             primaryEvidenceText: compactTextValue(graphContext.reasoningPlan.primaryEvidenceText || "", 2200),
             requiredFacts: (graphContext.reasoningPlan.requiredFacts || []).slice(0, 12),
+            responseInstructions: (graphContext.reasoningPlan.responseInstructions || []).slice(0, 6),
             excludedContext: (graphContext.reasoningPlan.excludedContext || []).slice(0, 8),
           } : null,
           entities: (graphContext.entities || []).slice(0, graphContext.reasoningPlan ? 4 : 10).map(cleanEntity),

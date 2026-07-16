@@ -15790,6 +15790,26 @@ select {
   box-sizing: border-box
 }
 
+.cms-textarea {
+  line-height: 1.4;
+  margin-top: 0;
+  padding-top: 10px;
+  padding-bottom: 8px;
+  resize: vertical
+}
+
+.cms-textarea-field .cms-float-label {
+  top: 7px;
+  transform: translateY(0);
+  font-size: 11px;
+  opacity: 0.9
+}
+
+.cms-textarea-field .cms-clear {
+  align-self: flex-start;
+  margin-top: 8px
+}
+
 @keyframes cms-autofill {
   from {}
 
@@ -16185,7 +16205,7 @@ select {
 
 .cms-date-display {
   cursor: pointer;
-  min-height: var(--cms-date-input-height, 40px);
+  min-height: var(--cms-date-input-height, 32px);
   font-size: var(--cms-date-input-font-size, inherit)
 }
 

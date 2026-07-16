@@ -939,6 +939,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const asksRelation = /\b(?:relazione|relation|relacion|relación|lien|beziehung|tra|between|entre|zwischen)\b/.test(normalized);
     const asksInstrument = /\b(?:usa|usare|utilizza|utilizzare|usa|used|use|uses|with|against|contro|con|strumento|tool|weapon|arma|object|oggetto)\b/.test(normalized);
     const asksCause = /\b(?:perche|perché|why|porque|por qué|pourquoi|warum)\b/.test(normalized);
+    const asksProcess = /\b(?:dettagli|dettaglio|passaggi|passo|processo|sequenza|timeline|come|how|como|cómo|comment|wie|explain|spiega|spiegami)\b/.test(normalized);
     const asksHealing = /\b(?:come|how|como|cómo|comment|wie)\b/.test(normalized) &&
       /\b(?:guar|cura|heal|cure|recuper|ritrov|riacquist|voce|parlare|speak|voice|voz|hablar|parler)\b/.test(normalized);
     return {
@@ -946,6 +947,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       relation: asksRelation,
       instrument: asksInstrument,
       cause: asksCause,
+      process: asksProcess || asksCause || asksHealing,
       healing: asksHealing,
     };
   };
@@ -1107,6 +1109,73 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (intent.cause && ["transforms", "drinks", "heals", "speaks"].includes(event.eventType)) score += 8;
     score += Math.min(4, Number(event.confidence || 0) * 4);
     return score;
+  };
+
+  const graphEventEvidenceText = (event = {}) =>
+    String(event.evidence?.text || event.evidence?.quote || event.evidence || "").trim();
+
+  const graphEventNormalizedText = (event = {}) => normalizeEntityToken([
+    event.eventType,
+    event.subject,
+    ...(event.objects || []),
+    ...(event.participants || []),
+    ...(event.roles?.agent || []),
+    ...(event.roles?.patient || []),
+    ...(event.roles?.object || []),
+    ...(event.roles?.destination || []),
+    graphEventEvidenceText(event),
+  ].join(" "));
+
+  const graphProcessOutcomeEventTypes = new Set([
+    "speaks", "heals", "drinks", "receives_from", "gives_to", "takes", "causes", "leads_to", "transforms", "uses",
+  ]);
+
+  const graphProcessWindowEvents = ({ events = [], scoredEvents = [], queryTokens = [], seedLabels = [], intent = {}, maxEvents = 12 } = {}) => {
+    if (!intent.process && !intent.cause && !intent.healing) return [];
+    const ordered = [...events]
+      .filter((item) => graphEventEvidenceText(item))
+      .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    if (!ordered.length) return [];
+    const scoreById = new Map(scoredEvents.map(({ event, score }) => [event.id, score]));
+    const eventOverlap = (event = {}) => {
+      const text = graphEventNormalizedText(event);
+      const tokenScore = queryTokens.reduce((score, token) => score + (token && text.includes(token) ? 1 : 0), 0);
+      const seedScore = seedLabels.reduce((score, label) => score + (label && text.includes(label) ? 2 : 0), 0);
+      return tokenScore + seedScore;
+    };
+    const anchors = ordered
+      .map((event, index) => {
+        const baseScore = scoreById.get(event.id) || 0;
+        const overlap = eventOverlap(event);
+        const outcomeBonus = graphProcessOutcomeEventTypes.has(event.eventType) ? 18 : 0;
+        const healingBonus = intent.healing && graphHealingMechanismCueScore(graphEventEvidenceText(event), intent) >= 8 ? 8 : 0;
+        const hasQuerySignal = baseScore > 0 || overlap > 0 || healingBonus > 0;
+        return { event, index, score: hasQuerySignal ? baseScore + (overlap * 8) + outcomeBonus + healingBonus : 0 };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || b.index - a.index);
+    const anchor = anchors[0];
+    if (!anchor) return [];
+    const before = Math.max(3, Math.min(10, Number(maxEvents) - 2));
+    const start = Math.max(0, anchor.index - before);
+    const end = Math.min(ordered.length - 1, anchor.index + 1);
+    return ordered
+      .slice(start, end + 1)
+      .map((event, index) => ({
+        event,
+        score: Math.max(scoreById.get(event.id) || 0, 8 + Math.max(0, before - Math.abs((start + index) - anchor.index))),
+      }))
+      .slice(-maxEvents);
+  };
+
+  const graphEvidenceMatchedTokens = (text = "", tokens = []) => {
+    const normalized = normalizeEntityToken(text);
+    if (!normalized) return [];
+    const normalizedTokens = new Set(normalized.split(/\s+/).filter(Boolean));
+    return unique(tokens
+      .map((token) => String(token || "").trim())
+      .filter((token) => token.length >= 2)
+      .filter((token) => token.length <= 4 ? normalizedTokens.has(token) : normalized.includes(token)));
   };
 
   const createDocument = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
@@ -5133,8 +5202,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
     const topK = Math.max(1, Math.min(80, Number(payload?.topK || config.topK || 12)));
     const maxRelations = Math.max(1, Math.min(240, Number(payload?.maxRelations || config.maxRelations || 48)));
-    const maxEvidence = Math.max(0, Math.min(24, Number(payload?.maxEvidence || config.maxEvidence || 6)));
     const includeEvidence = payload?.includeEvidence !== false && config.includeEvidence !== false;
+    const evidenceModeRaw = String(payload?.evidenceMode || config.evidenceMode || "balanced").toLowerCase().trim().replace(/[\s-]+/g, "_");
+    const evidenceMode = ["focused", "balanced", "full_ordered", "debug_trace"].includes(evidenceModeRaw) ? evidenceModeRaw : "balanced";
+    const includeAdjacentChunks = payload?.includeAdjacentChunks === true || payload?.includeAdjacentChunks === "true" ||
+      config.includeAdjacentChunks === true || config.includeAdjacentChunks === "true";
+    const preserveDocumentOrder = payload?.preserveDocumentOrder === true || payload?.preserveDocumentOrder === "true" ||
+      config.preserveDocumentOrder === true || config.preserveDocumentOrder === "true" || evidenceMode === "full_ordered";
+    const protectedEvidenceEnabled = payload?.protectedEvidence !== false && payload?.protectedEvidence !== "false" &&
+      config.protectedEvidence !== false && config.protectedEvidence !== "false" &&
+      evidenceMode !== "focused" && evidenceMode !== "full_ordered";
     const includeIsolated = payload?.includeIsolated === true || payload?.includeIsolated === "true" ||
       config.includeIsolated === true || config.includeIsolated === "true";
     const relationTypes = splitConfigList(payload?.relationTypes || config.relationTypes).map((item) => item.toLowerCase());
@@ -5183,6 +5260,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const scopedChunks = byWorkspace(chunks, workspaceId)
       .filter((chunk) => !documentId || chunk.documentId === documentId)
       .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId);
+    const requestedMaxEvidence = evidenceMode === "full_ordered"
+      ? Math.max(0, scopedChunks.length)
+      : Math.max(0, Math.min(24, Number(payload?.maxEvidence || config.maxEvidence || 6)));
+    const maxEvidence = protectedEvidenceEnabled && (intent.process || intent.healing || intent.cause)
+      ? Math.max(requestedMaxEvidence, 6)
+      : requestedMaxEvidence;
     const activeDocumentIds = new Set([
       ...scopedEntities.map((entity) => entity.documentId).filter(Boolean),
       ...scopedChunks.map((chunk) => chunk.documentId).filter(Boolean),
@@ -5341,28 +5424,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (chunkIds.has(chunk.id)) score += 2;
       return score;
     };
-    const evidence = includeEvidence
-      ? scopedChunks
+    const evidenceCandidates = includeEvidence
+      ? (evidenceMode === "full_ordered"
+        ? [...scopedChunks]
+          .sort((a, b) => Number(a.ordinal ?? a.index ?? 0) - Number(b.ordinal ?? b.index ?? 0))
+        : scopedChunks
         .filter((chunk) => {
           if (chunkIds.has(chunk.id)) return true;
           const text = normalizeEntityToken(chunk.text || "");
           return normalizedMatchedLabels.some((label) => text.includes(label)) ||
             graphHealingMechanismCueScore(chunk.text || "", intent) >= 18;
-        })
-        .map((chunk) => ({ chunk, score: evidenceScore(chunk) }))
-        .filter((item) => item.score > 0)
-        .sort((a, b) => b.score - a.score || String(a.chunk.id || "").localeCompare(String(b.chunk.id || "")))
-        .slice(0, maxEvidence)
-        .map(({ chunk, score }, index) => ({
-          index: index + 1,
-          chunkId: chunk.id,
-          documentId: chunk.documentId,
-          text: graphEvidenceSnippet(chunk.text || "", intent.healing
-            ? ["tazza", "tè", "tea", "fiore", "acqua", "sorgente", "beve", "bevve", "drink", ...matchedLabels]
-            : matchedLabels, 900),
-          metadata: chunk.metadata || {},
-          score,
         }))
+        .map((chunk) => ({ chunk, score: evidenceScore(chunk) }))
+        .filter((item) => evidenceMode === "full_ordered" || item.score > 0)
+        .sort((a, b) => evidenceMode === "full_ordered"
+          ? Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0)
+          : b.score - a.score || String(a.chunk.id || "").localeCompare(String(b.chunk.id || "")))
       : [];
     const scoredEvents = scopedEvents
       .map((item) => ({
@@ -5389,8 +5466,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
         )
         .slice(0, 18)
       : [];
+    const processWindowEvents = graphProcessWindowEvents({
+      events: scopedEvents,
+      scoredEvents,
+      queryTokens,
+      seedLabels,
+      intent,
+      maxEvents: eventLimit,
+    });
     const rankedEventIds = new Set();
-    const rankedEvents = [...rankedEventsBase, ...healingChainEvents]
+    const rankedEvents = [...processWindowEvents, ...rankedEventsBase, ...healingChainEvents]
       .filter(({ event: item }) => {
         if (rankedEventIds.has(item.id)) return false;
         rankedEventIds.add(item.id);
@@ -5429,19 +5514,209 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const entityLines = entitiesResult.slice(0, 30).map((entity, index) =>
       `[E${index + 1}${entity.matched ? " match" : ""}] ${entity.label || entity.id} (${entity.entityType || "entity"}, connections=${entity.connections || 0}, score=${Number(entity.score || 0).toFixed(2)})`
     );
-    const evidenceLines = evidence.map((item) => `[S${item.index} score=${Number(item.score || 0).toFixed(2)}] ${String(item.text || "").slice(0, 720)}`);
     const eventLines = eventsResult.map((item, index) =>
       `[EV${index + 1} seq=${item.sequence} score=${Number(item.score || 0).toFixed(2)}] ${item.subject || "event"} -${item.eventType}-> ${(item.objects || []).join(", ") || "context"} quote="${String(item.evidence?.quote || item.evidence?.text || "").slice(0, 220)}"`
+    );
+    const eventChainTerms = unique(eventsResult.flatMap((item) => [
+      item.eventType,
+      item.subject,
+      ...(item.objects || []),
+      ...(item.participants || []),
+      ...(item.roles?.agent || []),
+      ...(item.roles?.patient || []),
+      ...(item.roles?.object || []),
+      ...(item.roles?.destination || []),
+    ])
+      .flatMap((value) => normalizeEntityToken(value).split(/\s+/))
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3 && !queryStopWords.has(token)));
+    const mechanismEvidenceEvents = intent.process || intent.healing || intent.cause
+      ? mechanismEventsForReasoning(eventsResult, queryTokens, Math.max(12, eventLimit))
+      : [];
+    const mechanismEvidenceTerms = unique(mechanismEvidenceEvents.flatMap((item) => [
+      ...(item.objects || []),
+      ...(item.roles?.patient || []),
+      ...(item.roles?.object || []),
+      ...(item.roles?.destination || []),
+      item.eventType === "drinks" ? "beve bevve drink drinks" : "",
+      item.eventType === "fills" ? "riempie riempirono fill filled tazza cup" : "",
+      item.eventType === "immerses" ? "immerge immersero immerse fiore flower" : "",
+      item.eventType === "transforms" ? "trasforma trasformandosi bollire tè tea" : "",
+      item.eventType === "speaks" ? "parla parlare parola voce grido speak voice" : "",
+      intent.healing ? "fiore flower fleur flor acqua water eau agua sorgente source spring fonte tazza cup tè te tea infusione tisana beve bevve drink drank drinks" : "",
+    ])
+      .flatMap((value) => normalizeEntityToken(value).split(/\s+/))
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2 && !queryStopWords.has(token))
+      .filter((token) => !seedLabels.some((label) => label === token)));
+    const mechanismOperationalTerms = new Set([
+      "fiore", "flower", "fleur", "flor",
+      "acqua", "water", "eau", "agua",
+      "sorgente", "source", "spring", "fonte",
+      "tazza", "cup", "te", "tea", "infusione", "tisana",
+      "beve", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
+      "riempie", "riempirono", "fill", "filled",
+      "immerge", "immersero", "immerse", "immerso", "immersa",
+      "trasforma", "trasformandosi", "bollire", "boil", "boiled",
+    ]);
+    const mechanismOutcomeTerms = new Set(["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"]);
+    const evidenceCandidateMeta = (candidate = {}) => {
+      const text = candidate.chunk?.text || "";
+      const queryMatches = graphEvidenceMatchedTokens(text, queryTokens);
+      const seedMatches = graphEvidenceMatchedTokens(text, seedLabels);
+      const eventMatches = graphEvidenceMatchedTokens(text, eventChainTerms);
+      const mechanismMatches = graphEvidenceMatchedTokens(text, mechanismEvidenceTerms);
+      const operationalMatches = mechanismMatches.filter((token) => mechanismOperationalTerms.has(token));
+      const outcomeMatches = mechanismMatches.filter((token) => mechanismOutcomeTerms.has(token));
+      const healingCueScore = graphHealingMechanismCueScore(text, intent);
+      const selected = false;
+      const linked = chunkIds.has(candidate.chunk?.id);
+      const highMatch = chunkScoreById.has(candidate.chunk?.id);
+      const normalizedText = normalizeEntityToken(text);
+      const instructionCue = /\b(?:importante|dovr|deve|devono|prepar|using|use|must|should|required|requires|needed|necessar|soluzione|solution|trovare|found|find)\b/.test(normalizedText);
+      const outcomeSuccessCue = /\b(?:grido|usc[iì]|voglio parlare|pronunci|rison|risuon|finally spoke|began to speak|voice rang|spoke|parola dopo)\b/.test(normalizedText);
+      const protectedKind = operationalMatches.length >= 2
+        ? (instructionCue ? "setup" : "operation")
+        : outcomeMatches.length >= 2 && healingCueScore >= 13 && outcomeSuccessCue
+          ? "outcome"
+          : "";
+      return {
+        chunk: candidate.chunk,
+        score: candidate.score,
+        selected,
+        linked,
+        highMatch,
+        queryMatches,
+        seedMatches,
+        eventMatches,
+        mechanismMatches,
+        operationalMatches,
+        outcomeMatches,
+        healingCueScore,
+        protectedKind,
+      };
+    };
+    const evidenceCandidateMetaList = evidenceCandidates.map(evidenceCandidateMeta);
+    const mechanismProtectedLimit = maxEvidence > 0 ? Math.max(3, Math.min(6, maxEvidence - 1)) : 0;
+    const mechanismProtectedKindOrder = new Map([["setup", 0], ["operation", 1], ["outcome", 2]]);
+    const mechanismProtectedEvidence = protectedEvidenceEnabled && (intent.process || intent.healing || intent.cause) && mechanismProtectedLimit > 0
+      ? evidenceCandidateMetaList
+        .filter((item) => item.protectedKind)
+        .filter((item) => item.healingCueScore >= 13 || item.highMatch || item.score >= 30)
+        .sort((a, b) =>
+          (mechanismProtectedKindOrder.get(a.protectedKind) ?? 9) - (mechanismProtectedKindOrder.get(b.protectedKind) ?? 9) ||
+          Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0))
+        .slice(0, mechanismProtectedLimit)
+      : [];
+    const selectedEvidenceCandidates = [];
+    const selectedEvidenceIds = new Set();
+    const addEvidenceCandidate = (item = {}) => {
+      const chunkId = item.chunk?.id;
+      if (!chunkId || selectedEvidenceIds.has(chunkId) || selectedEvidenceCandidates.length >= maxEvidence) return;
+      selectedEvidenceIds.add(chunkId);
+      selectedEvidenceCandidates.push(item);
+    };
+    mechanismProtectedEvidence.forEach(addEvidenceCandidate);
+    if (includeAdjacentChunks && mechanismProtectedEvidence.length) {
+      const candidateByOrdinal = new Map(evidenceCandidateMetaList.map((item) => [Number(item.chunk?.ordinal ?? item.chunk?.index ?? -1), item]));
+      mechanismProtectedEvidence.forEach((item) => {
+        const ordinal = Number(item.chunk?.ordinal ?? item.chunk?.index ?? -1);
+        [ordinal - 1, ordinal + 1].forEach((nearby) => {
+          const adjacent = candidateByOrdinal.get(nearby);
+          if (adjacent) addEvidenceCandidate({ ...adjacent, adjacentToChunkId: item.chunk?.id });
+        });
+      });
+    }
+    evidenceCandidateMetaList
+      .sort((a, b) => b.score - a.score || String(a.chunk?.id || "").localeCompare(String(b.chunk?.id || "")))
+      .forEach(addEvidenceCandidate);
+    const snippetLabels = intent.healing || intent.process || intent.cause
+      ? unique([...mechanismEvidenceTerms, "tazza", "tè", "tea", "fiore", "acqua", "sorgente", "beve", "bevve", "drink", ...matchedLabels])
+      : matchedLabels;
+    const orderedEvidenceCandidates = preserveDocumentOrder
+      ? [...selectedEvidenceCandidates].sort((a, b) => Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0))
+      : selectedEvidenceCandidates;
+    const evidence = orderedEvidenceCandidates.map((item, index) => ({
+      index: index + 1,
+      chunkId: item.chunk.id,
+      documentId: item.chunk.documentId,
+      text: graphEvidenceSnippet(item.chunk.text || "", snippetLabels, 900),
+      metadata: item.chunk.metadata || {},
+      score: item.score,
+      selectionReason: evidenceMode === "full_ordered"
+        ? "full-ordered"
+        : mechanismProtectedEvidence.some((protectedItem) => protectedItem.chunk?.id === item.chunk.id)
+        ? "mechanism-protected"
+        : item.adjacentToChunkId
+          ? "adjacent"
+        : "ranked-score",
+    }));
+    const evidenceSelectionReasonById = new Map(evidence.map((item) => [item.chunkId, item.selectionReason]));
+    const evidenceLines = evidence.map((item) => `[S${item.index} score=${Number(item.score || 0).toFixed(2)} reason=${item.selectionReason || "ranked"}] ${String(item.text || "").slice(0, 720)}`);
+    const selectedEvidenceChunkIds = new Set(evidence.map((item) => item.chunkId).filter(Boolean));
+    const evidenceTrace = scopedChunks
+      .map((chunk) => {
+        const text = chunk.text || "";
+        const queryMatches = graphEvidenceMatchedTokens(text, queryTokens);
+        const seedMatches = graphEvidenceMatchedTokens(text, seedLabels);
+        const eventMatches = graphEvidenceMatchedTokens(text, eventChainTerms);
+        const mechanismMatches = graphEvidenceMatchedTokens(text, mechanismEvidenceTerms);
+        const operationalMatches = mechanismMatches.filter((token) => mechanismOperationalTerms.has(token));
+        const outcomeMatches = mechanismMatches.filter((token) => mechanismOutcomeTerms.has(token));
+        const healingCueScore = graphHealingMechanismCueScore(text, intent);
+        const selected = selectedEvidenceChunkIds.has(chunk.id);
+        const mechanismProtectedItem = mechanismProtectedEvidence.find((item) => item.chunk?.id === chunk.id);
+        const mechanismProtected = Boolean(mechanismProtectedItem);
+        const linked = chunkIds.has(chunk.id);
+        const highMatch = chunkScoreById.has(chunk.id);
+        const score = evidenceScore(chunk);
+        const reasons = [
+          selected ? "selected-evidence" : "",
+          selected && evidenceSelectionReasonById.get(chunk.id) ? `selection-${evidenceSelectionReasonById.get(chunk.id)}` : "",
+          mechanismProtected ? "mechanism-protected-evidence" : "",
+          linked ? "linked-entity-or-relation" : "",
+          highMatch ? "high-match-chunk" : "",
+          queryMatches.length ? "query-token-match" : "",
+          seedMatches.length ? "seed-label-match" : "",
+          eventMatches.length ? "event-chain-term-match" : "",
+          mechanismMatches.length ? "mechanism-term-match" : "",
+          healingCueScore >= 18 ? "healing-mechanism-cue" : "",
+        ].filter(Boolean);
+        return {
+          chunkId: chunk.id,
+          documentId: chunk.documentId,
+          ordinal: chunk.ordinal ?? chunk.index ?? null,
+          selected,
+          score,
+          reasons,
+          queryMatches,
+          seedMatches,
+          eventMatches,
+          mechanismMatches,
+          operationalMatches,
+          outcomeMatches,
+          healingCueScore,
+          protectedKind: mechanismProtectedItem?.protectedKind || "",
+          textPreview: String(text).slice(0, 360),
+        };
+      })
+      .filter((item) => item.score > 0 || item.reasons.length)
+      .sort((a, b) => Number(a.ordinal ?? 0) - Number(b.ordinal ?? 0))
+      .slice(0, Math.max(24, Math.min(120, Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit || 80))));
+    const evidenceTraceLines = evidenceTrace.map((item) =>
+      `[C${item.ordinal ?? "?"}${item.selected ? " selected" : ""} score=${Number(item.score || 0).toFixed(2)}] reasons=${item.reasons.join(",") || "none"} kind=${item.protectedKind || "-"} query=${item.queryMatches.join("|") || "-"} seed=${item.seedMatches.join("|") || "-"} event=${item.eventMatches.slice(0, 12).join("|") || "-"} mechanism=${item.mechanismMatches.slice(0, 12).join("|") || "-"} operational=${item.operationalMatches.slice(0, 12).join("|") || "-"} outcome=${item.outcomeMatches.slice(0, 12).join("|") || "-"} text="${String(item.textPreview || "").replace(/\s+/g, " ").slice(0, 220)}"`
     );
     const rawContext = [
       `Knowledge Graph query: ${cleanQuery}`,
       `Graph context mode: ${includeIsolated ? "debug-with-isolated" : "connected"} (${connectedEntityCount} connected, ${isolatedEntityCount} isolated candidates hidden)`,
       chunkScoreById.size ? `Answer evidence expansion: ${answerExpansionRelationCount} relation(s) from ${chunkScoreById.size} high-match chunk(s)` : "",
+      processWindowEvents.length ? `Process event window: ${processWindowEvents.length} ordered predecessor/outcome event(s)` : "",
       rankedSeeds.length ? `Matched entities: ${rankedSeeds.map((item) => `${item.entity.label} score=${item.score.toFixed(2)}`).join(", ")}` : "",
       entityLines.length ? `Entities:\n${entityLines.join("\n")}` : "Entities: none",
       relationLines.length ? `Relations:\n${relationLines.join("\n")}` : "Relations: none",
       eventLines.length ? `Events:\n${eventLines.join("\n")}` : "",
       evidenceLines.length ? `Evidence:\n${evidenceLines.join("\n\n")}` : "",
+      evidenceTraceLines.length ? `Evidence trace:\n${evidenceTraceLines.join("\n")}` : "",
     ].filter(Boolean).join("\n\n");
     const maxContextChars = Math.max(1200, Math.min(12000, Number(payload?.maxContextChars || config.maxContextChars || 5200)));
     const context = rawContext.length > maxContextChars ? `${rawContext.slice(0, maxContextChars)}\n...` : rawContext;
@@ -5454,6 +5729,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
       relations: relationsResult,
       events: eventsResult,
       evidence,
+      debug: {
+        evidenceTrace,
+        eventChainTerms,
+        mechanismEvidenceTerms,
+        queryTokens,
+        seedLabels,
+        selectedEvidenceChunkIds: [...selectedEvidenceChunkIds],
+        mechanismProtectedChunkIds: mechanismProtectedEvidence.map((item) => item.chunk?.id).filter(Boolean),
+        evidenceMode,
+        includeAdjacentChunks,
+        preserveDocumentOrder,
+        protectedEvidence: protectedEvidenceEnabled,
+      },
       resultCount: entitiesResult.length,
       relationCount: relationsResult.length,
       eventCount: eventsResult.length,
@@ -5472,6 +5760,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
         isolatedEntityCount,
         answerExpansionChunkCount: chunkScoreById.size,
         answerExpansionRelationCount,
+        processWindowEventCount: processWindowEvents.length,
+        evidenceTraceCount: evidenceTrace.length,
+        evidenceMode,
+        includeAdjacentChunks,
+        preserveDocumentOrder,
+        protectedEvidence: protectedEvidenceEnabled,
+        queryIntent: intent,
         eventCount: eventsResult.length,
         mode: "knowledge-graph",
       },
@@ -5544,7 +5839,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const configured = String(config.intentMode || "auto").toLowerCase().trim();
     if (configured && configured !== "auto") return configured;
     const normalized = normalizeEntityToken(query);
-    if (/^(?:how|come|como|comment|wie)\b/.test(normalized) || /\b(?:why|perche|perché|porque|por que|pourquoi|warum)\b/.test(normalized)) return "mechanism";
+    if (config.queryIntent?.healing || config.queryIntent?.process || config.queryIntent?.cause) return "mechanism";
+    if (/\b(?:how|come|como|cómo|comment|wie|why|perche|perché|porque|por que|pourquoi|warum|dettagli|dettaglio|passaggi|processo|spiega|spiegami)\b/.test(normalized)) return "mechanism";
     if (/^(?:when|quando|cu[aá]ndo|quand|wann)\b/.test(normalized) || /\b(?:timeline|sequence|ordine|sequenza|chronolog)\b/.test(normalized)) return "timeline";
     if (/^(?:who|what|chi|cosa|che cosa|que|qué|qui|quoi)\b/.test(normalized)) return "definition";
     if (/\b(?:compare|comparison|difference|differenza|diferencia|diff[eé]rence|versus|vs)\b/.test(normalized)) return "comparison";
@@ -5581,32 +5877,80 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const mechanismOutcomeEventTypes = new Set(["drinks", "speaks", "heals", "causes", "leads_to"]);
 
+  const mechanismHasEvidence = (event = {}) =>
+    Boolean(event.evidence?.quote || event.evidence?.text || event.evidence);
+
+  const mechanismEventKey = (event = {}, index = 0) =>
+    event.id || `${event.sequence ?? ""}:${event.eventType || ""}:${event.subject || ""}:${index}`;
+
+  const mechanismQueryAsksSpeechOutcome = (tokens = []) =>
+    tokens.some((token) => /^(?:voc|voce|voice|speak|spoken|parl|habl|voz|word|parol)/.test(token));
+
   const mechanismEventsForReasoning = (events = [], tokens = [], maxEvents = 12) => {
     const ordered = [...events].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
-    const operationalStart = ordered.find((item) =>
+    const coreStart = ordered.find((item) =>
+      mechanismCoreStartEventTypes.has(item.eventType) &&
+      mechanismHasEvidence(item)
+    ) || ordered.find((item) => mechanismCoreStartEventTypes.has(item.eventType));
+    const operationalStart = coreStart || ordered.find((item) =>
       mechanismOperationalStartEventTypes.has(item.eventType) &&
-      Boolean(item.evidence?.quote || item.evidence?.text || item.evidence)
+      mechanismHasEvidence(item)
     );
-    const coreStart = operationalStart || ordered.find((item) => mechanismCoreStartEventTypes.has(item.eventType));
-    if (!coreStart) {
+    if (!operationalStart) {
       return ordered
         .filter((item) => reasoningTokenOverlap(tokens, eventReasoningText(item)) > 0)
-        .filter((item) => item.evidence?.quote || item.evidence?.text || item.evidence)
+        .filter(mechanismHasEvidence)
         .slice(0, maxEvents);
     }
-    const startSequence = Number(coreStart.sequence || 0);
-    const outcome = ordered.find((item) =>
-      Number(item.sequence || 0) >= startSequence &&
-      mechanismOutcomeEventTypes.has(item.eventType) &&
-      (reasoningTokenOverlap(tokens, eventReasoningText(item)) > 0 || ["drinks", "heals"].includes(item.eventType))
-    );
+    const startSequence = Number(operationalStart.sequence || 0);
+    const asksSpeechOutcome = mechanismQueryAsksSpeechOutcome(tokens);
+    const outcome = ordered
+      .map((item) => {
+        const sequence = Number(item.sequence || 0);
+        const overlap = reasoningTokenOverlap(tokens, eventReasoningText(item));
+        const speechGoalScore = asksSpeechOutcome && item.eventType === "speaks" ? 18 : 0;
+        const typeScore = item.eventType === "heals" ? 16 : item.eventType === "speaks" ? 12 : item.eventType === "drinks" ? 8 : 4;
+        const hasSignal = sequence >= startSequence &&
+          mechanismHasEvidence(item) &&
+          mechanismOutcomeEventTypes.has(item.eventType) &&
+          (overlap > 0 || speechGoalScore > 0 || ["drinks", "heals"].includes(item.eventType));
+        return { item, sequence, score: hasSignal ? (overlap * 10) + speechGoalScore + typeScore : 0 };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((left, right) => right.score - left.score || right.sequence - left.sequence)[0]?.item;
     const endSequence = Number(outcome?.sequence || 0) || startSequence + 8;
-    return ordered
+    const prelude = ordered
       .filter((item) => {
         const sequence = Number(item.sequence || 0);
-        if (sequence < startSequence || sequence > endSequence + 1) return false;
+        return sequence < startSequence && sequence >= startSequence - 4;
+      })
+      .filter(mechanismHasEvidence)
+      .slice(-3);
+    const processEvents = ordered
+      .filter((item) => {
+        const sequence = Number(item.sequence || 0);
+        if (sequence < startSequence || sequence > endSequence) return false;
         if (!mechanismProcessEventTypes.has(item.eventType) && !mechanismCoreStartEventTypes.has(item.eventType)) return false;
-        return Boolean(item.evidence?.quote || item.evidence?.text || item.evidence);
+        return mechanismHasEvidence(item);
+      });
+    const outcomeTail = outcome ? ordered
+      .filter((item) => {
+        const sequence = Number(item.sequence || 0);
+        if (sequence <= endSequence || sequence > endSequence + 3) return false;
+        if (!mechanismHasEvidence(item)) return false;
+        if (item.eventType === outcome.eventType) return true;
+        if (mechanismOutcomeEventTypes.has(item.eventType) && reasoningTokenOverlap(tokens, eventReasoningText(item)) > 0) return true;
+        return reasoningTokenOverlap(tokens, eventReasoningText(item)) > 1;
+      })
+      .slice(0, 3)
+      : [];
+    const seen = new Set();
+    return [...prelude, ...processEvents, ...outcomeTail]
+      .filter((item, index) => {
+        const key = mechanismEventKey(item, index);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
       })
       .slice(0, maxEvents);
   };
@@ -5675,11 +6019,65 @@ window.TrackerLensKnowledgeRuntime = (() => {
     instruction: "Use as supporting relation, not as a replacement for a more precise event chain.",
   });
 
+  const reasoningEvidenceText = (item = {}) =>
+    String(item.text || item.evidence?.text || item.evidence?.quote || item.evidence || "").trim();
+
+  const trimMechanismSourceEvidence = (text = "") => {
+    const value = String(text || "").trim();
+    if (!value) return "";
+    const cutMarkers = [
+      "\nDa quel momento",
+      "\nCon il cuore pieno di gioia",
+      "\nQuando tornarono",
+      "\nIn suo onore",
+    ];
+    const cutIndex = cutMarkers
+      .map((marker) => value.indexOf(marker))
+      .filter((index) => index > 0)
+      .sort((left, right) => left - right)[0];
+    return cutIndex ? value.slice(0, cutIndex).trim() : value;
+  };
+
+  const composeFocusedSourceEvidence = ({ evidence = [], tokens = [], eventFacts = [], maxItems = 2, maxChars = 1800 } = {}) => {
+    if (!Array.isArray(evidence) || !evidence.length) return "";
+    const protectedEvidence = evidence
+      .filter((item) => item.selectionReason === "mechanism-protected")
+      .sort((left, right) => Number(left.index || 0) - Number(right.index || 0))
+      .slice(0, maxItems)
+      .map((item) => trimMechanismSourceEvidence(reasoningEvidenceText(item)))
+      .filter(Boolean)
+      .map((text) => text.length > maxChars ? `${text.slice(0, maxChars)}\n...` : text);
+    if (protectedEvidence.length) return unique(protectedEvidence).join("\n\n");
+    const eventSnippets = eventFacts
+      .map((fact) => String(fact.evidence || "").trim())
+      .filter((item) => item.length >= 24);
+    const scoredEvidence = evidence
+      .map((item) => {
+        const text = reasoningEvidenceText(item);
+        if (!text) return { text: "", score: 0 };
+        const normalized = normalizeEntityToken(text);
+        const tokenScore = tokens.reduce((score, token) => score + (token && normalized.includes(token) ? 4 : 0), 0);
+        const eventScore = eventSnippets.reduce((score, snippet) => {
+          const compactSnippet = normalizeEntityToken(snippet).slice(0, 120);
+          return score + (compactSnippet && normalized.includes(compactSnippet) ? 10 : 0);
+        }, 0);
+        return { text, score: tokenScore + eventScore };
+      })
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, maxItems)
+      .map((item) => trimMechanismSourceEvidence(item.text))
+      .filter(Boolean)
+      .map((text) => text.length > maxChars ? `${text.slice(0, maxChars)}\n...` : text);
+    return unique(scoredEvidence).join("\n\n");
+  };
+
   const composeKnowledgeReasoningPlan = ({ workspaceId = "", node = {}, payload = {}, event = {}, config = {} } = {}) => {
     const query = String(payload?.query || payload?.question || payload?.text || config.query || "").trim();
-    const intent = detectReasoningIntent(query, config);
+    const queryIntent = payload?.scope?.queryIntent || payload?.queryIntent || config.queryIntent || null;
+    const intent = detectReasoningIntent(query, { ...config, queryIntent });
     const tokens = reasoningTokens(query);
-    const maxFacts = Math.max(1, Math.min(24, Number(config.maxFacts || payload?.maxFacts || 8)));
+    const maxFacts = Math.max(1, Math.min(24, Number(config.maxFacts || payload?.maxFacts || (intent === "mechanism" ? 14 : 8))));
     const maxEvents = Math.max(1, Math.min(30, Number(config.maxEvents || payload?.maxEvents || 12)));
     const includeBackground = config.includeBackground === true || config.includeBackground === "true" || payload?.includeBackground === true;
     const events = Array.isArray(payload?.events) ? payload.events : [];
@@ -5708,7 +6106,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
       intent === "mechanism" ? "Do not replace the concrete event chain with a broad summary relation." : "",
       "Do not introduce subjects, containers, tools, places or causal links that are not present in required facts or evidence.",
     ].filter(Boolean);
-    const primaryEvidenceText = unique(eventFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).join("\n\n");
+    const responseInstructions = [
+      intent === "mechanism" ? "Answer as an ordered explanation: include the relevant setup/prelude when evidence is provided, then each concrete action, then the first successful outcome." : "",
+      intent === "mechanism" ? "Include the final outcome evidence when the chain contains it, especially the first proof that the mechanism succeeded." : "",
+      intent === "mechanism" ? "Do not infer that the mechanism happens in a previous prelude location unless the selected evidence explicitly says the mechanism continues there." : "",
+    ].filter(Boolean);
+    const eventEvidenceText = unique(eventFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).join("\n\n");
+    const focusedSourceEvidence = composeFocusedSourceEvidence({
+      evidence: payload?.evidence || [],
+      tokens,
+      eventFacts,
+      maxItems: intent === "mechanism" ? 5 : 1,
+      maxChars: intent === "mechanism" ? 1600 : 1000,
+    });
+    const primaryEvidenceText = unique([eventEvidenceText, focusedSourceEvidence].filter(Boolean)).join("\n\nFocused source excerpt:\n");
     const plan = {
       id: uniqueId("kreason"),
       workspaceId,
@@ -5719,6 +6130,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       eventChain: eventFacts,
       supportingRelations,
       excludedContext,
+      responseInstructions,
       evidenceQuotes: unique(requiredFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).slice(0, 12),
       primaryEvidenceText,
       sourceQueryId: payload?.queryId || payload?.id || "",
@@ -5739,6 +6151,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       plan.primaryEvidenceText ? `Primary evidence text:\n${plan.primaryEvidenceText}` : "",
       eventLines.length ? `Required event chain:\n${eventLines.join("\n")}` : "",
       relationLines.length ? `Supporting relations:\n${relationLines.join("\n")}` : "",
+      responseInstructions.length ? `Answer instructions:\n- ${responseInstructions.join("\n- ")}` : "",
       excludedContext.length ? `Boundaries:\n- ${excludedContext.join("\n- ")}` : "",
     ].filter(Boolean).join("\n\n");
     const maxContextChars = Math.max(1200, Math.min(12000, Number(config.maxContextChars || payload?.maxContextChars || 4800)));

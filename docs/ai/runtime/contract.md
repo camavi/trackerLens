@@ -41,6 +41,17 @@ Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -
 - Use `TrackerLensRuntimeContract.normalizeSettingsSchema` before rendering schema-driven config fields.
 - Hardcoded form fields are allowed only for behavior-specific controls such as Telegram helpers or file upload.
 - Do not create a parallel form builder for Flow Map runtime config.
+- Knowledge `Graph Query` evidence controls (`evidenceMode`, `maxEvidence`, `includeAdjacentChunks`, `preserveDocumentOrder`, `protectedEvidence`) are normal node config fields. Keep them in the shared schema/custom-field path so existing Graph Query nodes can surface new retrieval controls without recreating the node.
+
+## Payload Editor Rules
+
+- Runtime nodes can store editable payload rows in `metadata.config.payloadItems`.
+- Each item uses `{ key, label, value, type, options, enabled, visible }`.
+- Supported first-pass item types are `string`, `int`, `float`, `boolean`, `note`, `select` and `json`; `select` options are stored as comma/newline-separated text.
+- `enabled` controls whether the item is applied to runtime payload/config.
+- `visible` controls whether the item is rendered on the node card.
+- Manual JSON nodes rebuild `metadata.config.json` from enabled payload items on save.
+- Graph Query and Task nodes can use payload items to override the same-named config fields while still keeping the normal config form as the complete source of truth.
 
 ## Connection Mapping Rules
 
