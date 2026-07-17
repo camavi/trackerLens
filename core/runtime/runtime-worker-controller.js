@@ -1,5 +1,5 @@
 window.TrackerLensRuntimeWorker = (() => {
-  const WORKER_VERSION = "kg-20260703-flow-agent-clean-1";
+  const WORKER_VERSION = "kg-20260717-source-boundary-markers-1";
   let worker = null;
   let port = null;
   let connected = false;

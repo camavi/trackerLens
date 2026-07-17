@@ -21,6 +21,16 @@ Last updated: 2026-06-11.
 - `tl_pages` remains the workspace/page store; do not introduce `tl_workspaces` without an explicit migration.
 - Schema-driven Flow Map config should use `TrackerLensRuntimeContract` instead of a parallel form system.
 
+## Knowledge Answer Ownership
+
+- This is a hard boundary: TL cleans, organizes, ranks and grounds evidence, but TL must not semantically narrow the final answer.
+- Knowledge nodes may improve chunk quality, deduplicate evidence, preserve document order, expose source spans, validate quotes and remove mechanically broken fragments.
+- Intent-aware retrieval/scoring may classify generic needs such as source, mechanism or danger/challenge to rank evidence better, but this classification is only for evidence selection and diagnostics.
+- LLM-first Knowledge modes may propose retrieval terms, dictionary entries, events, entities or relations, but TL must validate local evidence before persisting or forwarding them.
+- Knowledge nodes must not force response brevity, decide final wording, replace provider output, or hide semantically relevant evidence just because a local rule thinks it is less important.
+- The downstream LLM owns answer wording, level of detail, tone and selection of supplied details according to the user's prompt.
+- If a Knowledge cleanup rule starts deciding which meaning is allowed in the answer, treat it as a guardrail regression and remove or make it explicitly user-configurable.
+
 ## Safety
 
 - Mutations must use the Flow Agent tool registry and safe executor.

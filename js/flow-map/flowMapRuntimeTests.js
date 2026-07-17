@@ -3217,7 +3217,8 @@ const runKnowledgeGraphSampleTest = async () => {
       preview: { x: left + step * 6, y: top },
       querySource: { x: left + step * 2.8, y: top + row },
       graphQuery: { x: left + step * 5, y: top + row },
-      contextPreview: { x: left + step * 6.2, y: top + row },
+      reasoning: { x: left + step * 6.2, y: top + row },
+      contextPreview: { x: left + step * 7.4, y: top + row },
       aiGraph: { x: left + step * 5, y: top + row * 2 },
       aiPreview: { x: left + step * 6.2, y: top + row * 2 },
     };
@@ -3456,6 +3457,35 @@ const runKnowledgeGraphSampleTest = async () => {
     paletteLabel: "Preview",
     config: { previewMode: "json", maxChars: 7000 },
   });
+  const reasoning = nodeBase({
+    name: "reasoning_composer",
+    type: "knowledge",
+    label: "Knowledge Reasoning Composer",
+    inputs: ["knowledge.graph.context"],
+    outputs: ["knowledge.reasoning.plan", "knowledge.graph.context"],
+    ...layout.reasoning,
+    tone: "cyan",
+    icon: "schema",
+    subtype: "knowledge-reasoning-composer",
+    category: "knowledge",
+    settingsSchema: { compositionMode: "rules|llm|hybrid", intentMode: "auto|source|mechanism|definition|timeline|comparison|fact", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", streaming: "boolean", responseFormat: "json|structured|text|markdown", systemPrompt: "string", promptTemplate: "string", outputInstructions: "string", maxFacts: "number", maxEvents: "number", includeBackground: "boolean", maxContextChars: "number", outputChannel: "string" },
+    paletteLabel: "Knowledge Reasoning Composer",
+    config: {
+      compositionMode: "hybrid",
+      intentMode: "auto",
+      providerProfile: "local_lm_studio",
+      providerType: "lm-studio",
+      provider: "lm-studio",
+      model: "local-model",
+      temperature: 0.05,
+      maxTokens: 900,
+      maxFacts: 14,
+      maxEvents: 12,
+      includeBackground: false,
+      maxContextChars: 4800,
+      outputChannel: "knowledge.graph.context",
+    },
+  });
   const aiGraph = nodeBase({
     name: "graph_ai",
     type: "aiAgent",
@@ -3500,7 +3530,7 @@ const runKnowledgeGraphSampleTest = async () => {
     paletteLabel: "Preview",
     config: { previewMode: "json", maxChars: 6000 },
   });
-  const nodes = [docSource, documentStore, chunker, extractor, semantic, graph, preview, querySource, graphQuery, contextPreview, aiGraph, aiPreview];
+  const nodes = [docSource, documentStore, chunker, extractor, semantic, graph, preview, querySource, graphQuery, reasoning, contextPreview, aiGraph, aiPreview];
   const links = [
     [docSource, documentStore, "document", "document"],
     [documentStore, chunker, "knowledge.document.created", "knowledge.document.created"],
@@ -3511,8 +3541,9 @@ const runKnowledgeGraphSampleTest = async () => {
     [graph, preview, "knowledge.graph.updated", "raw"],
     [graph, graphQuery, "knowledge.graph.updated", "knowledge.graph.updated"],
     [querySource, graphQuery, "knowledge.graph.query", "knowledge.graph.query"],
-    [graphQuery, contextPreview, "knowledge.graph.context", "raw"],
-    [graphQuery, aiGraph, "knowledge.graph.context", "task"],
+    [graphQuery, reasoning, "knowledge.graph.context", "knowledge.graph.context"],
+    [reasoning, contextPreview, "knowledge.graph.context", "raw"],
+    [reasoning, aiGraph, "knowledge.graph.context", "task"],
     [aiGraph, aiPreview, "diagnostic", "raw"],
   ];
   const createKnowledgeGraphSampleRuntimeLink = async ({ source, target, sourcePort, targetPort, index = 0 } = {}) => {

@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.177-flow-agent-clean-1";
+const RUNTIME_WORKER_VERSION = "0.1.205-source-boundary-markers-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -35,8 +35,8 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260711-reasoning-composer-1",
-    "ai-agent-runtime.js?v=kg-20260711-reasoning-composer-1",
+    "knowledge-runtime.js?v=kg-20260717-source-boundary-markers-1",
+    "ai-agent-runtime.js?v=kg-20260717-reasoning-evidence-only-1",
     "orchestrator-agent-runtime.js"
   );
 };

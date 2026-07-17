@@ -987,11 +987,25 @@ const withAiProviderConfigFields = (fields = [], { includeAdvanced = true } = {}
 ];
 
 const knowledgeAiPromptDefaults = (subtype = "") => {
+  if (subtype === "knowledge-dictionary-builder") {
+    return {
+      systemPrompt: "You are a Knowledge Dictionary Builder. Extract reusable lexical entries from local evidence only.",
+      promptTemplate: "Use the supplied chunks to propose names, roles, places, objects, concepts, creatures, sources and aliases that improve later graph extraction.",
+      outputInstructions: "Return strict JSON with entries. Every entry must include term, type, aliases, confidence and an exact evidence.quote copied from a supplied chunk.",
+    };
+  }
   if (subtype === "knowledge-event-builder") {
     return {
       systemPrompt: "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks.",
       promptTemplate: "Use only provided chunks and dictionary terms. Return strict JSON with events, rejectedCandidates, exact evidence quotes, source-language labels, ordered event types and short explanations.",
       outputInstructions: "Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, evidence.quote and explanation. Do not invent facts outside evidence.",
+    };
+  }
+  if (subtype === "entity-extractor") {
+    return {
+      systemPrompt: "You are a Knowledge Entity Extractor. Extract evidence-backed entities and relations from local chunks only.",
+      promptTemplate: "Use supplied chunks and dictionary terms. Prefer source-language labels, precise types and explicit relations.",
+      outputInstructions: "Return strict JSON with entities and relations. Every accepted entity/relation must include an exact evidence.quote copied from a supplied chunk.",
     };
   }
   if (subtype === "semantic-relation-enricher") {
@@ -1006,6 +1020,20 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
       systemPrompt: "You are a Knowledge Graph Builder Agent. Build a verified graph from local document chunks with evidence-backed entities and relations.",
       promptTemplate: "Use chunks, existing entities and relations as context. Prefer precise domain relations, preserve source-language labels and reject weak or absent evidence.",
       outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include an exact evidence quote.",
+    };
+  }
+  if (subtype === "graph-query") {
+    return {
+      systemPrompt: "You are a Knowledge Graph Query Expander. Improve retrieval only. Do not answer the user.",
+      promptTemplate: "Generate generic retrieval terms that help find evidence chunks for the query. Do not narrow, summarize or decide the final answer.",
+      outputInstructions: "Return strict JSON with retrievalTerms and optional intentHints. Terms must be generic verbs/concepts, not proper names unless already present in the user query.",
+    };
+  }
+  if (subtype === "knowledge-reasoning-composer") {
+    return {
+      systemPrompt: "You are a Knowledge Reasoning Composer. Build an answer plan from supplied graph evidence without inventing facts.",
+      promptTemplate: "Use the local reasoning plan, graph evidence and original source excerpts. Improve focus, selected evidence and answer boundaries while preserving enough source text for the downstream LLM.",
+      outputInstructions: "Return strict JSON with answerFocus and selectedEvidenceQuotes. Every selected quote must appear verbatim in the supplied evidence. Do not add final-answer boundaries, brevity rules or semantic narrowing.",
     };
   }
   return {
@@ -1265,7 +1293,9 @@ const configFieldDefinitions = (node = {}) => {
       ];
     }
     if (subtype === "entity-extractor") {
-      return [
+      return withAiProviderConfigFields([
+        { key: "entityMode", label: "Entity mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "extractionMode", label: "Extraction mode", type: "select", options: ["strict", "balanced", "wide"], defaultValue: "strict" },
         { key: "allowDocumentInput", label: "Allow direct document input", type: "checkbox", defaultValue: false },
         { key: "useDictionarySeeds", label: "Use Dictionary seeds", type: "checkbox", defaultValue: true },
@@ -1277,28 +1307,34 @@ const configFieldDefinitions = (node = {}) => {
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.6" },
         { key: "maxEntities", label: "Max entities", placeholder: "24" },
         { key: "maxRelations", label: "Max relations", placeholder: "36" },
+        { key: "maxChunks", label: "Max AI chunks", placeholder: "8" },
+        { key: "maxChunkChars", label: "Max chars per AI chunk", placeholder: "1600" },
         { key: "relationType", label: "Relation type", placeholder: "co_occurs" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.entity.created" },
-      ];
+      ]);
     }
     if (subtype === "knowledge-dictionary-builder") {
-      return [
+      return withAiProviderConfigFields([
+        { key: "dictionaryMode", label: "Dictionary mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "scope", label: "Dictionary scope", type: "select", options: ["document", "collection", "workspace"], defaultValue: "document" },
         { key: "language", label: "Language", placeholder: "auto, it, en, es, fr, de" },
         { key: "maxTerms", label: "Max terms", placeholder: "120" },
         { key: "minFrequency", label: "Min frequency", placeholder: "1" },
+        { key: "maxChunks", label: "Max AI chunks", placeholder: "8" },
+        { key: "maxChunkChars", label: "Max chars per AI chunk", placeholder: "1600" },
         { key: "previewTerms", label: "Preview terms", placeholder: "16" },
         { key: "previewIds", label: "Preview IDs", placeholder: "40" },
         { key: "replaceExisting", label: "Replace document dictionary", type: "checkbox", defaultValue: true },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.dictionary.updated" },
-      ];
+      ]);
     }
     if (subtype === "knowledge-event-builder") {
       return withAiProviderConfigFields([
-        { key: "extractionMode", label: "Extraction mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
+        { key: "eventMode", label: "Event mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxEvents", label: "Max events", placeholder: "80" },
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
@@ -1351,7 +1387,9 @@ const configFieldDefinitions = (node = {}) => {
       ]);
     }
     if (subtype === "graph-query") {
-      return mergeSchemaFields([
+      return withAiProviderConfigFields([
+        { key: "queryExpansionMode", label: "Query expansion mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "query", label: "Query", type: "textarea", placeholder: "Dio, Abramo, fede..." },
         { key: "depth", label: "Depth", placeholder: "1" },
         { key: "topK", label: "Top entities", placeholder: "12" },
@@ -1373,14 +1411,16 @@ const configFieldDefinitions = (node = {}) => {
       ]);
     }
     if (subtype === "knowledge-reasoning-composer") {
-      return [
-        { key: "intentMode", label: "Intent mode", type: "select", options: ["auto", "mechanism", "definition", "timeline", "comparison", "fact"], defaultValue: "auto" },
+      return withAiProviderConfigFields([
+        { key: "compositionMode", label: "Composition mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "intentMode", label: "Intent mode", type: "select", options: ["auto", "source", "mechanism", "danger", "definition", "timeline", "comparison", "fact"], defaultValue: "auto" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxFacts", label: "Max facts", placeholder: "8" },
         { key: "maxEvents", label: "Max events", placeholder: "12" },
         { key: "includeBackground", label: "Include background", type: "checkbox", defaultValue: false },
         { key: "maxContextChars", label: "Max context chars", placeholder: "4800" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.context" },
-      ];
+      ]);
     }
     return [
       { key: "title", label: "Title", placeholder: "Knowledge Document" },
@@ -2683,6 +2723,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.rag.context" },
     ],
     "entity-extractor": [
+      { iconName: "psychology", label: "AI", value: config.entityMode || "rules" },
       { iconName: "tune", label: "Mode", value: config.extractionMode || "strict" },
       { iconName: "memory", label: "Dict", value: boolInlineConfigValue(config.useDictionarySeeds ?? true, "seeds", "off") },
       { iconName: "data_object", label: "Entities", value: config.maxEntities || "24" },
@@ -2691,6 +2732,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.entity.created" },
     ],
     "knowledge-dictionary-builder": [
+      { iconName: "psychology", label: "Mode", value: config.dictionaryMode || "rules" },
       { iconName: "filter_alt", label: "Scope", value: config.scope || "document" },
       { iconName: "translate", label: "Language", value: config.language || "auto" },
       { iconName: "data_object", label: "Limit", value: config.maxTerms || "120" },
@@ -2699,7 +2741,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.dictionary.updated" },
     ],
     "knowledge-event-builder": [
-      { iconName: "timeline", label: "Mode", value: config.extractionMode || "rules" },
+      { iconName: "timeline", label: "Mode", value: config.eventMode || (config.extractionMode === "ai" ? "llm" : config.extractionMode) || "rules" },
       { iconName: "tune", label: "Provider", value: config.providerProfile || "rules" },
       { iconName: "data_object", label: "Events", value: config.maxEvents || "80" },
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
@@ -2736,6 +2778,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
     ] : [
       { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },
+      { iconName: "psychology", label: "Expansion", value: config.queryExpansionMode || "rules" },
       { iconName: "search", label: "Query", value: config.query || "event query" },
       { iconName: "tune", label: "Depth", value: config.depth || "1" },
       { iconName: "data_object", label: "Top K", value: config.topK || "12" },
@@ -2745,6 +2788,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
     ],
     "knowledge-reasoning-composer": [
+      { iconName: "psychology", label: "Mode", value: config.compositionMode || "rules" },
       { iconName: "schema", label: "Intent", value: config.intentMode || "auto" },
       { iconName: "fact_check", label: "Facts", value: config.maxFacts || "8" },
       { iconName: "timeline", label: "Events", value: config.maxEvents || "12" },
