@@ -2167,11 +2167,12 @@ const previewTextForRecord = (record = null, mode = "auto", maxChars = 2000) => 
   return fullText.length > maxChars ? `${fullText.slice(0, maxChars)}\n...` : fullText;
 };
 
-const openPreviewPayloadDialog = (node = {}) => {
-  const record = previewRecordForNode(node);
+const openPreviewPayloadDialog = (node = {}, options = {}) => {
+  const record = options.record || previewRecordForNode(node);
   if (!record) return;
   const config = nodeRuntimeConfig(node);
   const mode = String(config.previewMode || config.mode || "auto").toLowerCase();
+  const previewKey = options.previewKey || node.id || `preview_${Date.now()}`;
   const tabs = [
     { id: "mapped", label: "Mapped", value: record.payload },
     { id: "graph", label: "Graph", value: record.payload, view: "graph" },
@@ -2193,14 +2194,14 @@ const openPreviewPayloadDialog = (node = {}) => {
     else activeMatch = Math.max(0, Math.min(activeMatch, matchCount - 1));
     const restoreSearchFocus = () => {
       window.setTimeout(() => {
-        const input = document.querySelector(`[data-preview-search-input="${escapeSelectorValue(node.id)}"]`);
+        const input = document.querySelector(`[data-preview-search-input="${escapeSelectorValue(previewKey)}"]`);
         if (!input) return;
         input.focus?.();
         input.setSelectionRange?.(input.value.length, input.value.length);
       }, 0);
     };
     const refreshDialogBody = ({ focusSearch = false } = {}) => {
-      const host = document.querySelector(`[data-preview-dialog-body="${escapeSelectorValue(node.id)}"]`);
+      const host = document.querySelector(`[data-preview-dialog-body="${escapeSelectorValue(previewKey)}"]`);
       if (host) host.replaceChildren(renderBody());
       if (focusSearch) restoreSearchFocus();
     };
@@ -2223,7 +2224,7 @@ const openPreviewPayloadDialog = (node = {}) => {
           { class: "tl-flow-preview-search" },
           icon("search", "sm"),
           _.input({
-            "data-preview-search-input": node.id,
+            "data-preview-search-input": previewKey,
             value: searchQuery,
             placeholder: "Search payload",
             "aria-label": "Search payload",
@@ -2274,11 +2275,11 @@ const openPreviewPayloadDialog = (node = {}) => {
     class: "tl-flow-preview-dialog",
     panelClass: "tl-flow-config-panel tl-flow-preview-dialog-panel",
     size: "lg",
-    title: `${node.label || "Preview"} payload`,
-    subtitle: `${record.channel || "runtime"} · ${record.eventType || "event"} · ${formatShortDate(record.createdAt)}`,
-    icon: "visibility",
+    title: options.title || `${node.label || "Preview"} payload`,
+    subtitle: options.subtitle || `${record.channel || "runtime"} · ${record.eventType || "event"} · ${formatShortDate(record.createdAt)}`,
+    icon: options.icon || "visibility",
     closeButton: true,
-    content: () => _.div({ "data-preview-dialog-body": node.id }, renderBody()),
+    content: () => _.div({ "data-preview-dialog-body": previewKey }, renderBody()),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: () => copyRuntimeValue(active()?.value) }, icon("content_copy", "sm"), "Copy"),

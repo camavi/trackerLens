@@ -984,11 +984,18 @@ const tokenUsageForNode = (node = {}) => {
 
 const nodeHasTokenAccounting = (node = {}) => {
   const subtype = nodeSubtype(node);
+  const config = node.metadata?.config || {};
+  const usage = node.metadata?.tokenUsage || {};
+  if (usage.totalTokens || usage.lastTokens || config.tokenUsage || config.lastTokens) return true;
   if (node.type === "aiAgent" || nodeCategory(node) === "ai-agents") return true;
   return nodeCategory(node) === "knowledge" && [
+    "knowledge-dictionary-builder",
     "knowledge-event-builder",
+    "entity-extractor",
     "semantic-relation-enricher",
     "knowledge-graph-builder-agent",
+    "graph-query",
+    "knowledge-reasoning-composer",
     "embedding-generator",
     "vector-memory",
   ].includes(subtype);
@@ -1063,6 +1070,73 @@ const renderNodeMetricRows = (node = {}, ...labels) => [
   renderNodeTokenMetrics(node),
 ].filter(Boolean);
 
+const latestOutputPreviewRecordForNode = (node = {}, outputPorts = []) => {
+  if (!node?.id) return null;
+  const isRuntimeActivityEvent = (event = {}) =>
+    event.meta?.runtimeActivityVisual ||
+    String(event.eventType || "").toLowerCase().includes("_runtime_activity") ||
+    String(event.eventType || "").toLowerCase().endsWith("_activity");
+  const outputNames = new Set([
+    ...(outputPorts || []).map((port) => port.name || port.id || port.key || port.channel),
+    ...(node.outputs || []),
+    ...(node.channels || []),
+  ].filter(Boolean).map(String).filter((name) => name !== "all"));
+  return (state.runtime.events || [])
+    .filter(isPreviewPayloadEvent)
+    .filter((event) => !isRuntimeActivityEvent(event))
+    .filter((event) => event.sourceNodeId === node.id || event.meta?.executedNodeId === node.id || event.meta?.knowledgeRuntime === node.id || event.meta?.aiAgentRuntime === node.id)
+    .sort((a, b) => {
+      const createdDiff = Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0);
+      if (createdDiff) return createdDiff;
+      const aDirect = outputNames.has(String(a.channel || "")) ? 1 : 0;
+      const bDirect = outputNames.has(String(b.channel || "")) ? 1 : 0;
+      return bDirect - aDirect;
+    })
+    .map((event) => {
+      const sourcePayload = event.originalPayload !== undefined && event.originalPayload !== null ? event.originalPayload : event.payload;
+      return {
+        eventId: event.id || "",
+        channel: event.channel || "runtime",
+        eventType: event.eventType || "event",
+        sourceNodeId: event.sourceNodeId || node.id,
+        payload: sourcePayload,
+        rawPayload: event.payload,
+        originalPayload: event.originalPayload !== undefined && event.originalPayload !== null && event.originalPayload !== event.payload ? event.payload : null,
+        createdAt: event.createdAt || new Date().toISOString(),
+        sizeBytes: event.sizeBytes || 0,
+      };
+    })[0] || null;
+};
+
+const renderNodeOutputPreviewButton = (node = {}, outputPorts = []) => {
+  const record = latestOutputPreviewRecordForNode(node, outputPorts);
+  return btn({
+    class: `tl-flow-node-out-preview-btn${record ? "" : " is-empty"}`,
+    "data-flow-node-out-preview-btn": node.id || "",
+    "aria-label": `View ${node.label || node.id || "node"} OUT payload`,
+    title: record
+      ? `View OUT payload: ${record.channel} · ${record.eventType} · ${formatShortDate(record.createdAt)}`
+      : "No OUT payload yet",
+    disabled: !record,
+    onPointerDown: (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    onclick: (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!record) return;
+      openPreviewPayloadDialog(node, {
+        record,
+        previewKey: `${node.id || "node"}_out_preview`,
+        title: `${node.label || "Node"} OUT payload`,
+        subtitle: `${record.channel || "runtime"} · ${record.eventType || "event"} · ${formatShortDate(record.createdAt)}`,
+        icon: "visibility",
+      });
+    },
+  }, _.span({ class: "tl-flow-node-out-preview-label" }, "OUT"), icon("visibility", "sm"));
+};
+
 const replaceRenderedNode = (selector, nextNode, { preserveScroll = false } = {}) => {
   const current = document.querySelector(selector);
   if (!current || !nextNode) return false;
@@ -1110,6 +1184,12 @@ const refreshNodeRuntimeDom = (graph, activity) => {
 
     if (isPreviewNode(node)) {
       replaceRenderedNode(`[data-flow-preview-panel="${escapeSelectorValue(node.id)}"]`, renderPreviewNodePanel(node), { preserveScroll: true });
+    }
+
+    const outputPreviewButton = document.querySelector(`[data-flow-node-out-preview-btn="${escapeSelectorValue(node.id)}"]`);
+    if (outputPreviewButton) {
+      if (isPreviewNode(node)) outputPreviewButton.remove();
+      else outputPreviewButton.replaceWith(renderNodeOutputPreviewButton(node, nodePorts(node, "out")));
     }
 
     const testButton = document.querySelector(`[data-flow-node-test-btn="${escapeSelectorValue(node.id)}"]`);
@@ -2048,26 +2128,30 @@ const renderCanvas = () => {
             ),
             _.span(
               { class: "tl-flow-node-footer", "data-flow-node-footer": node.id },
-              _.em({ "data-flow-node-footer-info": "true" }, footerInfo),
-              canRunNodeTest || blockedChildTest ? btn({
-                class: "tl-flow-node-test-btn",
-                "data-flow-node-test-btn": node.id,
-                "data-root-blocked": blockedChildTest ? "true" : "false",
-                "aria-label": canRunNodeTest ? `Run live test from ${view.title}` : `${view.title} starts from parent`,
-                title: testButtonTitle,
-                disabled: blockedChildTest || state.testRun.running || processingNode,
-                onPointerDown: (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                },
-                onclick: (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (blockedChildTest) return;
-                  runFlowMapLiveTest(node);
-                },
-              }, icon((state.testRun.running && isInTestRun) || processingNode ? "hourglass_top" : "play_arrow", "sm")) : null,
-              _.span({ "data-flow-node-footer-ports": "true" }, isAgentBridge ? "1 agent · 1 in/out" : `${fullInputPorts.length} in · ${fullOutputPorts.length} out`)
+              _.span(
+                { class: "tl-flow-node-footer-main" },
+                _.em({ "data-flow-node-footer-info": "true" }, footerInfo),
+                canRunNodeTest || blockedChildTest ? btn({
+                  class: "tl-flow-node-test-btn",
+                  "data-flow-node-test-btn": node.id,
+                  "data-root-blocked": blockedChildTest ? "true" : "false",
+                  "aria-label": canRunNodeTest ? `Run live test from ${view.title}` : `${view.title} starts from parent`,
+                  title: testButtonTitle,
+                  disabled: blockedChildTest || state.testRun.running || processingNode,
+                  onPointerDown: (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  },
+                  onclick: (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (blockedChildTest) return;
+                    runFlowMapLiveTest(node);
+                  },
+                }, icon((state.testRun.running && isInTestRun) || processingNode ? "hourglass_top" : "play_arrow", "sm")) : null,
+                _.span({ class: "tl-flow-node-footer-ports", "data-flow-node-footer-ports": "true" }, isAgentBridge ? "1 agent · 1 in/out" : `${fullInputPorts.length} in · ${fullOutputPorts.length} out`)
+              ),
+              isAgentBridge || isPreviewNode(node) ? null : renderNodeOutputPreviewButton(node, fullOutputPorts)
             ),
             isAgentBridge ? null : _.span({
               class: "tl-flow-node-resize",

@@ -2452,32 +2452,50 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
 .tl-flow-node-footer {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin: 2px -4px 0;
+  padding: 0;
+  color: rgba(226, 232, 240, 0.78);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tl-flow-node-footer-main {
+  min-width: 0;
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  margin: 2px -4px 0;
   padding: 6px 7px;
-  color: rgba(226, 232, 240, 0.78);
   border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.16);
   border-radius: 6px;
   background: rgba(var(--node-rgb, 214, 226, 235), 0.07);
 }
 
-.tl-flow-node-footer em,
-.tl-flow-node-footer span {
+.tl-flow-node-footer-main em,
+.tl-flow-node-footer-main span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tl-flow-node-footer span {
+.tl-flow-node-footer-main span {
   flex: 0 0 auto;
   color: rgb(var(--node-rgb, 214, 226, 235));
   font-size: 9px;
   font-weight: 800;
   text-transform: uppercase;
   text-align: right;
+}
+
+.tl-flow-node-footer-main .tl-flow-node-footer-ports {
+  flex: 0 1 auto;
+  min-width: 58px;
+  max-width: 112px;
 }
 
 .tl-flow-node-test-btn {
@@ -2508,13 +2526,74 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
 }
 
 .tl-flow-node-test-btn span,
-.tl-flow-node-test-btn .cms-icon {
+.tl-flow-node-test-btn .cms-icon,
+.tl-flow-node-out-preview-btn span,
+.tl-flow-node-out-preview-btn .cms-icon {
   flex: initial;
   min-width: 0;
   font-size: inherit;
   font-weight: inherit;
   text-align: center;
   text-transform: none;
+}
+
+.tl-flow-node-out-preview-btn {
+  width: auto;
+  min-width: 58px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: rgb(var(--node-rgb, 214, 226, 235));
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.68);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.14), transparent 42%),
+    rgba(var(--node-rgb, 214, 226, 235), 0.12),
+    rgba(3, 9, 14, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(2, 6, 23, 0.82),
+    0 0 18px rgba(var(--node-rgb, 214, 226, 235), 0.22);
+  text-transform: uppercase;
+}
+
+.tl-flow-node-out-preview-btn:hover {
+  color: rgb(var(--node-rgb, 214, 226, 235));
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.9);
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.18), transparent 44%),
+    rgba(var(--node-rgb, 214, 226, 235), 0.2);
+  box-shadow:
+    0 0 0 1px rgba(2, 6, 23, 0.86),
+    0 0 24px rgba(var(--node-rgb, 214, 226, 235), 0.32);
+}
+
+.tl-flow-node-out-preview-label {
+  min-width: 0;
+  color: inherit;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.tl-flow-node-out-preview-btn .cms-icon {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  color: inherit;
+}
+
+.tl-flow-node-out-preview-btn:disabled,
+.tl-flow-node-out-preview-btn.is-empty {
+  opacity: 0.48;
+  cursor: not-allowed;
+  box-shadow:
+    0 0 0 1px rgba(2, 6, 23, 0.78),
+    0 0 12px rgba(var(--node-rgb, 214, 226, 235), 0.1);
 }
 
 .tl-flow-edge-label.is-test-path {
