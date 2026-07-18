@@ -330,6 +330,13 @@ const setRuntimeState = (runtime) => {
   setRuntimeSignal(runtime);
 };
 
+const isFlowMapEditableElement = (target = null) =>
+  Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+
+const isFlowMapNodeEditorActive = () =>
+  isFlowMapEditableElement(document.activeElement) &&
+  Boolean(document.activeElement?.closest?.(".tl-flow-node, .tl-flow-inspector, .tl-flow-config-panel"));
+
 const syncProcessorRuntime = (workspaceId = state.filters.workspaceId) => {
   if (!window.TrackerLensProcessorRuntime?.get) return;
   const id = workspaceId || "workspace_global";
@@ -1206,9 +1213,12 @@ const loadRuntime = async (options = {}) => {
     state.loading = false;
     setLoadingSignal(state.loading);
     if (!state.interaction) {
-      const canPatchRuntime = silent && state.mounted && previousGraphSignature === runtimeGraphSignature() && !state.error;
+      const nextGraphSignature = runtimeGraphSignature();
+      const editorActive = isFlowMapNodeEditorActive();
+      const canPatchRuntime = silent && state.mounted && !state.error && (previousGraphSignature === nextGraphSignature || editorActive);
       if (canPatchRuntime) refreshRuntimeDom({ preserveScroll: true });
       else mount({ preserveScroll: silent });
+      if (editorActive && previousGraphSignature !== nextGraphSignature) state.pendingRuntimeRefresh = true;
     }
   }
 };

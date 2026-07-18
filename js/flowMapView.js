@@ -80,12 +80,21 @@ connectLiveEventBus();
 window.setInterval(() => {
   if (isFlowMapRecoveryMode()) return;
   if (state.loading || state.runtimeLoadInFlight) return;
-  if (state.interaction || Date.now() - state.lastInteractionAt < 750) {
+  if (state.interaction || isFlowMapNodeEditorActive() || Date.now() - state.lastInteractionAt < 750) {
     state.pendingRuntimeRefresh = true;
     return;
   }
   loadRuntime({ silent: true });
 }, 15000);
+document.addEventListener("focusout", (event) => {
+  if (!isFlowMapEditableElement(event.target) || !state.pendingRuntimeRefresh) return;
+  window.setTimeout(() => {
+    if (state.pendingRuntimeRefresh && !state.interaction && !isFlowMapNodeEditorActive()) {
+      state.pendingRuntimeRefresh = false;
+      loadRuntime({ silent: true });
+    }
+  }, 150);
+});
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   const target = event.target;
