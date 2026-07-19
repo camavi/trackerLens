@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.205-source-boundary-markers-1";
+const RUNTIME_WORKER_VERSION = "0.1.219-mechanism-evidence-priority-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -20,6 +20,13 @@ const post = (message = {}) => {
   });
 };
 
+self.TrackerLensKnowledgeDebug = (debug = {}) => {
+  post({
+    type: "runtime-worker:knowledge-debug",
+    debug,
+  });
+};
+
 const loadRuntimeScripts = () => {
   if (self.TrackerLensEventBus) return;
   importScripts(
@@ -35,7 +42,7 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260717-source-boundary-markers-1",
+    "knowledge-runtime.js?v=kg-20260719-mechanism-evidence-priority-1",
     "ai-agent-runtime.js?v=kg-20260717-reasoning-evidence-only-1",
     "orchestrator-agent-runtime.js"
   );

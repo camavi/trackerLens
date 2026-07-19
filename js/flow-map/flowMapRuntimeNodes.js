@@ -989,50 +989,50 @@ const withAiProviderConfigFields = (fields = [], { includeAdvanced = true } = {}
 const knowledgeAiPromptDefaults = (subtype = "") => {
   if (subtype === "knowledge-dictionary-builder") {
     return {
-      systemPrompt: "You are a Knowledge Dictionary Builder. Extract reusable lexical entries from local evidence only.",
-      promptTemplate: "Use the supplied chunks to propose names, roles, places, objects, concepts, creatures, sources and aliases that improve later graph extraction.",
-      outputInstructions: "Return strict JSON with entries. Every entry must include term, type, aliases, confidence and an exact evidence.quote copied from a supplied chunk.",
+      systemPrompt: "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence.",
+      promptTemplate: "Use the supplied chunks to propose stable names, roles, places, objects, concepts, creatures, sources, aliases, semantic hints and relation cues that improve later graph extraction without inventing labels.",
+      outputInstructions: "Return strict JSON with entries. Every entry must include term, type, aliases, confidence, explanation and an exact evidence.quote copied from a supplied chunk. Reject weak fragments and unsupported aliases.",
     };
   }
   if (subtype === "knowledge-event-builder") {
     return {
-      systemPrompt: "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks.",
-      promptTemplate: "Use only provided chunks and dictionary terms. Return strict JSON with events, rejectedCandidates, exact evidence quotes, source-language labels, ordered event types and short explanations.",
-      outputInstructions: "Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, evidence.quote and explanation. Do not invent facts outside evidence.",
+      systemPrompt: "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks while preserving temporal order and causal roles.",
+      promptTemplate: "Use only provided chunks and dictionary terms. Extract explicit actions, state changes, causality, preparation, transformation, speech, failed attempts and outcomes as separate ordered events with source-language labels.",
+      outputInstructions: "Return strict JSON with events and rejectedCandidates. Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, exact evidence.quote and explanation. Do not infer facts outside evidence.",
     };
   }
   if (subtype === "entity-extractor") {
     return {
-      systemPrompt: "You are a Knowledge Entity Extractor. Extract evidence-backed entities and relations from local chunks only.",
-      promptTemplate: "Use supplied chunks and dictionary terms. Prefer source-language labels, precise types and explicit relations.",
-      outputInstructions: "Return strict JSON with entities and relations. Every accepted entity/relation must include an exact evidence.quote copied from a supplied chunk.",
+      systemPrompt: "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.",
+      promptTemplate: "Use supplied chunks and dictionary terms to propose precise entities and directly supported relations. Keep entities stable, avoid weak fragments, and do not collapse later consequences into earlier causes.",
+      outputInstructions: "Return strict JSON with entities and relations. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.",
     };
   }
   if (subtype === "semantic-relation-enricher") {
     return {
-      systemPrompt: "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence.",
-      promptTemplate: "Use only candidate evidence text. Prefer explicit semantic relations over generic links and reject unsupported pairs.",
+      systemPrompt: "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence. For narrative text, respect event order and causal roles.",
+      promptTemplate: "Use only candidate evidence text and chunk context. Prefer explicit semantic relations over generic links and reject unsupported pairs. Use healed_by only when the evidence directly shows the patient being cured by that object/source. If an object gains a healing property after the cure, classify that as has_property or causes only when supported, not as person healed_by object.",
       outputInstructions: "Return strict JSON with relations containing candidateId, relationType, confidence and explanation.",
     };
   }
   if (subtype === "knowledge-graph-builder-agent") {
     return {
-      systemPrompt: "You are a Knowledge Graph Builder Agent. Build a verified graph from local document chunks with evidence-backed entities and relations.",
-      promptTemplate: "Use chunks, existing entities and relations as context. Prefer precise domain relations, preserve source-language labels and reject weak or absent evidence.",
-      outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include an exact evidence quote.",
+      systemPrompt: "You are a Knowledge Graph Builder Agent. Build a verified, evidence-backed knowledge graph from local document chunks while preserving temporal order, causal roles and source-language labels.",
+      promptTemplate: "Use chunks, existing entities and base relations as context. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence.",
+      outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity.",
     };
   }
   if (subtype === "graph-query") {
     return {
-      systemPrompt: "You are a Knowledge Graph Query Expander. Improve retrieval only. Do not answer the user.",
-      promptTemplate: "Generate generic retrieval terms that help find evidence chunks for the query. Do not narrow, summarize or decide the final answer.",
-      outputInstructions: "Return strict JSON with retrievalTerms and optional intentHints. Terms must be generic verbs/concepts, not proper names unless already present in the user query.",
+      systemPrompt: "You are a Knowledge Graph Query Expander. Improve retrieval only from the user's query and runtime intent. Do not answer, summarize, filter evidence or decide what the final answer should contain.",
+      promptTemplate: "Generate generic, multilingual retrieval terms that can help find relevant entities, relations, events and chunks. Preserve the original query meaning and never add story-specific names, causal conclusions or answer boundaries.",
+      outputInstructions: "Return strict JSON with retrievalTerms, optional intentHints and a short retrieval-only rationale. Omit unsupported or over-specific terms. Terms must be generic verbs/concepts, not proper names unless already present in the user query.",
     };
   }
   if (subtype === "knowledge-reasoning-composer") {
     return {
       systemPrompt: "You are a Knowledge Reasoning Composer. Build an answer plan from supplied graph evidence without inventing facts.",
-      promptTemplate: "Use the local reasoning plan, graph evidence and original source excerpts. Improve focus, selected evidence and answer boundaries while preserving enough source text for the downstream LLM.",
+      promptTemplate: "Use the local reasoning plan, graph evidence and original source excerpts. Improve evidence focus and selected evidence while preserving enough source text for the downstream LLM.",
       outputInstructions: "Return strict JSON with answerFocus and selectedEvidenceQuotes. Every selected quote must appear verbatim in the supplied evidence. Do not add final-answer boundaries, brevity rules or semantic narrowing.",
     };
   }
@@ -1294,7 +1294,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "entity-extractor") {
       return withAiProviderConfigFields([
-        { key: "entityMode", label: "Entity mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "entityMode", label: "Entity mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "extractionMode", label: "Extraction mode", type: "select", options: ["strict", "balanced", "wide"], defaultValue: "strict" },
         { key: "allowDocumentInput", label: "Allow direct document input", type: "checkbox", defaultValue: false },
@@ -1316,7 +1316,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "knowledge-dictionary-builder") {
       return withAiProviderConfigFields([
-        { key: "dictionaryMode", label: "Dictionary mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "dictionaryMode", label: "Dictionary mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "scope", label: "Dictionary scope", type: "select", options: ["document", "collection", "workspace"], defaultValue: "document" },
         { key: "language", label: "Language", placeholder: "auto, it, en, es, fr, de" },
@@ -1334,7 +1334,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "knowledge-event-builder") {
       return withAiProviderConfigFields([
-        { key: "eventMode", label: "Event mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "eventMode", label: "Event mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxEvents", label: "Max events", placeholder: "80" },
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
@@ -1359,7 +1359,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "semantic-relation-enricher") {
       return withAiProviderConfigFields([
-        { key: "enrichmentMode", label: "Enrichment mode", type: "select", options: ["rules", "ai", "hybrid"], defaultValue: "rules" },
+        { key: "enrichmentMode", label: "Enrichment mode", type: "select", options: ["ai", "hybrid", "rules"], defaultValue: "ai" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxRelations", label: "Max semantic relations", placeholder: "48" },
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.55" },
@@ -1388,7 +1388,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "graph-query") {
       return withAiProviderConfigFields([
-        { key: "queryExpansionMode", label: "Query expansion mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "queryExpansionMode", label: "Query expansion mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "query", label: "Query", type: "textarea", placeholder: "Dio, Abramo, fede..." },
         { key: "depth", label: "Depth", placeholder: "1" },
@@ -1412,7 +1412,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "knowledge-reasoning-composer") {
       return withAiProviderConfigFields([
-        { key: "compositionMode", label: "Composition mode", type: "select", options: ["rules", "llm", "hybrid"], defaultValue: "rules" },
+        { key: "compositionMode", label: "Composition mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         { key: "intentMode", label: "Intent mode", type: "select", options: ["auto", "source", "mechanism", "danger", "definition", "timeline", "comparison", "fact"], defaultValue: "auto" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "maxFacts", label: "Max facts", placeholder: "8" },
@@ -2724,7 +2724,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.rag.context" },
     ],
     "entity-extractor": [
-      { iconName: "psychology", label: "AI", value: config.entityMode || "rules" },
+      { iconName: "psychology", label: "AI", value: config.entityMode || "llm" },
       { iconName: "tune", label: "Mode", value: config.extractionMode || "strict" },
       { iconName: "memory", label: "Dict", value: boolInlineConfigValue(config.useDictionarySeeds ?? true, "seeds", "off") },
       { iconName: "data_object", label: "Entities", value: config.maxEntities || "24" },
@@ -2733,7 +2733,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.entity.created" },
     ],
     "knowledge-dictionary-builder": [
-      { iconName: "psychology", label: "Mode", value: config.dictionaryMode || "rules" },
+      { iconName: "psychology", label: "Mode", value: config.dictionaryMode || "llm" },
       { iconName: "filter_alt", label: "Scope", value: config.scope || "document" },
       { iconName: "translate", label: "Language", value: config.language || "auto" },
       { iconName: "data_object", label: "Limit", value: config.maxTerms || "120" },
@@ -2742,8 +2742,8 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.dictionary.updated" },
     ],
     "knowledge-event-builder": [
-      { iconName: "timeline", label: "Mode", value: config.eventMode || (config.extractionMode === "ai" ? "llm" : config.extractionMode) || "rules" },
-      { iconName: "tune", label: "Provider", value: config.providerProfile || "rules" },
+      { iconName: "timeline", label: "Mode", value: config.eventMode || (config.extractionMode === "ai" ? "llm" : config.extractionMode) || "llm" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.providerType || "lm-studio" },
       { iconName: "data_object", label: "Events", value: config.maxEvents || "80" },
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
@@ -2758,8 +2758,8 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.updated" },
     ],
     "semantic-relation-enricher": [
-      { iconName: "psychology", label: "Mode", value: config.enrichmentMode || "rules" },
-      { iconName: "tune", label: "Provider", value: config.providerProfile || "rules" },
+      { iconName: "psychology", label: "Mode", value: config.enrichmentMode || "ai" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.providerType || "lm-studio" },
       { iconName: "hub", label: "Relations", value: config.maxRelations || "48" },
       { iconName: "speed", label: "Confidence", value: config.confidenceThreshold ?? "0.55" },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
@@ -2779,7 +2779,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
     ] : [
       { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },
-      { iconName: "psychology", label: "Expansion", value: config.queryExpansionMode || "rules" },
+      { iconName: "psychology", label: "Expansion", value: config.queryExpansionMode || "llm" },
       { iconName: "search", label: "Query", value: config.query || "event query" },
       { iconName: "tune", label: "Depth", value: config.depth || "1" },
       { iconName: "data_object", label: "Top K", value: config.topK || "12" },
@@ -2789,7 +2789,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
     ],
     "knowledge-reasoning-composer": [
-      { iconName: "psychology", label: "Mode", value: config.compositionMode || "rules" },
+      { iconName: "psychology", label: "Mode", value: config.compositionMode || "llm" },
       { iconName: "schema", label: "Intent", value: config.intentMode || "auto" },
       { iconName: "fact_check", label: "Facts", value: config.maxFacts || "8" },
       { iconName: "timeline", label: "Events", value: config.maxEvents || "12" },

@@ -294,6 +294,13 @@ Main files:
 - Reasoning Composer danger required facts: generic wounded/injured danger cues require overlap with the query subjects before an event is promoted into the required danger chain.
 - Reasoning Composer danger relation facts: non-danger relation types are filtered from danger supporting facts even when their evidence contains a risk word; reasoning evidence joining now deduplicates repeated paragraphs across evidence groups.
 - Reasoning Composer LLM quote validation: LLM-selected evidence quotes are only mechanically validated against supplied evidence before being merged into `primaryEvidenceText`; they are not filtered by intent.
+- Dictionary LLM diagnostics: Dictionary Builder now distinguishes stored dictionary size from preview size in OUT, reports LLM chunk coverage diagnostics, and filters false LLM lexical seeds with the same weak/stop-token checks used by local dictionary extraction while keeping pure `llm` mode free of rule fallback.
+- Entity Extractor hybrid accepted-output fallback: hybrid entity extraction now triggers the rules pass when accepted/persisted entities or relations fall below threshold after validation, even if the raw provider proposal count was high.
+- Semantic Relation Enricher hybrid sparse fallback: sparse accepted AI semantic relations now trigger rule/supplemental completion in `hybrid`, with accepted AI relations retained and fallback diagnostics exposed.
+- Hybrid fast fallback: Dictionary Builder, Entity Extractor and Event Builder keep per-chunk LLM retries for pure `llm` only; `hybrid` now uses bounded global LLM attempts before rule fallback to avoid long-running provider loops.
+- Knowledge LLM console diagnostics: every Knowledge node input and LLM request now logs `[TL Knowledge LLM #n]` with channel/run id, mode/promptMode, provider/model, chunk/candidate counts, prompt size and prompt preview for loop debugging.
+- Direct healing semantic rule: fallback semantic `healed_by` now requires direct cure action evidence near the patient/mechanism and ignores general aftermath/property statements such as water later gaining healing power.
+- Mechanism evidence priority: Graph Query now protects concrete healing/process chunks even without Event Builder events and keeps protected mechanism evidence ahead of generic intro evidence unless full document order is configured.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

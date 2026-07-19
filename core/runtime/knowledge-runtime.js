@@ -310,6 +310,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return textOf(payload?.text || payload?.content || payload?.body || payload?.markdown || payload?.document || payload);
   };
 
+  let knowledgeLlmDebugSeq = 0;
+  const compactDebugText = (text = "", limit = 1000) =>
+    String(text || "").replace(/\s+/g, " ").trim().slice(0, limit);
+
+  const knowledgeLlmDebug = (label = "", details = {}) => {
+    try {
+      const seq = knowledgeLlmDebugSeq += 1;
+      const payload = {
+        at: new Date().toISOString(),
+        seq,
+        label,
+        ...details,
+      };
+      console.log(`[TL Knowledge LLM #${seq}] ${label}`, payload);
+      self.TrackerLensKnowledgeDebug?.(payload);
+    } catch (_) {}
+  };
+
   const splitConfigList = (value = "") =>
     Array.isArray(value)
       ? value.filter(Boolean).map((item) => String(item).trim()).filter(Boolean)
@@ -1151,7 +1169,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const graphQueryExpansionMode = (config = {}) => {
-    const mode = String(config.queryExpansionMode || config.expansionMode || config.compositionMode || "rules").toLowerCase().trim();
+    const mode = String(config.queryExpansionMode || config.expansionMode || config.compositionMode || "llm").toLowerCase().trim();
     if (mode === "ai") return "llm";
     return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
   };
@@ -1179,15 +1197,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Knowledge Graph Query Expander. Improve retrieval only. Do not answer the user."
+      "You are a Knowledge Graph Query Expander. Improve retrieval only from the user's query and runtime intent. Do not answer, summarize, filter evidence or decide what the final answer should contain."
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Generate generic retrieval terms that help find evidence chunks for the query. Do not narrow, summarize or decide the final answer."
+      "Generate generic, multilingual retrieval terms that can help find relevant entities, relations, events and chunks. Preserve the original query meaning and never add story-specific names, causal conclusions or answer boundaries."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
-      "Return strict JSON with retrievalTerms and optional intentHints. Terms must be generic verbs/concepts, not proper names unless already present in the user query."
+      "Return strict JSON with retrievalTerms, optional intentHints and a short retrieval-only rationale. Omit unsupported or over-specific terms. Terms must be generic verbs/concepts, not proper names unless already present in the user query."
     );
     const prompt = [
       systemPrompt,
@@ -1232,6 +1250,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
           max_tokens: Math.max(96, Math.min(600, knowledgeAiNumberConfig(config.maxTokens, 360))),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
         };
+      knowledgeLlmDebug("graph-query-expansion:request", {
+        mode,
+        provider: provider.id || providerType || "",
+        providerType,
+        model,
+        promptChars: prompt.length,
+        maxTokens: body.max_tokens || body.options?.num_predict || 0,
+        query: compactDebugText(query, 240),
+        promptPreview: compactDebugText(prompt),
+      });
       const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
       if (!response.ok) {
         const errorText = await chatErrorText(response);
@@ -1727,7 +1755,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const dictionaryBuildMode = (config = {}) => {
-    const mode = String(config.dictionaryMode || config.extractionMode || config.enrichmentMode || "rules").toLowerCase().trim();
+    const mode = String(config.dictionaryMode || config.extractionMode || config.enrichmentMode || "llm").toLowerCase().trim();
     if (mode === "ai") return "llm";
     return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
   };
@@ -1755,8 +1783,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
     );
     if (!termChunk) return null;
     const lemma = dictionaryLemma(term, language);
-    if (!lemma || dictionaryWeakLexicalEntry(term, lemma)) return null;
-    const type = normalizeAiDictionaryType(item.type || item.entityType || item.kind || item.typeCandidates?.[0]?.type || "");
+    const profile = languageProfiles[language] || {};
+    const stopWords = new Set([
+      ...entityStopWords,
+      ...(profile.stopWords || []).map(normalizeEntityToken),
+      ...(profile.weakStarts || []).map(normalizeEntityToken),
+      ...dictionaryFunctionTokens,
+      ...weakSentenceStartEntityTokens,
+    ]);
+    const lemmaWords = lemma.split(/\s+/).filter(Boolean);
+    const contentWords = lemmaWords.filter((word) =>
+      !stopWords.has(word) &&
+      !dictionaryFunctionTokens.has(word) &&
+      !weakSentenceStartEntityTokens.has(word)
+    );
+    if (!lemma ||
+      dictionaryWeakLexicalEntry(term, lemma) ||
+      stopWords.has(lemma) ||
+      !contentWords.length ||
+      contentWords.length !== lemmaWords.length && contentWords.length < 2) {
+      return null;
+    }
+    let type = normalizeAiDictionaryType(item.type || item.entityType || item.kind || item.typeCandidates?.[0]?.type || "");
+    const properLike = type === "proper-noun" || type === "source" || type === "symbol";
+    const hasProperCasing = /[A-ZÀ-Ý]/.test(term) || knownAcronymEntityTokens.has(lemma);
+    if (properLike && !hasProperCasing) type = "term";
     const confidence = Math.max(0.4, Math.min(0.98, Number(item.confidence || 0.72)));
     const aliases = unique([term, ...(Array.isArray(item.aliases) ? item.aliases : [])]
       .map((alias) => String(alias || "").replace(/\s+/g, " ").trim())
@@ -1798,31 +1849,32 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const maxTerms = Math.max(8, Math.min(120, Number(config.maxTerms || 60)));
-    const configuredChunkLimit = Math.max(1, Math.min(12, Number(config.maxChunks || 8)));
+    const configuredChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)));
     const configuredMaxChunkChars = Math.max(600, Math.min(3200, Number(config.maxChunkChars || 1600)));
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Knowledge Dictionary Builder. Extract reusable lexical entries from local evidence only."
+      "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence."
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use the supplied chunks to propose names, roles, places, objects, concepts, creatures, sources and aliases that improve later graph extraction."
+      "Use the supplied chunks to propose stable names, roles, places, objects, concepts, creatures, sources, aliases, semantic hints and relation cues that improve later graph extraction without inventing labels."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
-      "Return strict JSON with entries. Every entry must include term, type, aliases, confidence and an exact evidence.quote copied from a supplied chunk."
+      "Return strict JSON with entries. Every entry must include term, type, aliases, confidence, explanation and an exact evidence.quote copied from a supplied chunk. Reject weak fragments and unsupported aliases."
     );
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
       const url = providerType === "ollama"
         ? `${endpoint}/api/generate`
         : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
-      const promptFor = ({ promptMode = "full" } = {}) => {
+      const promptFor = ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const compact = promptMode === "compact";
         const micro = promptMode === "micro";
-        const chunkLimit = micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const maxChunkChars = micro ? Math.min(900, configuredMaxChunkChars) : compact ? Math.min(1200, configuredMaxChunkChars) : configuredMaxChunkChars;
-        const maxEntries = micro ? Math.min(8, maxTerms) : compact ? Math.min(16, maxTerms) : maxTerms;
+        const chunkPass = promptMode === "chunk";
+        const chunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
+        const maxChunkChars = chunkPass ? Math.min(1400, configuredMaxChunkChars) : micro ? Math.min(900, configuredMaxChunkChars) : compact ? Math.min(1200, configuredMaxChunkChars) : configuredMaxChunkChars;
+        const maxEntries = chunkPass ? Math.min(12, maxTerms) : micro ? Math.min(8, maxTerms) : compact ? Math.min(16, maxTerms) : maxTerms;
         return [
           systemPrompt,
           promptTemplate,
@@ -1834,6 +1886,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Every evidence.quote must be copied exactly from one supplied chunk.",
           "Prefer source-language labels. Keep aliases short and evidence-backed.",
           "If there are no valid entries, return {\"entries\":[]}.",
+          chunkPass ? "For this chunk pass, extract only from the single supplied chunk." : "",
           JSON.stringify({
             schema: {
               entries: [{
@@ -1849,7 +1902,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             },
             language,
             maxEntries,
-            chunks: chunks.slice(0, chunkLimit).map((chunk, index) => ({
+            chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({
               id: chunk.id || `chunk_${index + 1}`,
               ordinal: chunk.ordinal ?? chunk.index ?? index,
               text: String(chunk.text || "").slice(0, maxChunkChars),
@@ -1860,9 +1913,69 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let lastError = "";
       let lastModel = model;
       let totalUsage = {};
-      for (const promptMode of ["full", "compact", "micro"]) {
+      const attemptedChunkIds = new Set();
+      const productiveChunkIds = new Set();
+      const chunkIdsFromCandidates = (candidates = []) =>
+        candidates
+          .flatMap((candidate) => [...(candidate.chunkIds || [])])
+          .filter(Boolean);
+      const resultStatsFor = (candidates = []) => {
+        const coveredIds = unique(chunkIdsFromCandidates(candidates));
+        return {
+          inputChunkCount: chunks.length,
+          attemptedChunkCount: attemptedChunkIds.size,
+          productiveChunkCount: productiveChunkIds.size || coveredIds.length,
+          coveredChunkCount: coveredIds.length,
+          coveredChunkIds: coveredIds.slice(0, 24),
+        };
+      };
+      const validatedDictionaryPatch = (patch = {}, sourceChunks = chunks) =>
+        (Array.isArray(patch.entries) ? patch.entries : [])
+          .map((item) => normalizeAiDictionaryCandidate(item, sourceChunks, language))
+          .filter(Boolean)
+          .slice(0, maxTerms);
+      const repairDictionaryJson = async ({ text = "", promptMode = "", sourceChunks = chunks } = {}) => {
+        const rawText = String(text || "").trim();
+        if (!rawText) return null;
+        const repairPrompt = [
+          "Convert the following model output into one strict JSON object for Knowledge Dictionary extraction.",
+          "Return ONLY JSON. No markdown, no prose.",
+          "Schema: {\"entries\":[{\"term\":\"\",\"type\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term\",\"aliases\":[],\"semanticHints\":[],\"relationCues\":[],\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}]}",
+          "Keep only entries, labels and quotes already present in the model output. Do not invent new entries, aliases or evidence.",
+          "Input:",
+          rawText.slice(0, 5000),
+        ].join("\n\n");
+        const repairBody = providerType === "ollama"
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 1200 } }
+          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 1200, top_p: 0.9, response_format: { type: "json_object" } };
+        let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
+        let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
+          const fallbackBody = { ...repairBody };
+          delete fallbackBody.response_format;
+          repairResponse = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+          repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        }
+        if (!repairResponse.ok) {
+          lastError = `repair-http-${repairResponse.status}${repairErrorText ? `: ${repairErrorText}` : ""}`;
+          return null;
+        }
+        const repairData = await repairResponse.json();
+        const repairText = repairData.response || repairData.choices?.[0]?.message?.content || repairData.output_text || "";
+        totalUsage = addKnowledgeAiUsage(totalUsage, knowledgeAiUsageFromResponse({ data: repairData, prompt: repairPrompt, text: repairText }));
+        lastModel = repairData.model || lastModel;
+        const repairPatch = parseAiJsonObject(repairText);
+        if (!repairPatch) return null;
+        const candidates = validatedDictionaryPatch(repairPatch, sourceChunks);
+        return candidates.length ? { candidates, promptMode: `${promptMode}-repair` } : null;
+      };
+      const runDictionaryPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const micro = promptMode === "micro";
-        const prompt = promptFor({ promptMode });
+        const compact = promptMode === "compact";
+        const chunkPass = promptMode === "chunk";
+        const sentChunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
+        sourceChunks.slice(0, sentChunkLimit).forEach((chunk) => attemptedChunkIds.add(chunk.id || ""));
+        const prompt = promptFor({ promptMode, sourceChunks });
         const body = providerType === "ollama"
           ? {
             model,
@@ -1883,6 +1996,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
             response_format: { type: "json_object" },
           };
+        knowledgeLlmDebug("dictionary:request", {
+          mode,
+          promptMode,
+          provider: provider.id || providerType || "",
+          providerType,
+          model,
+          sourceChunkCount: sourceChunks.length,
+          sentChunkCount: sentChunkLimit,
+          sourceChunkIds: sourceChunks.slice(0, sentChunkLimit).map((chunk) => chunk.id || ""),
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
         let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         let errorText = response.ok ? "" : await chatErrorText(response);
         if (!response.ok && providerType !== "ollama" && /json|format/i.test(errorText)) {
@@ -1894,8 +2020,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (!response.ok) {
           lastError = `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`;
           const canShrink = response.status === 400 || /context|token|too large|size|json|format/i.test(errorText);
-          if (canShrink) continue;
-          break;
+          return { candidates: [], error: lastError, retryable: canShrink, promptMode };
         }
         const data = await response.json();
         const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
@@ -1905,23 +2030,79 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
-          continue;
+          const repaired = await repairDictionaryJson({ text, promptMode, sourceChunks });
+          if (repaired) return { candidates: repaired.candidates, error: "", promptMode: repaired.promptMode };
+          return { candidates: [], error: lastError, retryable: true, promptMode };
         }
-        const candidates = (Array.isArray(patch.entries) ? patch.entries : [])
-          .map((item) => normalizeAiDictionaryCandidate(item, chunks, language))
-          .filter(Boolean)
-          .slice(0, maxTerms);
+        const candidates = validatedDictionaryPatch(patch, sourceChunks);
         if (!candidates.length && !micro) {
           lastError = "no-valid-ai-dictionary-candidates";
-          continue;
+          return { candidates: [], error: lastError, retryable: true, promptMode };
         }
+        return { candidates, error: candidates.length ? "" : "no-valid-ai-dictionary-candidates", promptMode };
+      };
+      const minGlobalDictionaryCandidates = Math.max(6, Math.min(maxTerms, Number(config.minLlmDictionaryTerms || Math.max(12, chunks.length))));
+      let fallbackResult = null;
+      for (const promptMode of ["full", "compact", "micro"]) {
+        const attempt = await runDictionaryPromptAttempt({ promptMode });
+        if (attempt.candidates.length >= minGlobalDictionaryCandidates) {
+          return {
+            candidates: attempt.candidates,
+            provider: provider.id || providerType || "provider",
+            model: lastModel,
+            usage: totalUsage,
+            error: "",
+            promptMode: attempt.promptMode || promptMode,
+            stats: resultStatsFor(attempt.candidates),
+          };
+        }
+        if (attempt.candidates.length) fallbackResult = attempt;
+        if (attempt.error && !attempt.retryable) break;
+      }
+      if (mode === "hybrid") {
         return {
-          candidates,
+          candidates: fallbackResult?.candidates || [],
           provider: provider.id || providerType || "provider",
           model: lastModel,
           usage: totalUsage,
-          error: candidates.length ? "" : "no-valid-ai-dictionary-candidates",
-          promptMode,
+          error: fallbackResult ? "" : (lastError || "sparse-ai-dictionary-output"),
+          promptMode: fallbackResult?.promptMode || "",
+          stats: resultStatsFor(fallbackResult?.candidates || []),
+        };
+      }
+      const chunkCandidates = [];
+      const chunkPromptModes = [];
+      for (const chunk of chunks.slice(0, configuredChunkLimit)) {
+        attemptedChunkIds.add(chunk.id || "");
+        const attempt = await runDictionaryPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
+        if (attempt.candidates.length) {
+          chunkCandidates.push(...attempt.candidates);
+          chunkPromptModes.push(attempt.promptMode || "chunk");
+          productiveChunkIds.add(chunk.id || "");
+        }
+        if (chunkCandidates.length >= maxTerms) break;
+      }
+      if (chunkCandidates.length) {
+        const mergedCandidates = mergeDictionaryCandidates([], chunkCandidates, maxTerms);
+        return {
+          candidates: mergedCandidates,
+          provider: provider.id || providerType || "provider",
+          model: lastModel,
+          usage: totalUsage,
+          error: "",
+          promptMode: unique(chunkPromptModes).join("+") || "chunk",
+          stats: resultStatsFor(mergedCandidates),
+        };
+      }
+      if (fallbackResult) {
+        return {
+          candidates: fallbackResult.candidates,
+          provider: provider.id || providerType || "provider",
+          model: lastModel,
+          usage: totalUsage,
+          error: "",
+          promptMode: fallbackResult.promptMode || "micro",
+          stats: resultStatsFor(fallbackResult.candidates),
         };
       }
       return {
@@ -1931,9 +2112,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         usage: totalUsage,
         error: lastError || "invalid-ai-json",
         promptMode: "",
+        stats: resultStatsFor([]),
       };
     } catch (error) {
-      return { candidates: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "" };
+      return { candidates: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "", stats: { inputChunkCount: chunks.length, attemptedChunkCount: 0, productiveChunkCount: 0, coveredChunkCount: 0, coveredChunkIds: [] } };
     }
   };
 
@@ -1962,6 +2144,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
         return rightAi - leftAi || Number(right.count || 0) - Number(left.count || 0) || String(left.term || "").localeCompare(String(right.term || ""));
       })
       .slice(0, maxTerms);
+  };
+
+  const hybridAiCountUsable = ({ count = 0, min = 1, promptMode = "" } = {}) => {
+    const normalizedPromptMode = String(promptMode || "").toLowerCase();
+    if (normalizedPromptMode === "micro") return false;
+    return Number(count || 0) >= Number(min || 1);
   };
 
   const dictionaryTierFor = ({ term = "", lemma = "", typeCandidates = [], confidence = 0, occurrenceCount = 0 } = {}) => {
@@ -2014,20 +2202,28 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const replaceExisting = config.replaceExisting !== false;
     if (replaceExisting && documentId) await deleteDictionaryEntries({ workspaceId, documentId });
     const now = nowIso();
-    const ruleCandidates = mode === "llm"
-      ? []
-      : extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency });
     const aiResult = ["llm", "hybrid"].includes(mode)
       ? await callKnowledgeDictionaryAi({ chunks: scopedChunks, language, config })
       : { candidates: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
     }
-    const fallbackCandidates = !ruleCandidates.length && !aiResult.candidates?.length
+    const minHybridAiTerms = Math.max(4, Math.min(maxTerms, Number(config.minHybridAiTerms || Math.max(12, scopedChunks.length * 2))));
+    const aiDictionaryUsable = hybridAiCountUsable({
+      count: aiResult.candidates?.length || 0,
+      min: minHybridAiTerms,
+      promptMode: aiResult.promptMode || "",
+    });
+    const useRuleFallback = mode === "rules" ||
+      (mode === "hybrid" && !aiDictionaryUsable);
+    const ruleCandidates = useRuleFallback
       ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency })
       : [];
-    const candidates = mergeDictionaryCandidates(ruleCandidates, aiResult.candidates || [], maxTerms);
-    const finalCandidates = candidates.length ? candidates : fallbackCandidates;
+    const finalCandidates = mode === "llm"
+      ? (aiResult.candidates || []).slice(0, maxTerms)
+      : useRuleFallback
+        ? mergeDictionaryCandidates(ruleCandidates, [], maxTerms)
+        : (aiResult.candidates || []).slice(0, maxTerms);
     const records = [];
     for (const candidate of finalCandidates) {
       const chunk = candidate.evidenceChunk || scopedChunks[0] || {};
@@ -2127,12 +2323,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
         error: aiResult.error || "",
         promptMode: aiResult.promptMode || "",
         candidateCount: aiResult.candidates?.length || 0,
+        minHybridCandidates: minHybridAiTerms,
+        hybridFallback: useRuleFallback,
+        fallbackReason: useRuleFallback && mode === "hybrid" ? "sparse-ai-dictionary-output" : "",
+        chunkCoverage: aiResult.stats || {
+          inputChunkCount: scopedChunks.length,
+          attemptedChunkCount: 0,
+          productiveChunkCount: 0,
+          coveredChunkCount: 0,
+          coveredChunkIds: [],
+        },
       },
       dictionaryEntries: previewEntries,
       dictionaryEntryIds: records.slice(0, Math.max(10, Number(config.previewIds || 40))).map((entry) => entry.id),
       dictionaryEntryIdsTruncated: records.length > Math.max(10, Number(config.previewIds || 40)),
       dictionaryCount: records.length,
       previewCount: previewEntries.length,
+      previewTruncated: previewEntries.length < records.length,
       tierCounts: records.reduce((acc, entry) => {
         const tier = entry.tier || "weak";
         acc[tier] = (acc[tier] || 0) + 1;
@@ -2638,7 +2845,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const knowledgeEventExtractionMode = (config = {}) => {
-    const mode = String(config.eventMode || config.extractionMode || config.mode || "rules").toLowerCase().trim();
+    const mode = String(config.eventMode || config.extractionMode || config.mode || "llm").toLowerCase().trim();
     if (mode === "ai") return "llm";
     return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
   };
@@ -2656,15 +2863,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const allowedTypes = [...knowledgeEventTypes];
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks."
+      "You are a Knowledge Event Builder. Extract ordered, evidence-backed narrative and semantic events from local document chunks while preserving temporal order and causal roles."
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use only provided chunks and dictionary terms. Return strict JSON with events, rejectedCandidates, exact evidence quotes, source-language labels, ordered event types and short explanations."
+      "Use only provided chunks and dictionary terms. Extract explicit actions, state changes, causality, preparation, transformation, speech, failed attempts and outcomes as separate ordered events with source-language labels."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
-      "Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, evidence.quote and explanation. Do not invent facts outside evidence."
+      "Return strict JSON with events and rejectedCandidates. Every accepted event must include eventType, subject, objects, confidence, evidence.chunkId, exact evidence.quote and explanation. Do not infer facts outside evidence."
     );
     const promptFor = ({ mode: promptMode = "full", sourceChunks = chunks } = {}) => {
       const compact = promptMode === "compact";
@@ -2829,6 +3036,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
             response_format: { type: "json_object" },
           };
+        const eventPromptChunkLimit = promptMode === "chunk" ? 1 : promptMode === "micro" ? 1 : promptMode === "compact" ? Math.min(2, sourceChunks.length) : sourceChunks.length;
+        knowledgeLlmDebug("event-builder:request", {
+          mode,
+          promptMode,
+          provider: provider.id || providerType || "",
+          providerType,
+          model,
+          sourceChunkCount: sourceChunks.length,
+          sentChunkCount: eventPromptChunkLimit,
+          sourceChunkIds: sourceChunks.slice(0, eventPromptChunkLimit).map((chunk) => chunk.id || ""),
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
         let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         let errorText = response.ok ? "" : await chatErrorText(response);
         if (!response.ok && providerType !== "ollama" && /json|format/i.test(errorText)) {
@@ -2890,10 +3111,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (Array.isArray(attempt.events) && attempt.events.length) return attempt;
         if (attempt.error && !attempt.retryable) break;
       }
+      if (mode === "hybrid") {
+        return {
+          events: [],
+          rejectedCandidates: [],
+          provider: provider.id || providerType || "provider",
+          model: lastModel,
+          usage: totalUsage,
+          error: lastError || "sparse-ai-events",
+          promptMode: "",
+        };
+      }
       const chunkEvents = [];
       const chunkRejectedCandidates = [];
       const chunkPromptModes = [];
-      for (const chunk of chunks.slice(0, Math.min(chunks.length, Math.max(1, Math.min(12, Number(config.maxChunks || 8)))))) {
+      for (const chunk of chunks.slice(0, Math.min(chunks.length, Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)))))) {
         const attempt = await runEventPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (Array.isArray(attempt.events) && attempt.events.length) {
           chunkEvents.push(...attempt.events);
@@ -3102,12 +3334,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
         });
       }
     }
-    const useRuleFallback = wantsAi && aiResult.error && !aiCandidates.length;
-    const candidateSource = extractionMode === "llm" && !useRuleFallback
+    const minHybridAiEvents = Math.max(3, Math.min(maxEvents, Number(config.minHybridAiEvents || Math.max(12, scopedChunks.length))));
+    const aiEventsUsable = hybridAiCountUsable({
+      count: aiCandidates.length,
+      min: minHybridAiEvents,
+      promptMode: aiResult.promptMode || "",
+    });
+    const useRuleFallback = extractionMode === "rules" ||
+      (extractionMode === "hybrid" && !aiEventsUsable);
+    const candidateSource = extractionMode === "llm"
       ? aiCandidates
-      : extractionMode === "hybrid"
-        ? [...aiCandidates, ...ruleCandidates]
-        : ruleCandidates;
+      : useRuleFallback
+        ? ruleCandidates
+        : aiCandidates;
     const seen = new Set();
     const selectedCandidates = candidateSource
       .sort((left, right) =>
@@ -3248,8 +3487,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       proposed: {
         aiEventCount: aiCandidates.length,
         ruleEventCount: ruleCandidates.length,
+        minHybridEvents: minHybridAiEvents,
         promptMode: aiResult.promptMode || "",
         ruleFallback: useRuleFallback,
+        fallbackReason: useRuleFallback && extractionMode === "hybrid" ? "sparse-ai-event-output" : "",
         rejectedCandidates,
       },
       context,
@@ -3396,6 +3637,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (hasAny([/\b(?:adempie|adempiuto|compie|compiuto|realizza|realizzato|porta a compimento|fulfill|fulfilled)\b/])) return "fulfills";
     if (hasAny([/\b(?:prefigura|prefigurato|figura|anticipa|anticipato|annuncia|annunciato|tipo|foreshadow|prefigure)\b/, /\bombra\s+(?:di|del|della|dei|delle)\b/])) return "foreshadows";
     if (hasAny([/\b(?:alleanza|patto|promessa|promette|promise|covenant)\b/]) && (hasPerson || hasConcept)) return "establishes";
+    if (hasPerson && hasConcept && hasAny([
+      /\b(?:grazie\s+(?:a|alla|al|allo|agli|alle)|maturat[aoie]|dimostrava|dimostr[oò]|mostr[oò]|mostrava|aveva|possedeva|con\s+(?:disciplina|determinazione|forza|coraggio|courage|discipline|determination))\b/,
+      /\b(?:showed|demonstrated|had|possessed|with\s+(?:discipline|determination|courage|strength))\b/,
+    ])) return "has_property";
     if (hasAny([/\b(?:insegna|insegnamento|dottrina|spiega|mostra|dimostra|teach|teaches|shows)\b/]) && (hasPerson || hasConcept)) return "teaches";
     if (hasAny([/\b(?:sacrificio|offerta|agnello|sangue|pane|calice|croce|rappresenta|simbolo|significa|represent|symbolizes)\b/]) && (hasObject || hasConcept)) return "represents";
     if (
@@ -3427,7 +3672,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const target = [left, right].find((entity) => !isSourceEntity(entity));
       return source && target ? { source, target } : { source: left, target: right };
     }
-    if (["appears_in", "interacts_with", "expresses", "encounters", "says", "uses", "heals", "confronts", "helps", "travels_to", "reveals", "fulfills", "foreshadows", "establishes", "teaches", "opposes"].includes(relationType)) {
+    if (["appears_in", "interacts_with", "expresses", "encounters", "says", "uses", "heals", "confronts", "helps", "travels_to", "reveals", "fulfills", "foreshadows", "establishes", "teaches", "opposes", "has_property"].includes(relationType)) {
       const targetType = {
         appears_in: "location",
         interacts_with: "object",
@@ -3445,6 +3690,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         establishes: withType("concept") ? "concept" : "proper-noun",
         teaches: withType("concept") ? "concept" : "proper-noun",
         opposes: withType("concept") ? "concept" : "proper-noun",
+        has_property: "concept",
       }[relationType];
       if (relationType === "helps") {
         const [first, second] = [left, right].filter((entity) => entity.entityType === "proper-noun");
@@ -3548,7 +3794,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (["rules", "llm", "hybrid"].includes(mode)) return mode;
     const legacy = String(config.extractionMode || "").trim().toLowerCase();
     if (["rules", "llm", "hybrid"].includes(legacy)) return legacy;
-    return "rules";
+    return "llm";
   };
 
   const entityQuoteSupported = (quote = "", chunks = []) => {
@@ -3670,11 +3916,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const maxEntities = Math.max(8, Math.min(120, Number(config.maxEntities || 48)));
     const maxRelations = Math.max(0, Math.min(160, Number(config.maxRelations || 64)));
-    const configuredChunkLimit = Math.max(1, Math.min(12, Number(config.maxChunks || 8)));
+    const configuredChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)));
     const configuredMaxChunkChars = Math.max(600, Math.min(3200, Number(config.maxChunkChars || 1600)));
-    const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a Knowledge Entity Extractor. Extract evidence-backed entities and relations from local chunks only.");
-    const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use supplied chunks and dictionary terms. Prefer source-language labels, precise types and explicit relations.");
-    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return strict JSON with entities and relations. Every accepted entity/relation must include an exact evidence.quote copied from a supplied chunk.");
+    const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.");
+    const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use supplied chunks and dictionary terms to propose precise entities and directly supported relations. Keep entities stable, avoid weak fragments, and do not collapse later consequences into earlier causes.");
+    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return strict JSON with entities and relations. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.");
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
       const url = providerType === "ollama"
@@ -3766,9 +4012,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const runPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const micro = promptMode === "micro";
         const prompt = promptFor({ promptMode, sourceChunks });
+        const entityPromptChunkLimit = promptMode === "chunk" ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : promptMode === "compact" ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
         const body = providerType === "ollama"
           ? { model, prompt, stream: false, format: "json", options: { temperature: knowledgeAiNumberConfig(config.temperature, 0.05), top_p: knowledgeAiNumberConfig(config.topP, 0.9), num_predict: Math.max(256, Math.min(2200, knowledgeAiNumberConfig(config.maxTokens, 1200))) } }
           : { model, messages: [{ role: "user", content: prompt }], temperature: knowledgeAiNumberConfig(config.temperature, 0.05), max_tokens: Math.max(256, Math.min(2200, knowledgeAiNumberConfig(config.maxTokens, 1200))), top_p: knowledgeAiNumberConfig(config.topP, 0.9), response_format: { type: "json_object" } };
+        knowledgeLlmDebug("entity-extractor:request", {
+          mode,
+          promptMode,
+          provider: provider.id || providerType || "",
+          providerType,
+          model,
+          sourceChunkCount: sourceChunks.length,
+          sentChunkCount: entityPromptChunkLimit,
+          sourceChunkIds: sourceChunks.slice(0, entityPromptChunkLimit).map((chunk) => chunk.id || ""),
+          dictionaryTerms: dictionaryEntries.length,
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
         let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         let errorText = response.ok ? "" : await chatErrorText(response);
         if (!response.ok && providerType !== "ollama" && /json|format/i.test(errorText)) {
@@ -3802,13 +4063,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
         return { entities, relations, error: entities.length || relations.length ? "" : "no-valid-ai-entity-candidates", promptMode };
       };
       let fallbackResult = null;
+      const minGlobalEntityRelations = maxRelations <= 0
+        ? 0
+        : Math.max(3, Math.min(maxRelations, Number(config.minLlmEntityRelations || Math.max(8, Math.ceil(chunks.length * 0.75)))));
+      const minGlobalEntityCandidates = Math.max(6, Math.min(maxEntities, Number(config.minLlmEntityCandidates || Math.max(12, Math.ceil(chunks.length * 1.25)))));
       for (const promptMode of ["full", "compact", "micro"]) {
         const attempt = await runPromptAttempt({ promptMode });
-        if (attempt.relations.length || (maxRelations === 0 && attempt.entities.length)) {
+        const attemptUsable = maxRelations === 0
+          ? attempt.entities.length >= minGlobalEntityCandidates
+          : attempt.relations.length >= minGlobalEntityRelations && attempt.entities.length >= Math.min(minGlobalEntityCandidates, maxEntities);
+        if (attemptUsable) {
           return { entities: attempt.entities, relations: attempt.relations, provider: provider.id || providerType || "provider", model: lastModel, usage: totalUsage, error: "", promptMode: attempt.promptMode || promptMode };
         }
         if (attempt.entities.length || attempt.relations.length) fallbackResult = attempt;
         if (attempt.error && !attempt.retryable) break;
+      }
+      if (mode === "hybrid") {
+        return {
+          entities: fallbackResult?.entities || [],
+          relations: fallbackResult?.relations || [],
+          provider: provider.id || providerType || "provider",
+          model: lastModel,
+          usage: totalUsage,
+          error: fallbackResult ? "" : (lastError || "sparse-ai-entity-output"),
+          promptMode: fallbackResult?.promptMode || "",
+        };
       }
       const chunkEntities = [];
       const chunkRelations = [];
@@ -3820,7 +4099,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkRelations.push(...attempt.relations);
           chunkPromptModes.push(attempt.promptMode || "chunk");
         }
-        if (chunkRelations.length >= Math.min(maxRelations, 24) && chunkEntities.length >= Math.min(maxEntities, 24)) break;
       }
       if (chunkEntities.length || chunkRelations.length) {
         return {
@@ -4073,26 +4351,51 @@ window.TrackerLensKnowledgeRuntime = (() => {
       aiRelationsByChunkId.set(chunkId, [...(aiRelationsByChunkId.get(chunkId) || []), candidate]);
     });
     const maxRelations = Math.max(0, Math.min(240, Number(config.maxRelations || (dictionaryDrivenExtraction ? 64 : 120))));
+    const minHybridAiEntities = Math.max(4, Math.min(Number(config.maxEntities || 48), Number(config.minHybridAiEntities || Math.max(12, Math.ceil(validChunks.length * 1.5)))));
+    const minHybridAiRelations = maxRelations <= 0
+      ? 0
+      : Math.max(2, Math.min(maxRelations, Number(config.minHybridAiRelations || Math.max(8, Math.ceil(validChunks.length * 0.75)))));
+    const aiEntityCount = (aiResult.entities || []).length;
+    const aiRelationCount = (aiResult.relations || []).length;
+    const rawAiEntityOutputUsable = hybridAiCountUsable({
+      count: aiEntityCount,
+      min: minHybridAiEntities,
+      promptMode: aiResult.promptMode || "",
+    }) && (minHybridAiRelations <= 0 || aiRelationCount >= minHybridAiRelations);
+    let useRuleFallback = mode === "rules" ||
+      (mode === "hybrid" && !rawAiEntityOutputUsable);
+    let fallbackReason = useRuleFallback && mode === "hybrid" ? "sparse-ai-entity-output" : "";
     const maxRelationsPerChunk = Math.max(0, Math.min(40, Number(config.maxRelationsPerChunk || (dictionaryDrivenExtraction ? 6 : 12))));
     const maxRelationsPerEntityPerChunk = Math.max(1, Math.min(12, Number(config.maxRelationsPerEntityPerChunk || (dictionaryDrivenExtraction ? 2 : 3))));
     const maxRelationDistance = Math.max(120, Math.min(1200, Number(config.maxRelationDistance || (dictionaryDrivenExtraction ? 360 : 520))));
     const relationRecords = new Map();
     const entityOutputIndexById = new Map();
-    for (const chunk of validChunks) {
-      const language = detectLanguage(chunk.text || "", preferredRuntimeLanguage(config));
-      const chunkConfig = {
-        ...config,
-        language,
-        text: chunk.text || "",
-        dictionarySeedEntries: dictionarySeedEntries.filter((entry) =>
-          String(chunk.text || "").toLowerCase().includes(String(entry.term || entry.label || "").toLowerCase())
-        ),
-      };
-      const ruleCandidates = mode === "llm" ? [] : entityCandidatesFromText(chunk.text || "", chunkConfig);
-      const candidates = [...ruleCandidates, ...(aiEntitiesByChunkId.get(chunk.id || "") || [])];
-      const chunkEntities = [];
-      const chunkEntityIndexById = new Map();
-      for (const candidate of candidates) {
+    for (let extractionPass = 0; extractionPass < 2; extractionPass += 1) {
+      if (extractionPass === 1) {
+        const acceptedAiOutputUsable = mode === "hybrid" && hybridAiCountUsable({
+          count: entities.length,
+          min: minHybridAiEntities,
+          promptMode: aiResult.promptMode || "",
+        }) && (minHybridAiRelations <= 0 || relations.length >= minHybridAiRelations);
+        if (useRuleFallback || acceptedAiOutputUsable) break;
+        useRuleFallback = true;
+        fallbackReason = "sparse-accepted-entity-output";
+      }
+      for (const chunk of validChunks) {
+        const language = detectLanguage(chunk.text || "", preferredRuntimeLanguage(config));
+        const chunkConfig = {
+          ...config,
+          language,
+          text: chunk.text || "",
+          dictionarySeedEntries: dictionarySeedEntries.filter((entry) =>
+            String(chunk.text || "").toLowerCase().includes(String(entry.term || entry.label || "").toLowerCase())
+          ),
+        };
+        const ruleCandidates = useRuleFallback ? entityCandidatesFromText(chunk.text || "", chunkConfig) : [];
+        const candidates = [...ruleCandidates, ...(aiEntitiesByChunkId.get(chunk.id || "") || [])];
+        const chunkEntities = [];
+        const chunkEntityIndexById = new Map();
+        for (const candidate of candidates) {
         const dictionarySeed = candidate.source === "dictionary-seed"
           ? dictionarySeedByLabel.get(normalizeEntityToken(candidate.label || ""))
           : null;
@@ -4150,10 +4453,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkEntityIndexById.set(entityId, chunkEntities.length);
           chunkEntities.push(savedRecord);
         }
-      }
-      const relationCandidates = [];
-      for (let left = 0; left < chunkEntities.length; left += 1) {
-        for (let right = left + 1; right < chunkEntities.length; right += 1) {
+        }
+        const relationCandidates = [];
+        for (let left = 0; left < chunkEntities.length; left += 1) {
+          for (let right = left + 1; right < chunkEntities.length; right += 1) {
           const source = chunkEntities[left];
           const target = chunkEntities[right];
           const sourceKey = normalizeEntityToken(source.label);
@@ -4179,12 +4482,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
             (types.has("creature") || types.has("object") ? 0.06 : 0) -
             (source.entityType === target.entityType ? 0.08 : 0);
           relationCandidates.push({ source, target, confidence, score, narrativeRelationType });
+          }
         }
-      }
-      const selectedRelationCandidates = relationCandidates
-        .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
-      const aiChunkRelations = (aiRelationsByChunkId.get(chunk.id || "") || [])
-        .map((candidate) => {
+        const selectedRelationCandidates = useRuleFallback
+          ? relationCandidates.sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")))
+          : [];
+        const aiChunkRelations = (aiRelationsByChunkId.get(chunk.id || "") || [])
+          .map((candidate) => {
           const source = chunkEntities.find((entity) => normalizeEntityToken(entity.label) === normalizeEntityToken(candidate.sourceLabel));
           const target = chunkEntities.find((entity) => normalizeEntityToken(entity.label) === normalizeEntityToken(candidate.targetLabel));
           if (!source || !target || source.id === target.id) return null;
@@ -4196,13 +4500,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
             narrativeRelationType: candidate.relationType,
             ai: candidate,
           };
-        })
-        .filter(Boolean);
-      const allSelectedRelationCandidates = [...aiChunkRelations, ...selectedRelationCandidates]
-        .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
-      const chunkEntityRelationCounts = new Map();
-      let chunkRelationCount = 0;
-      for (const { source, target, confidence, narrativeRelationType, ai } of allSelectedRelationCandidates) {
+          })
+          .filter(Boolean);
+        const allSelectedRelationCandidates = [...aiChunkRelations, ...selectedRelationCandidates]
+          .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
+        const chunkEntityRelationCounts = new Map();
+        let chunkRelationCount = 0;
+        for (const { source, target, confidence, narrativeRelationType, ai } of allSelectedRelationCandidates) {
         if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) break;
         const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
         const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
@@ -4292,6 +4596,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         chunkRelationCount += 1;
         chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
         chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
+        }
       }
     }
     return {
@@ -4309,6 +4614,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         promptMode: aiResult.promptMode || "",
         entityCount: aiResult.entities?.length || 0,
         relationCount: aiResult.relations?.length || 0,
+        minHybridEntities: minHybridAiEntities,
+        minHybridRelations: minHybridAiRelations,
+        hybridFallback: useRuleFallback,
+        fallbackReason,
       },
     };
   };
@@ -4588,11 +4897,27 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!hasHealingCue || !hasSpeechRecoveryCue) return null;
     const patientPositions = [...cleanText.matchAll(new RegExp(`\\b${escapedRegExp(patientLabel)}\\b`, "g"))].map((match) => match.index || 0);
     const healerPositions = [...cleanText.matchAll(new RegExp(`\\b${escapedRegExp(healerLabel)}\\b`, "g"))].map((match) => match.index || 0);
+    const directHealingActionPatterns = [
+      /\b(?:beve|bevve|bevuto|bere|drink|drank|drinks|take|takes|took|prende|prese|preso|riceve|ricevette|receives|received)\b/,
+      /\b(?:prepara|prepar[oò]|preparare|trasforma|trasform[oò]|immerge|immerse|immerso|immergere|riempie|riemp[iì]|fills|filled)\b/,
+      /\b(?:tazza|cup|t[eé]|tea|infusione|tisana)\b/,
+    ];
+    const generalAftermathPatterns = [
+      /\b(?:chiunque|anyone|whoever|qualunque|da quel momento|from then|notizia|possibilit[aà]|same possibility|possedeva il potere|possessed the power|potere di guarire)\b/,
+    ];
     let best = null;
     patientPositions.forEach((patientPosition) => {
       healerPositions.forEach((healerPosition) => {
         const distance = Math.abs(patientPosition - healerPosition);
         if (distance > 900) return;
+        const contextStart = Math.max(0, Math.min(patientPosition, healerPosition) - 260);
+        const contextEnd = Math.min(cleanText.length, Math.max(patientPosition, healerPosition) + healerLabel.length + 360);
+        const context = cleanText.slice(contextStart, contextEnd);
+        const hasDirectAction = directHealingActionPatterns.some((pattern) => pattern.test(context));
+        if (!hasDirectAction) return;
+        const onlyGeneralAftermath = generalAftermathPatterns.some((pattern) => pattern.test(context)) &&
+          !/\b(?:beve|bevve|bevuto|bere|drink|drank|drinks|tazza|cup|t[eé]|tea|prese|prende|took|takes)\b/.test(context);
+        if (onlyGeneralAftermath) return;
         if (!best || distance < best.distance) best = { patientPosition, healerPosition, distance };
       });
     });
@@ -5026,7 +5351,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const callSemanticAi = async ({ candidates = [], config = {} } = {}) => {
-    const mode = String(config.enrichmentMode || "rules").toLowerCase();
+    const mode = String(config.enrichmentMode || "ai").toLowerCase();
     if (!["ai", "hybrid"].includes(mode) || !candidates.length) return { relations: [], provider: "", model: "", error: "" };
     const provider = await pickAiProvider(config);
     if (!provider) return { relations: [], provider: "", model: "", error: "provider-not-found" };
@@ -5034,11 +5359,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = String(config.model || provider.model || (providerType === "ollama" ? "llama3.1" : "local-model")).trim();
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence."
+      [
+        "You are a Semantic Relation Enricher. Classify candidate entity pairs into high-signal semantic relations using only supplied evidence.",
+        "For narrative text, respect event order and causal roles. Do not turn a later consequence into the direct cause of an earlier event.",
+      ].join(" ")
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use only candidate evidence text. Prefer explicit semantic relations over generic links and reject unsupported pairs."
+      [
+        "Use only candidate evidence text and chunk context. Prefer explicit semantic relations over generic links and reject unsupported pairs.",
+        "Use healed_by only when the evidence directly shows the patient being cured by that object/source, for example drinking, taking, receiving, preparing or using it.",
+        "If an object gains a healing property after the cure, classify that as has_property or causes only when supported, not as person healed_by object.",
+      ].join(" ")
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
@@ -5051,6 +5383,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       `Allowed relation types: ${[...semanticRelationTypes].join(", ")}`,
       "Return strict JSON only: {\"relations\":[{\"candidateId\":\"...\",\"relationType\":\"helps\",\"confidence\":0.0,\"explanation\":\"short evidence reason\"}]}",
       "Use only the provided evidence text. Do not invent facts.",
+      "Reject a candidate by omitting it from relations.",
       JSON.stringify({ candidates: candidates.slice(0, 24) }, null, 2),
     ].join("\n\n");
     try {
@@ -5076,6 +5409,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
           max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
         };
+      knowledgeLlmDebug("semantic-enricher:request", {
+        mode,
+        provider: provider.id || providerType || "",
+        providerType,
+        model,
+        candidateCount: candidates.length,
+        promptChars: prompt.length,
+        maxTokens: body.max_tokens || body.options?.num_predict || 0,
+        promptPreview: compactDebugText(prompt),
+      });
       const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
       if (!response.ok) return { relations: [], provider: provider.id || providerType, model, error: `HTTP ${response.status}` };
       const data = await response.json();
@@ -5112,15 +5455,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Knowledge Graph Builder Agent. Build a verified knowledge graph from local document chunks with evidence-backed entities and relations."
+      "You are a Knowledge Graph Builder Agent. Build a verified, evidence-backed knowledge graph from local document chunks while preserving temporal order, causal roles and source-language labels."
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use chunks, existing entities and relations as context. Prefer precise domain relations, preserve source-language labels and reject weak or absent evidence."
+      "Use chunks, existing entities and base relations as context. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
-      "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include an exact evidence quote."
+      "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity."
     );
     const promptFor = ({ mode = "full" } = {}) => {
       const compact = mode === "compact";
@@ -5188,6 +5531,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
             max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
+        knowledgeLlmDebug("graph-builder:request", {
+          mode,
+          provider: provider.id || providerType || "",
+          providerType,
+          model,
+          chunkCount: chunks.length,
+          entityCount: entities.length,
+          relationCount: relations.length,
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
         response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         if (response.ok) {
           const data = await response.json();
@@ -5894,6 +6249,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const chunkById = new Map(scopedChunks.map((chunk) => [chunk.id, chunk]));
     const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.55)));
+    const enrichmentMode = ["ai", "hybrid"].includes(String(config.enrichmentMode || "ai").toLowerCase())
+      ? String(config.enrichmentMode || "ai").toLowerCase()
+      : "rules";
     const now = nowIso();
     const candidates = workspaceRelations.slice(0, Math.max(maxRelations * 2, 24)).map((relation) => {
       const source = entityById.get(relation.sourceEntityId);
@@ -5910,19 +6268,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         text: evidence.text,
       };
     }).filter((candidate) => candidate.source && candidate.target);
-    const ruleResults = candidates
-      .map((candidate) => ({ candidate, semantic: inferRuleSemanticRelation({ source: candidate.source, target: candidate.target, relation: candidate.relation, chunk: candidate.chunk }) }))
-      .filter((item) => item.semantic && item.semantic.confidence >= threshold)
-      .filter((item) => semanticRelationAllowed(item.semantic.relationType, config));
-    const supplementalRuleResults = scopedChunks
-      .flatMap((chunk) => [
-        ...inferSupplementalUseRelationsForChunk({ chunk, entities: workspaceEntities, workspaceId, config }),
-        ...inferSupplementalHealingRelationsForChunk({ chunk, entities: workspaceEntities, workspaceId, config }),
-      ])
-      .filter((item) => item.semantic && item.semantic.confidence >= threshold)
-      .slice(0, Math.max(0, maxRelations - ruleResults.length));
     const aiInput = candidates
-      .filter((candidate) => !ruleResults.some((item) => item.candidate.id === candidate.id))
       .map((candidate) => ({
         candidateId: candidate.id,
         sourceLabel: candidate.source.label,
@@ -5931,6 +6277,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         targetType: candidate.target.entityType,
         originalRelationType: candidate.relation.relationType,
         evidence: candidate.text,
+        chunkContext: String(candidate.chunk?.text || "").slice(0, 1800),
       }));
     const aiResult = await callSemanticAi({ candidates: aiInput, config });
     if (aiResult.usage?.totalTokens) {
@@ -5940,7 +6287,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((item) => semanticRelationTypes.has(String(item.relationType || "").toLowerCase()))
       .filter((item) => semanticRelationAllowed(item.relationType, config))
       .map((item) => [String(item.candidateId || ""), item]));
-    const semanticItems = [...ruleResults, ...supplementalRuleResults];
+    const semanticItems = [];
     candidates.forEach((candidate) => {
       const ai = aiByCandidateId.get(candidate.id);
       if (!ai) return;
@@ -5962,6 +6309,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
         },
       });
     });
+    const minHybridSemanticRelations = Math.max(2, Math.min(maxRelations, Number(config.minHybridSemanticRelations || Math.max(4, Math.ceil(candidates.length * 0.25)))));
+    const useRuleFallback = enrichmentMode === "rules" ||
+      (enrichmentMode === "hybrid" && semanticItems.length < minHybridSemanticRelations);
+    const fallbackReason = useRuleFallback && enrichmentMode === "hybrid"
+      ? (semanticItems.length ? "sparse-ai-semantic-output" : "empty-ai-semantic-output")
+      : "";
+    if (useRuleFallback) {
+      const ruleResults = candidates
+        .map((candidate) => ({ candidate, semantic: inferRuleSemanticRelation({ source: candidate.source, target: candidate.target, relation: candidate.relation, chunk: candidate.chunk }) }))
+        .filter((item) => item.semantic && item.semantic.confidence >= threshold)
+        .filter((item) => semanticRelationAllowed(item.semantic.relationType, config));
+      const supplementalRuleResults = scopedChunks
+        .flatMap((chunk) => [
+          ...inferSupplementalUseRelationsForChunk({ chunk, entities: workspaceEntities, workspaceId, config }),
+          ...inferSupplementalHealingRelationsForChunk({ chunk, entities: workspaceEntities, workspaceId, config }),
+        ])
+        .filter((item) => item.semantic && item.semantic.confidence >= threshold)
+        .slice(0, Math.max(0, maxRelations - semanticItems.length - ruleResults.length));
+      semanticItems.push(...ruleResults, ...supplementalRuleResults);
+    }
     const existingSemanticKeys = new Set(byWorkspace(relationsAll, workspaceId)
       .filter((relation) => relation.metadata?.semantic)
       .map((relation) => [
@@ -6016,7 +6383,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           occurrenceCount: relation.metadata?.occurrenceCount || 1,
           sourceChunkIds,
           explanation: semantic.explanation || "",
-          aiFallbackReason: semantic.method === "rule" ? aiResult.error || "" : "",
+          aiFallbackReason: semantic.method === "rule" ? fallbackReason || aiResult.error || "" : "",
         },
         createdAt: now,
         updatedAt: now,
@@ -6043,7 +6410,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ai: {
         provider: aiResult.provider || "",
         model: aiResult.model || "",
-        fallbackReason: aiResult.error || "",
+        error: aiResult.error || "",
+        relationCount: aiResult.relations?.length || 0,
+        acceptedRelationCount: semanticItems.filter((item) => item.semantic?.method === "ai-semantic").length,
+        minHybridSemanticRelations,
+        hybridFallback: useRuleFallback,
+        fallbackReason,
       },
       status: "ready",
       createdAt: now,
@@ -6282,19 +6654,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !queryStopWords.has(token));
     const intent = graphQueryIntent(cleanQuery);
     const queryExpansionMode = graphQueryExpansionMode(config);
-    const ruleSourceExpansionTokens = queryExpansionMode === "llm"
-      ? []
-      : graphSourceExpansionTokens({ query: cleanQuery, intent, stopWords: queryStopWords });
-    const ruleDangerExpansionTokens = queryExpansionMode === "llm"
-      ? []
-      : graphDangerExpansionTokens({ intent, stopWords: queryStopWords });
     const aiExpansion = ["llm", "hybrid"].includes(queryExpansionMode)
       ? await callGraphQueryExpansionAi({ query: cleanQuery, intent, config, stopWords: queryStopWords, queryTokens })
       : { tokens: [], provider: "", model: "", usage: {}, error: "", promptMode: "", intentHints: [], rationale: "" };
     if (aiExpansion.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiExpansion.usage, provider: aiExpansion.provider, model: aiExpansion.model });
     }
-    const sourceExpansionTokens = unique([...ruleSourceExpansionTokens, ...ruleDangerExpansionTokens, ...(aiExpansion.tokens || [])]);
+    const ruleSourceExpansionTokens = graphSourceExpansionTokens({ query: cleanQuery, intent, stopWords: queryStopWords });
+    const ruleDangerExpansionTokens = graphDangerExpansionTokens({ intent, stopWords: queryStopWords });
+    const ruleExpansionTokens = unique([...ruleSourceExpansionTokens, ...ruleDangerExpansionTokens]);
+    const sourceExpansionTokens = queryExpansionMode === "llm"
+      ? unique(aiExpansion.tokens || [])
+      : queryExpansionMode === "hybrid"
+        ? unique((aiExpansion.tokens || []).length ? aiExpansion.tokens : ruleExpansionTokens)
+        : ruleExpansionTokens;
     const retrievalTokens = unique([...queryTokens, ...sourceExpansionTokens]);
     const [entities, relations, chunks, eventsAll] = await Promise.all([
       listStore(STORES.entities),
@@ -6463,7 +6836,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         String(a.label || "").localeCompare(String(b.label || ""))
       );
     const connectedEntitiesRaw = allEntitiesResultRaw.filter((entity) => (degree.get(entity.id) || 0) > 0);
-    const entitiesResultRaw = (includeIsolated || !relationsResultRaw.length ? allEntitiesResultRaw : connectedEntitiesRaw)
+    const entitiesResultRaw = (includeIsolated || !relationsResultRaw.length
+      ? allEntitiesResultRaw
+      : allEntitiesResultRaw.filter((entity) => (degree.get(entity.id) || 0) > 0 || seedIds.has(entity.id)))
       .slice(0, Math.max(topK, 24));
     const isolatedEntityCount = allEntitiesResultRaw.filter((entity) => !(degree.get(entity.id) || 0)).length;
     const connectedEntityCount = connectedEntitiesRaw.length;
@@ -6484,9 +6859,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         direct: seedIds.has(relation.sourceEntityId) || seedIds.has(relation.targetEntityId),
       };
     });
+    const seedChunkIds = new Set(rankedSeeds.map((item) => item.entity.chunkId).filter(Boolean));
     const chunkIds = new Set([
       ...entitiesResult.map((entity) => entity.chunkId).filter(Boolean),
       ...relationsResult.map((relation) => relation.chunkId).filter(Boolean),
+      ...seedChunkIds,
     ]);
     const matchedLabels = rankedSeeds.map((item) => item.entity.label).filter(Boolean);
     const normalizedMatchedLabels = matchedLabels.map(normalizeEntityToken).filter(Boolean);
@@ -6504,6 +6881,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       score += graphSourceCueScore(chunk.text || "", intent);
       score += graphDangerCueScore(chunk.text || "", intent);
       if (chunkIds.has(chunk.id)) score += 2;
+      if (seedChunkIds.has(chunk.id)) score += 6;
       return score;
     };
     const evidenceCandidates = includeEvidence
@@ -6617,7 +6995,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const mechanismEvidenceEvents = intent.process || intent.healing || intent.cause
       ? mechanismEventsForReasoning(eventsResult, queryTokens, Math.max(12, eventLimit))
       : [];
-    const mechanismEvidenceTerms = unique(mechanismEvidenceEvents.flatMap((item) => [
+    const baseMechanismEvidenceTerms = intent.healing || intent.process || intent.cause
+      ? "fiore flower fleur flor acqua water eau agua sorgente source spring fonte tazza cup tè te tea infusione tisana beve beva bevve bevuto bere drink drank drinks riempie riempirono fill filled immerge immersero immerse immerso immersa trasforma trasformandosi bollire bolle rosso lava grido voce parla parlare"
+      : "";
+    const mechanismEvidenceTerms = unique([
+      baseMechanismEvidenceTerms,
+      ...mechanismEvidenceEvents.flatMap((item) => [
       ...(item.objects || []),
       ...(item.roles?.patient || []),
       ...(item.roles?.object || []),
@@ -6628,7 +7011,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       item.eventType === "transforms" ? "trasforma trasformandosi bollire tè tea" : "",
       item.eventType === "speaks" ? "parla parlare parola voce grido speak voice" : "",
       intent.healing ? "fiore flower fleur flor acqua water eau agua sorgente source spring fonte tazza cup tè te tea infusione tisana beve bevve drink drank drinks" : "",
-    ])
+      ]),
+    ]
       .flatMap((value) => normalizeEntityToken(value).split(/\s+/))
       .map((token) => token.trim())
       .filter((token) => token.length >= 2 && !queryStopWords.has(token))
@@ -6638,10 +7022,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "acqua", "water", "eau", "agua",
       "sorgente", "source", "spring", "fonte",
       "tazza", "cup", "te", "tea", "infusione", "tisana",
-      "beve", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
+      "beve", "beva", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
       "riempie", "riempirono", "fill", "filled",
       "immerge", "immersero", "immerse", "immerso", "immersa",
-      "trasforma", "trasformandosi", "bollire", "boil", "boiled",
+      "trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled",
     ]);
     const mechanismOutcomeTerms = new Set(["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"]);
     const evidenceCandidateMeta = (candidate = {}) => {
@@ -6740,7 +7124,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? unique([...mechanismEvidenceTerms, "tazza", "tè", "tea", "fiore", "acqua", "sorgente", "beve", "bevve", "drink", ...matchedLabels])
       : matchedLabels;
     const evidenceSnippetMax = intent.source ? 1600 : 900;
-    const orderedEvidenceCandidates = preserveDocumentOrder || autoAdjacentProtectedEvidence
+    const mechanismPriorityEvidence = autoAdjacentProtectedEvidence && !preserveDocumentOrder && evidenceMode !== "full_ordered";
+    const orderedEvidenceCandidates = preserveDocumentOrder || (autoAdjacentProtectedEvidence && !mechanismPriorityEvidence)
       ? [...selectedEvidenceCandidates].sort((a, b) => Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0))
       : selectedEvidenceCandidates;
     const evidence = orderedEvidenceCandidates.map((item, index) => ({
@@ -7375,7 +7760,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const reasoningCompositionMode = (config = {}) => {
-    const mode = String(config.compositionMode || config.mode || "rules").toLowerCase().trim();
+    const mode = String(config.compositionMode || config.mode || "llm").toLowerCase().trim();
     if (mode === "ai") return "llm";
     return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
   };
@@ -7497,6 +7882,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
             max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
+        knowledgeLlmDebug("reasoning-composer:request", {
+          mode,
+          promptMode,
+          provider: provider.id || providerType || "",
+          providerType,
+          model,
+          evidenceItems: evidencePool.length,
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
         const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         if (!response.ok) {
           const errorText = await chatErrorText(response);
@@ -7853,6 +8249,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const config = nodeConfig(node);
       const subtype = nodeSubtype(node);
       const runId = event?.meta?.runId || payload?.runId || "";
+      knowledgeLlmDebug("node-input", {
+        workspaceId: this.workspaceId,
+        nodeId: node.id,
+        nodeLabel: node.label || "",
+        subtype,
+        inputChannel: event?.channel || "",
+        sourceNodeId: event?.sourceNodeId || "",
+        eventId: event?.id || "",
+        runId,
+        payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : [],
+        payloadCounts: {
+          chunks: Array.isArray(payload?.chunks) ? payload.chunks.length : 0,
+          dictionaryEntries: Array.isArray(payload?.dictionaryEntries) ? payload.dictionaryEntries.length : 0,
+          entities: Array.isArray(payload?.entities) ? payload.entities.length : 0,
+          relations: Array.isArray(payload?.relations) ? payload.relations.length : 0,
+          events: Array.isArray(payload?.events) ? payload.events.length : 0,
+        },
+        documentId: payload?.documentId || payload?.id || "",
+        collectionId: payload?.collectionId || payload?.metadata?.collectionId || "",
+      });
       try {
         await emitKnowledgeRuntimeActivity({
           bus: this.bus,

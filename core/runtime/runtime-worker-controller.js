@@ -1,5 +1,5 @@
 window.TrackerLensRuntimeWorker = (() => {
-  const WORKER_VERSION = "kg-20260717-source-boundary-markers-1";
+  const WORKER_VERSION = "kg-20260719-mechanism-evidence-priority-1";
   let worker = null;
   let port = null;
   let connected = false;
@@ -29,6 +29,11 @@ window.TrackerLensRuntimeWorker = (() => {
   };
 
   const handleMessage = (message = {}) => {
+    if (message.type === "runtime-worker:knowledge-debug") {
+      const debug = message.debug || {};
+      console.log(`[TL Knowledge LLM #${debug.seq || "?"}] ${debug.label || "debug"}`, debug);
+      return;
+    }
     if (message.type === "runtime-worker:status") {
       updateStatus({
         available: true,
