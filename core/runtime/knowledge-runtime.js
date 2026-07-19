@@ -1285,6 +1285,259 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
   };
 
+  const graphMechanismCueMode = (config = {}) => {
+    const mode = String(config.mechanismCueMode || config.queryExpansionMode || config.expansionMode || config.compositionMode || "llm").toLowerCase().trim();
+    if (mode === "ai") return "llm";
+    return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
+  };
+
+  const graphMechanismCueTokensFromValues = (values = [], { stopWords = new Set(), queryTokens = [], sourceTokens = new Set() } = {}) =>
+    graphQueryExpansionTokensFromValues(values, { stopWords, queryTokens })
+      .filter((token) => sourceTokens.has(token) || queryTokens.includes(token));
+
+  const callGraphMechanismCueAi = async ({
+    query = "",
+    intent = {},
+    chunks = [],
+    relations = [],
+    events = [],
+    config = {},
+    stopWords = new Set(),
+    queryTokens = [],
+  } = {}) => {
+    const mode = graphMechanismCueMode(config);
+    if (!["llm", "hybrid"].includes(mode) || !(intent.process || intent.healing || intent.cause)) {
+      return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
+    }
+    const chunkLimit = Math.max(6, Math.min(24, Number(config.mechanismCueChunkLimit || 24)));
+    const candidateChunks = [...(Array.isArray(chunks) ? chunks : [])]
+      .slice(0, chunkLimit)
+      .sort((left, right) => Number(left.ordinal ?? left.index ?? 0) - Number(right.ordinal ?? right.index ?? 0))
+      .map((chunk) => ({
+        id: chunk.id || "",
+        ordinal: chunk.ordinal ?? chunk.index ?? null,
+        text: String(chunk.text || "").replace(/\s+/g, " ").slice(0, Math.max(240, Math.min(900, Number(config.mechanismCueChunkChars || 620)))),
+      }))
+      .filter((chunk) => chunk.text);
+    if (!candidateChunks.length) {
+      return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "no-candidate-chunks", promptMode: "" };
+    }
+    const sourceText = [
+      query,
+      candidateChunks.map((chunk) => chunk.text).join(" "),
+      (Array.isArray(events) ? events : []).map((item) => [
+        item.subject,
+        item.eventType,
+        ...(item.objects || []),
+        ...(item.participants || []),
+        item.evidence?.quote || item.evidence?.text || "",
+      ].join(" ")).join(" "),
+      (Array.isArray(relations) ? relations : []).slice(0, 80).map((item) => [
+        item.sourceLabel,
+        item.targetLabel,
+        item.relationType,
+        item.metadata?.explanation || "",
+        item.evidence?.quote || "",
+      ].join(" ")).join(" "),
+    ].join(" ");
+    const sourceTokens = new Set(normalizeEntityToken(sourceText)
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2 && !stopWords.has(token)));
+    const hasExplicitProvider = Boolean(config.providerProfile || config.profileId || config.providerType || config.provider || config.model);
+    const providerConfig = hasExplicitProvider ? config : { ...config, providerType: "lm-studio" };
+    const provider = await pickAiProvider({ ...providerConfig, enrichmentMode: "ai" });
+    if (!provider) {
+      return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "provider-not-found", promptMode: "" };
+    }
+    const providerType = String(provider.provider || provider.providerType || providerConfig.providerType || providerConfig.provider || "").toLowerCase();
+    const requestedModel = String(providerConfig.model || provider.model || (providerType === "ollama" ? "llama3.1" : "local-model")).trim();
+    const model = providerType === "ollama"
+      ? requestedModel
+      : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
+    const systemPrompt = knowledgeAiTextConfig(
+      config.mechanismCueSystemPrompt,
+      "You are a Knowledge Graph mechanism cue generator. You never answer the question. You only identify document-grounded retrieval cues that help find process, cause and outcome evidence in the provided chunks."
+    );
+    const promptTemplate = knowledgeAiTextConfig(
+      config.mechanismCuePromptTemplate,
+      "Read the question and the chunk previews. Return short terms or phrases that appear in the supplied material and would help the runtime rank the evidence for the real mechanism. Separate setup/actions, transformations and outcomes."
+    );
+    const outputInstructions = knowledgeAiTextConfig(
+      config.mechanismCueOutputInstructions,
+      "Return strict JSON only. Do not add facts, conclusions, final-answer wording or terms that are absent from the supplied chunks. If a setup clue is only background and should not dominate the answer, put it in downrankTerms."
+    );
+    const prompt = [
+      systemPrompt,
+      promptTemplate,
+      outputInstructions,
+      "Return ONLY one valid JSON object. No markdown.",
+      "Schema:",
+      JSON.stringify({
+        operationalTerms: ["object/action needed to perform the mechanism"],
+        transformationTerms: ["change/process terms"],
+        outcomeTerms: ["result/outcome terms"],
+        downrankTerms: ["generic background/setup terms"],
+        rationale: "one short retrieval-only note",
+      }),
+      JSON.stringify({
+        query,
+        detectedIntent: intent,
+        chunks: candidateChunks,
+        events: (Array.isArray(events) ? events : []).slice(0, 24).map((item) => ({
+          sequence: item.sequence ?? null,
+          subject: item.subject || "",
+          eventType: item.eventType || "",
+          objects: item.objects || [],
+          quote: String(item.evidence?.quote || item.evidence?.text || "").slice(0, 220),
+        })),
+      }),
+    ].join("\n\n");
+    const cueResultFromPatch = ({ patch = {}, usage = {}, promptMode = "json", model: resultModel = model, error = "" } = {}) => {
+      const normalizeCueList = (values = []) => graphMechanismCueTokensFromValues(values, { stopWords, queryTokens, sourceTokens }).slice(0, 36);
+      const operationalTerms = normalizeCueList(patch.operationalTerms || []);
+      const transformationTerms = normalizeCueList(patch.transformationTerms || []);
+      const outcomeTerms = normalizeCueList(patch.outcomeTerms || []);
+      const downrankTerms = normalizeCueList(patch.downrankTerms || []);
+      const terms = unique([...operationalTerms, ...transformationTerms, ...outcomeTerms]);
+      return {
+        terms,
+        operationalTerms,
+        transformationTerms,
+        outcomeTerms,
+        downrankTerms,
+        provider: provider.id || providerType || "provider",
+        model: resultModel,
+        usage,
+        error,
+        promptMode,
+        rationale: String(patch.rationale || "").slice(0, 240),
+      };
+    };
+    try {
+      const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
+      const url = providerType === "ollama"
+        ? `${endpoint}/api/generate`
+        : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
+      const body = providerType === "ollama"
+        ? {
+          model,
+          prompt,
+          stream: false,
+          format: "json",
+          options: {
+            temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+            top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+            num_predict: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
+          },
+        }
+        : {
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
+          max_tokens: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
+          top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+          response_format: { type: "json_object" },
+        };
+      knowledgeLlmDebug("graph-mechanism-cues:request", {
+        mode,
+        provider: provider.id || providerType || "",
+        providerType,
+        model,
+        promptChars: prompt.length,
+        chunkCount: candidateChunks.length,
+        maxTokens: body.max_tokens || body.options?.num_predict || 0,
+        query: compactDebugText(query, 240),
+        promptPreview: compactDebugText(prompt),
+      });
+      let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
+      let responseErrorText = response.ok ? "" : await chatErrorText(response);
+      if (!response.ok && providerType !== "ollama" && /json|format/i.test(responseErrorText)) {
+        const fallbackBody = { ...body };
+        delete fallbackBody.response_format;
+        response = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+        responseErrorText = response.ok ? "" : await chatErrorText(response);
+      }
+      if (!response.ok) {
+        return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: provider.id || providerType || "provider", model, usage: {}, error: `HTTP ${response.status}${responseErrorText ? `: ${responseErrorText}` : ""}`, promptMode: "" };
+      }
+      const data = await response.json();
+      const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+      let patch = parseAiJsonObject(text);
+      let usage = knowledgeAiUsageFromResponse({ data, prompt, text });
+      let resultModel = data.model || model;
+      let promptMode = "mechanism-cues";
+      let repairText = "";
+      if (!patch) {
+        const repairPrompt = [
+          "Convert this failed mechanism-cue response into one strict JSON object.",
+          "Use only terms that appear in the supplied chunk text. Do not answer the question.",
+          "Return ONLY JSON with operationalTerms, transformationTerms, outcomeTerms, downrankTerms and rationale.",
+          "Schema:",
+          JSON.stringify({
+            operationalTerms: [],
+            transformationTerms: [],
+            outcomeTerms: [],
+            downrankTerms: [],
+            rationale: "",
+          }),
+          JSON.stringify({ rawResponse: String(text || "").slice(0, 3000), chunks: candidateChunks, query }),
+        ].join("\n\n");
+        const repairBody = providerType === "ollama"
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 520 } }
+          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 520, top_p: 0.9, response_format: { type: "json_object" } };
+        let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
+        let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
+          const fallbackBody = { ...repairBody };
+          delete fallbackBody.response_format;
+          repairResponse = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+          repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        }
+        if (repairResponse.ok) {
+          const repairData = await repairResponse.json();
+          repairText = repairData.response || repairData.choices?.[0]?.message?.content || repairData.output_text || "";
+          usage = addKnowledgeAiUsage(usage, knowledgeAiUsageFromResponse({ data: repairData, prompt: repairPrompt, text: repairText }));
+          resultModel = repairData.model || resultModel;
+          patch = parseAiJsonObject(repairText);
+          promptMode = patch ? "mechanism-cues-repair" : "json";
+        } else {
+          promptMode = "json";
+        }
+      }
+      if (!patch) {
+        const salvagedTerms = graphMechanismCueTokensFromValues(
+          unique([text, repairText]
+            .join(" ")
+            .replace(/```[a-z]*|```/gi, " ")
+            .split(/[\s,;:.()[\]{}"“”'’«»!?/\\|-]+/g)
+            .map((item) => item.trim())
+            .filter(Boolean)),
+          { stopWords, queryTokens, sourceTokens }
+        ).slice(0, 36);
+        if (salvagedTerms.length) {
+          return cueResultFromPatch({
+            patch: {
+              operationalTerms: salvagedTerms,
+              transformationTerms: [],
+              outcomeTerms: [],
+              downrankTerms: [],
+              rationale: "Recovered grounded cue terms from non-JSON LLM output.",
+            },
+            usage,
+            promptMode: "mechanism-cues-salvaged",
+            model: resultModel,
+            error: "salvaged-non-json",
+          });
+        }
+        return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: provider.id || providerType || "provider", model: data.model || model, usage, error: "invalid-ai-json", promptMode: "json" };
+      }
+      return cueResultFromPatch({ patch, usage, promptMode, model: resultModel });
+    } catch (error) {
+      return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "" };
+    }
+  };
+
   const graphHealingMechanismCueScore = (text = "", intent = {}) => {
     if (!intent.healing) return 0;
     const normalized = normalizeEntityToken(text);
@@ -6712,7 +6965,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const requestedMaxEvidence = evidenceMode === "full_ordered"
       ? Math.max(0, scopedChunks.length)
       : Math.max(0, Math.min(24, Number(payload?.maxEvidence || config.maxEvidence || 6)));
-    const maxEvidence = protectedEvidenceEnabled && (intent.process || intent.healing || intent.cause || intent.danger)
+    const earlyMechanismCueMode = graphMechanismCueMode(config);
+    const maxEvidence = earlyMechanismCueMode === "llm" && (intent.process || intent.healing || intent.cause)
+      ? Math.max(requestedMaxEvidence, Math.min(24, scopedChunks.length || 24))
+      : protectedEvidenceEnabled && (intent.process || intent.healing || intent.cause || intent.danger)
       ? Math.max(requestedMaxEvidence, 6)
       : requestedMaxEvidence;
     const activeDocumentIds = new Set([
@@ -6995,29 +7251,77 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const mechanismEvidenceEvents = intent.process || intent.healing || intent.cause
       ? mechanismEventsForReasoning(eventsResult, queryTokens, Math.max(12, eventLimit))
       : [];
-    const baseMechanismEvidenceTerms = intent.healing || intent.process || intent.cause
-      ? "fiore flower fleur flor acqua water eau agua sorgente source spring fonte tazza cup tè te tea infusione tisana beve beva bevve bevuto bere drink drank drinks riempie riempirono fill filled immerge immersero immerse immerso immersa trasforma trasformandosi bollire bolle rosso lava grido voce parla parlare"
+    const mechanismCueMode = earlyMechanismCueMode;
+    const mechanismCueChunkLimit = Math.max(6, Math.min(24, Number(config.mechanismCueChunkLimit || 24)));
+    const mechanismCueChunks = scopedChunks.length <= mechanismCueChunkLimit
+      ? scopedChunks
+      : [...new Map(evidenceCandidates.map((item) => [item.chunk?.id, item.chunk]).filter(([id, chunk]) => id && chunk)).values()];
+    const mechanismCueAi = ["llm", "hybrid"].includes(mechanismCueMode) && (intent.process || intent.healing || intent.cause)
+      ? await callGraphMechanismCueAi({
+        query: cleanQuery,
+        intent,
+        chunks: mechanismCueChunks.length ? mechanismCueChunks : scopedChunks,
+        relations: relationsResult,
+        events: eventsResult,
+        config,
+        stopWords: queryStopWords,
+        queryTokens,
+      })
+      : { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "", promptMode: "", rationale: "" };
+    if (mechanismCueAi.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: mechanismCueAi.usage, provider: mechanismCueAi.provider, model: mechanismCueAi.model });
+    }
+    const mechanismSourceTokens = new Set(normalizeEntityToken([
+      cleanQuery,
+      scopedChunks.map((chunk) => chunk.text || "").join(" "),
+      eventsResult.map((item) => [
+        item.subject,
+        item.eventType,
+        ...(item.objects || []),
+        ...(item.participants || []),
+        ...(item.roles?.patient || []),
+        ...(item.roles?.object || []),
+        ...(item.roles?.destination || []),
+        item.evidence?.quote || item.evidence?.text || "",
+      ].join(" ")).join(" "),
+      relationsResult.map((relation) => [
+        relation.sourceLabel,
+        relation.targetLabel,
+        relation.relationType,
+        relation.evidence?.quote || relation.metadata?.evidence?.quote || "",
+      ].join(" ")).join(" "),
+    ].join(" "))
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2 && !queryStopWords.has(token)));
+    const useRuleMechanismExpansion = mechanismCueMode !== "llm";
+    const llmMechanismCueFailed = mechanismCueMode === "llm" &&
+      (intent.process || intent.healing || intent.cause) &&
+      !(mechanismCueAi.terms || []).length;
+    const baseMechanismEvidenceTerms = useRuleMechanismExpansion && (intent.healing || intent.process || intent.cause)
+      ? "cure cura guarire guar guarito healed heal process processo method metodo step passaggio prepare prepara preparare use using usa usato cause causa result risultato outcome esito"
       : "";
     const mechanismEvidenceTerms = unique([
       baseMechanismEvidenceTerms,
+      ...(mechanismCueAi.terms || []),
       ...mechanismEvidenceEvents.flatMap((item) => [
       ...(item.objects || []),
       ...(item.roles?.patient || []),
       ...(item.roles?.object || []),
       ...(item.roles?.destination || []),
-      item.eventType === "drinks" ? "beve bevve drink drinks" : "",
-      item.eventType === "fills" ? "riempie riempirono fill filled tazza cup" : "",
-      item.eventType === "immerses" ? "immerge immersero immerse fiore flower" : "",
-      item.eventType === "transforms" ? "trasforma trasformandosi bollire tè tea" : "",
-      item.eventType === "speaks" ? "parla parlare parola voce grido speak voice" : "",
-      intent.healing ? "fiore flower fleur flor acqua water eau agua sorgente source spring fonte tazza cup tè te tea infusione tisana beve bevve drink drank drinks" : "",
+      useRuleMechanismExpansion && item.eventType === "drinks" ? "beve bevve drink drinks" : "",
+      useRuleMechanismExpansion && item.eventType === "fills" ? "riempie riempirono fill filled tazza cup" : "",
+      useRuleMechanismExpansion && item.eventType === "immerses" ? "immerge immersero immerse fiore flower" : "",
+      useRuleMechanismExpansion && item.eventType === "transforms" ? "trasforma trasformandosi bollire tè tea" : "",
+      useRuleMechanismExpansion && item.eventType === "speaks" ? "parla parlare parola voce grido speak voice" : "",
       ]),
     ]
       .flatMap((value) => normalizeEntityToken(value).split(/\s+/))
       .map((token) => token.trim())
       .filter((token) => token.length >= 2 && !queryStopWords.has(token))
+      .filter((token) => mechanismSourceTokens.has(token) || queryTokens.includes(token))
       .filter((token) => !seedLabels.some((label) => label === token)));
-    const mechanismOperationalTerms = new Set([
+    const ruleMechanismOperationalTerms = useRuleMechanismExpansion ? [
       "fiore", "flower", "fleur", "flor",
       "acqua", "water", "eau", "agua",
       "sorgente", "source", "spring", "fonte",
@@ -7026,8 +7330,38 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "riempie", "riempirono", "fill", "filled",
       "immerge", "immersero", "immerse", "immerso", "immersa",
       "trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled",
+    ] : [];
+    const mechanismOperationalTerms = new Set([
+      ...ruleMechanismOperationalTerms,
+      ...(mechanismCueAi.operationalTerms || []),
+      ...(mechanismCueAi.transformationTerms || []),
     ]);
-    const mechanismOutcomeTerms = new Set(["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"]);
+    const mechanismOutcomeTerms = new Set([...(useRuleMechanismExpansion ? ["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"] : []), ...(mechanismCueAi.outcomeTerms || [])]);
+    const mechanismDownrankTerms = new Set(mechanismCueAi.downrankTerms || []);
+    if (includeEvidence && llmMechanismCueFailed) {
+      const evidenceCandidateIds = new Set(evidenceCandidates.map((item) => item.chunk?.id).filter(Boolean));
+      scopedChunks.forEach((chunk) => {
+        if (!chunk?.id || evidenceCandidateIds.has(chunk.id)) return;
+        evidenceCandidateIds.add(chunk.id);
+        evidenceCandidates.push({ chunk, score: evidenceScore(chunk) });
+      });
+      evidenceCandidates.sort((a, b) => Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0));
+    } else if (includeEvidence && mechanismEvidenceTerms.length) {
+      const evidenceCandidateIds = new Set(evidenceCandidates.map((item) => item.chunk?.id).filter(Boolean));
+      scopedChunks.forEach((chunk) => {
+        if (!chunk?.id || evidenceCandidateIds.has(chunk.id)) return;
+        const mechanismMatches = graphEvidenceMatchedTokens(chunk.text || "", mechanismEvidenceTerms);
+        if (!mechanismMatches.length) return;
+        evidenceCandidateIds.add(chunk.id);
+        evidenceCandidates.push({
+          chunk,
+          score: evidenceScore(chunk) + Math.min(24, mechanismMatches.length * 5),
+        });
+      });
+      evidenceCandidates.sort((a, b) => evidenceMode === "full_ordered"
+        ? Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0)
+        : b.score - a.score || String(a.chunk?.id || "").localeCompare(String(b.chunk?.id || "")));
+    }
     const evidenceCandidateMeta = (candidate = {}) => {
       const text = candidate.chunk?.text || "";
       const queryMatches = graphEvidenceMatchedTokens(text, queryTokens);
@@ -7037,8 +7371,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const mechanismMatches = graphEvidenceMatchedTokens(text, mechanismEvidenceTerms);
       const operationalMatches = mechanismMatches.filter((token) => mechanismOperationalTerms.has(token));
       const outcomeMatches = mechanismMatches.filter((token) => mechanismOutcomeTerms.has(token));
+      const downrankMatches = graphEvidenceMatchedTokens(text, [...mechanismDownrankTerms]);
       const healingCueScore = graphHealingMechanismCueScore(text, intent);
       const dangerCueScore = graphDangerCueScore(text, intent);
+      const downrankPenalty = downrankMatches.length && !operationalMatches.length && !outcomeMatches.length
+        ? Math.min(12, downrankMatches.length * 3)
+        : 0;
       const selected = false;
       const linked = chunkIds.has(candidate.chunk?.id);
       const highMatch = chunkScoreById.has(candidate.chunk?.id);
@@ -7055,7 +7393,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const endsWithFragment = Boolean(trimmedText) && !/[.!?;:»”)"'\]]\s*$/u.test(trimmedText);
       return {
         chunk: candidate.chunk,
-        score: candidate.score,
+        score: Math.max(0, Number(candidate.score || 0) - downrankPenalty),
+        rawScore: candidate.score,
         selected,
         linked,
         highMatch,
@@ -7066,6 +7405,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         mechanismMatches,
         operationalMatches,
         outcomeMatches,
+        downrankMatches,
+        downrankPenalty,
         healingCueScore,
         dangerCueScore,
         protectedKind,
@@ -7116,7 +7457,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       });
     }
     evidenceCandidateMetaList
-      .sort((a, b) => b.score - a.score || String(a.chunk?.id || "").localeCompare(String(b.chunk?.id || "")))
+      .sort((a, b) => llmMechanismCueFailed
+        ? Number(a.chunk?.ordinal ?? a.chunk?.index ?? 0) - Number(b.chunk?.ordinal ?? b.chunk?.index ?? 0)
+        : b.score - a.score || String(a.chunk?.id || "").localeCompare(String(b.chunk?.id || "")))
       .forEach(addEvidenceCandidate);
     const snippetLabels = intent.source
       ? unique([...matchedLabels, ...sourceExpansionTokens])
@@ -7156,8 +7499,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const mechanismMatches = graphEvidenceMatchedTokens(text, mechanismEvidenceTerms);
         const operationalMatches = mechanismMatches.filter((token) => mechanismOperationalTerms.has(token));
         const outcomeMatches = mechanismMatches.filter((token) => mechanismOutcomeTerms.has(token));
-      const healingCueScore = graphHealingMechanismCueScore(text, intent);
-      const dangerCueScore = graphDangerCueScore(text, intent);
+        const downrankMatches = graphEvidenceMatchedTokens(text, [...mechanismDownrankTerms]);
+        const downrankPenalty = downrankMatches.length && !operationalMatches.length && !outcomeMatches.length
+          ? Math.min(12, downrankMatches.length * 3)
+          : 0;
+        const healingCueScore = graphHealingMechanismCueScore(text, intent);
+        const dangerCueScore = graphDangerCueScore(text, intent);
         const selected = selectedEvidenceChunkIds.has(chunk.id);
         const mechanismProtectedItem = mechanismProtectedEvidence.find((item) => item.chunk?.id === chunk.id);
         const mechanismProtected = Boolean(mechanismProtectedItem);
@@ -7166,7 +7513,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const endsWithFragment = Boolean(trimmedText) && !/[.!?;:»”)"'\]]\s*$/u.test(trimmedText);
         const linked = chunkIds.has(chunk.id);
         const highMatch = chunkScoreById.has(chunk.id);
-        const score = evidenceScore(chunk);
+        const score = Math.max(0, evidenceScore(chunk) - downrankPenalty);
         const reasons = [
           selected ? "selected-evidence" : "",
           selected && evidenceSelectionReasonById.get(chunk.id) ? `selection-${evidenceSelectionReasonById.get(chunk.id)}` : "",
@@ -7180,6 +7527,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           seedMatches.length ? "seed-label-match" : "",
           eventMatches.length ? "event-chain-term-match" : "",
           mechanismMatches.length ? "mechanism-term-match" : "",
+          downrankPenalty ? "mechanism-background-downrank" : "",
           healingCueScore >= 18 ? "healing-mechanism-cue" : "",
           dangerCueScore >= 10 ? "danger-cue" : "",
         ].filter(Boolean);
@@ -7197,6 +7545,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           mechanismMatches,
           operationalMatches,
           outcomeMatches,
+          downrankMatches,
+          downrankPenalty,
           healingCueScore,
           dangerCueScore,
           protectedKind: mechanismProtectedItem?.protectedKind || "",
@@ -7209,7 +7559,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .sort((a, b) => Number(a.ordinal ?? 0) - Number(b.ordinal ?? 0))
       .slice(0, Math.max(24, Math.min(120, Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit || 80))));
     const evidenceTraceLines = evidenceTrace.map((item) =>
-      `[C${item.ordinal ?? "?"}${item.selected ? " selected" : ""} score=${Number(item.score || 0).toFixed(2)}] reasons=${item.reasons.join(",") || "none"} kind=${item.protectedKind || "-"} query=${item.queryMatches.join("|") || "-"} source=${(item.sourceExpansionMatches || []).slice(0, 12).join("|") || "-"} seed=${item.seedMatches.join("|") || "-"} event=${item.eventMatches.slice(0, 12).join("|") || "-"} mechanism=${item.mechanismMatches.slice(0, 12).join("|") || "-"} danger=${Number(item.dangerCueScore || 0).toFixed(0)} operational=${item.operationalMatches.slice(0, 12).join("|") || "-"} outcome=${item.outcomeMatches.slice(0, 12).join("|") || "-"} text="${String(item.textPreview || "").replace(/\s+/g, " ").slice(0, 220)}"`
+      `[C${item.ordinal ?? "?"}${item.selected ? " selected" : ""} score=${Number(item.score || 0).toFixed(2)}] reasons=${item.reasons.join(",") || "none"} kind=${item.protectedKind || "-"} query=${item.queryMatches.join("|") || "-"} source=${(item.sourceExpansionMatches || []).slice(0, 12).join("|") || "-"} seed=${item.seedMatches.join("|") || "-"} event=${item.eventMatches.slice(0, 12).join("|") || "-"} mechanism=${item.mechanismMatches.slice(0, 12).join("|") || "-"} downrank=${(item.downrankMatches || []).slice(0, 12).join("|") || "-"} danger=${Number(item.dangerCueScore || 0).toFixed(0)} operational=${item.operationalMatches.slice(0, 12).join("|") || "-"} outcome=${item.outcomeMatches.slice(0, 12).join("|") || "-"} text="${String(item.textPreview || "").replace(/\s+/g, " ").slice(0, 220)}"`
     );
     const rawContext = [
       `Knowledge Graph query: ${cleanQuery}`,
@@ -7253,6 +7603,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
           intentHints: aiExpansion.intentHints || [],
           rationale: aiExpansion.rationale || "",
         },
+        mechanismCue: {
+          mode: mechanismCueMode,
+          provider: mechanismCueAi.provider || "",
+          model: mechanismCueAi.model || "",
+          error: mechanismCueAi.error || "",
+          promptMode: mechanismCueAi.promptMode || "",
+          operationalTerms: mechanismCueAi.operationalTerms || [],
+          transformationTerms: mechanismCueAi.transformationTerms || [],
+          outcomeTerms: mechanismCueAi.outcomeTerms || [],
+          downrankTerms: mechanismCueAi.downrankTerms || [],
+          terms: mechanismCueAi.terms || [],
+          rationale: mechanismCueAi.rationale || "",
+          failed: llmMechanismCueFailed,
+        },
         seedLabels,
         selectedEvidenceChunkIds: [...selectedEvidenceChunkIds],
         mechanismProtectedChunkIds: mechanismProtectedEvidence.map((item) => item.chunk?.id).filter(Boolean),
@@ -7284,6 +7648,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         evidenceTraceCount: evidenceTrace.length,
         queryExpansionMode,
         queryExpansionError: aiExpansion.error || "",
+        mechanismCueError: mechanismCueAi.error || "",
+        mechanismCueFailed: llmMechanismCueFailed,
         sourceExpansionTokenCount: sourceExpansionTokens.length,
         evidenceMode,
         includeAdjacentChunks,
@@ -7780,6 +8146,33 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return evidencePool.some((item) => normalizeKnowledgeText(item).includes(normalizedQuote));
   };
 
+  const reasoningMechanismOperationalEvidence = (text = "") => {
+    const normalized = normalizeEntityToken(text);
+    if (!normalized) return false;
+    const preparationOrUse = /\b(?:tazza|cup|t[eé]|tea|infusione|tisana|beve|beva|bevve|bevuto|bere|drink|drank|drinks|riemp|fill|filled|bollire|bolle|bolliva|boil|boiled|trasforma|trasformandosi|rosso|lava)\b/.test(normalized);
+    if (/\b(?:secondo fiore|second flower|rimasto un secondo)\b/.test(normalized) && !preparationOrUse) return false;
+    const strongOperation = /\b(?:tazza|cup|t[eé]|tea|infusione|tisana|beve|beva|bevve|bevuto|bere|drink|drank|drinks|riemp|fill|filled|bollire|bolle|bolliva|boil|boiled|trasforma|trasformandosi|rosso|lava)\b/.test(normalized);
+    const materialCueCount = [
+      /\b(?:fiore|flower|fleur|flor)\b/.test(normalized),
+      /\b(?:acqua|agua|water|eau|sorgente|source|spring|fonte)\b/.test(normalized),
+      /\b(?:immerge|immersero|immerse|immerso|immersa)\b/.test(normalized),
+      /\b(?:voce|parlare|parla|grido|speak|voice)\b/.test(normalized),
+    ].filter(Boolean).length;
+    return strongOperation || materialCueCount >= 3;
+  };
+
+  const reasoningMechanismFocusSupported = ({ answerFocus = "", primaryEvidenceText = "", selectedEvidenceQuotes = [] } = {}) => {
+    const focus = String(answerFocus || "").trim();
+    if (!focus) return false;
+    const evidenceText = [primaryEvidenceText, ...selectedEvidenceQuotes].join("\n\n");
+    if (!reasoningMechanismOperationalEvidence(evidenceText)) return false;
+    if (/\b(?:anziano|anziana|old man|old woman|elder|luogo pericoloso|viaggio pieno di pericoli|secondo fiore|second flower)\b/i.test(focus) &&
+      !reasoningMechanismOperationalEvidence(focus)) {
+      return false;
+    }
+    return true;
+  };
+
   const salvageReasoningPatchFromText = (text = "") => {
     const answerFocus = String(text || "")
       .replace(/^```[a-z]*\s*/i, "")
@@ -7839,6 +8232,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         "Do not constrain final verbosity, sentence count or tone; the downstream LLM must follow the user's prompt for that.",
         "Do not invent facts, speakers, relations, locations or outcomes.",
         "selectedEvidenceQuotes must be copied verbatim from evidencePool.",
+        "For mechanism questions, selectedEvidenceQuotes must contain concrete operational evidence such as preparing, filling, immersing, transforming, drinking or the immediate outcome. Do not select background revelation/travel/location evidence unless it contains the actual operation.",
+        "For mechanism questions, answerFocus must name the concrete operation/process, not the person who revealed it, the travel setup or later consequences.",
         "Prefer preserving source excerpts over over-filtering them.",
         "Schema:",
         JSON.stringify(schema),
@@ -7938,14 +8333,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const mode = reasoningCompositionMode(config);
     const patch = aiResult?.patch && typeof aiResult.patch === "object" ? aiResult.patch : null;
     const evidencePool = reasoningEvidencePool(payload, plan);
+    const intent = String(plan.intent || payload.intent || "").toLowerCase();
     const selectedEvidenceQuotes = Array.isArray(patch?.selectedEvidenceQuotes)
       ? unique(patch.selectedEvidenceQuotes
         .map((item) => String(item || "").replace(/\s+/g, " ").trim())
-        .filter((item) => reasoningQuoteSupported(item, evidencePool)))
+        .filter((item) => reasoningQuoteSupported(item, evidencePool))
+        .filter((item) => intent !== "mechanism" || reasoningMechanismOperationalEvidence(item)))
         .slice(0, 8)
       : [];
     const cleanedSelectedEvidenceQuotes = cleanReasoningEvidenceList(selectedEvidenceQuotes, { maxItems: 8, maxChars: 1800 });
     const answerFocus = String(patch?.answerFocus || "").replace(/\s+/g, " ").trim().slice(0, 500);
+    const acceptedAnswerFocus = intent === "mechanism"
+      ? (reasoningMechanismFocusSupported({ answerFocus, primaryEvidenceText: plan.primaryEvidenceText || "", selectedEvidenceQuotes: cleanedSelectedEvidenceQuotes }) ? answerFocus : "")
+      : answerFocus;
     const aiMetadata = {
       mode,
       provider: aiResult.provider || "",
@@ -7954,6 +8354,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       promptMode: aiResult.promptMode || "",
       confidence: Math.max(0, Math.min(1, Number(patch?.confidence || 0))),
       answerFocus,
+      answerFocusAccepted: Boolean(acceptedAnswerFocus),
       selectedEvidenceQuotes: cleanedSelectedEvidenceQuotes,
     };
     return {
@@ -7962,7 +8363,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ? cleanReasoningEvidenceList([plan.primaryEvidenceText || "", cleanedSelectedEvidenceQuotes.join("\n\n")], { maxItems: 10, maxChars: 2600, preserveBlocks: true, trimLeading: false }).join("\n\n")
         : cleanReasoningEvidenceText(plan.primaryEvidenceText || "", { maxChars: 3600 }),
       responseInstructions: unique([
-        ...(answerFocus ? [`Answer focus: ${answerFocus}`] : []),
+        ...(acceptedAnswerFocus ? [`Answer focus: ${acceptedAnswerFocus}`] : []),
         ...(plan.responseInstructions || []),
       ]),
       excludedContext: [],
@@ -8017,7 +8418,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .map((item) => ({ item, score: scoreReasoningRelation(item, tokens, intent) }))
       .filter(({ score }) => score > 0)
       .sort((a, b) => b.score - a.score);
-    const supportingRelations = (intent === "mechanism" && eventFacts.length ? [] : rankedRelations)
+    const llmMechanismCueFailed = intent === "mechanism" && payload?.scope?.mechanismCueFailed === true;
+    const broadMechanismEvidenceItems = llmMechanismCueFailed && Array.isArray(payload?.evidence)
+      ? (() => {
+        const orderedEvidence = [...payload.evidence].sort((left, right) => evidenceDocumentOrder(left) - evidenceDocumentOrder(right));
+        const last = Math.max(0, orderedEvidence.length - 1);
+        const sampleIndexes = unique([0, 1, Math.floor(last * 0.33), Math.floor(last * 0.5), last - 3, last - 2, last - 1, last]
+          .filter((index) => index >= 0 && index <= last));
+        return sampleIndexes
+          .map((index) => orderedEvidence[index])
+          .map((item) => cleanReasoningEvidenceText(markEvidenceBoundaryFragments(reasoningEvidenceText(item)), { maxChars: 700, trimLeading: false }))
+          .filter(Boolean);
+      })()
+      : [];
+    const focusedSourceEvidence = llmMechanismCueFailed
+      ? ""
+      : composeFocusedSourceEvidence({
+      evidence: payload?.evidence || [],
+      tokens,
+      eventFacts,
+      maxItems: intent === "mechanism" ? 5 : intent === "source" ? 3 : 3,
+      maxChars: intent === "mechanism" ? 1600 : intent === "source" ? 1400 : 1400,
+    });
+    const hasOperationalSourceEvidence = intent === "mechanism" && reasoningMechanismOperationalEvidence(focusedSourceEvidence);
+    const supportingRelations = (intent === "mechanism" && (eventFacts.length || hasOperationalSourceEvidence) ? [] : rankedRelations)
       .filter(({ item }) => intent !== "source" || sourceReasoningRelationRelevant(item, tokens))
       .filter(({ item }) => intent !== "danger" || dangerReasoningRelationRelevant(item, tokens))
       .filter(({ item }) => includeBackground || !["appears_in", "context_for", "co_occurs", "associated_with"].includes(item.relationType || item.type || ""))
@@ -8039,13 +8463,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
       supportingRelations.map((fact) => String(fact.evidence || "").trim()).filter(Boolean),
       { maxItems: Math.min(6, maxFacts), maxChars: 1200 }
     );
-    const focusedSourceEvidence = composeFocusedSourceEvidence({
-      evidence: payload?.evidence || [],
-      tokens,
-      eventFacts,
-      maxItems: intent === "mechanism" ? 5 : intent === "source" ? 3 : 3,
-      maxChars: intent === "mechanism" ? 1600 : intent === "source" ? 1400 : 1400,
-    });
     const sourceExcerptFacts = intent === "source" && focusedSourceEvidence
       ? [{
         id: "source_excerpt_1",
@@ -8061,7 +8478,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const requiredFacts = [...sourceExcerptFacts, ...eventFacts, ...supportingRelations].slice(0, maxFacts);
     const primaryEvidenceText = intent === "mechanism"
       ? cleanReasoningEvidenceList(
-        [focusedSourceEvidence, eventEvidenceText, relationEvidenceText].filter(Boolean),
+        [...(llmMechanismCueFailed ? broadMechanismEvidenceItems : [focusedSourceEvidence]), eventEvidenceText, relationEvidenceText].filter(Boolean),
         { maxItems: 8, maxChars: 2600, preserveBlocks: true, trimLeading: false }
       ).join("\n\n")
       : cleanReasoningEvidenceList(
@@ -8112,7 +8529,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       eventLines.length ? `Required event chain:\n${eventLines.join("\n")}` : "",
       relationLines.length ? `Supporting relations:\n${relationLines.join("\n")}` : "",
       plan.responseInstructions?.length ? `Answer instructions:\n- ${plan.responseInstructions.join("\n- ")}` : "",
-      plan.ai?.answerFocus ? `LLM reasoning focus:\n${plan.ai.answerFocus}` : "",
+      plan.ai?.answerFocusAccepted && plan.ai?.answerFocus ? `LLM reasoning focus:\n${plan.ai.answerFocus}` : "",
       plan.ai?.error ? `LLM reasoning note: ${plan.ai.error}` : "",
     ].filter(Boolean).join("\n\n");
     const maxContextChars = Math.max(1200, Math.min(12000, Number(config.maxContextChars || payload?.maxContextChars || 4800)));

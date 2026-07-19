@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-15.
+Last updated: 2026-07-19.
 
 ## Active
 
@@ -301,6 +301,11 @@ Main files:
 - Knowledge LLM console diagnostics: every Knowledge node input and LLM request now logs `[TL Knowledge LLM #n]` with channel/run id, mode/promptMode, provider/model, chunk/candidate counts, prompt size and prompt preview for loop debugging.
 - Direct healing semantic rule: fallback semantic `healed_by` now requires direct cure action evidence near the patient/mechanism and ignores general aftermath/property statements such as water later gaining healing power.
 - Mechanism evidence priority: Graph Query now protects concrete healing/process chunks even without Event Builder events and keeps protected mechanism evidence ahead of generic intro evidence unless full document order is configured.
+- LLM mechanism evidence cues: Graph Query now generates per-document mechanism cue terms through the configured LLM for process/cause/healing questions, validates them locally against supplied evidence, persists usage, exposes `debug.mechanismCue`, and uses them only to rank/protect evidence.
+- Reasoning Composer mechanism focus guard: mechanism answers now suppress LLM focus/quote promotions that lack concrete operation evidence, preventing background revelation/travel/later-consequence text from steering the final AI Answer while keeping evidence available.
+- Grounded mechanism terms: Graph Query now filters mechanism cue terms against the active document evidence before ranking, so document-specific objects are not carried as global static memory. Composer also avoids promoting background travel/revelation relations when operational mechanism evidence is present.
+- LLM-only mechanism mode: pure `llm` Graph Query now depends on LLM-generated mechanism cues, repairs invalid cue JSON, validates terms against evidence, and uses accepted terms to add candidate chunks. Rule mechanism expansions remain a `hybrid`/`rules` behavior.
+- LLM cue failure broad evidence: invalid mechanism cue JSON can now be salvaged into grounded cue terms from the raw LLM response; if no terms survive, Graph Query exposes `mechanismCueFailed` and passes broader mechanically sampled evidence to Composer instead of narrowing to generic high-score chunks.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

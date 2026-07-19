@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.219-mechanism-evidence-priority-1";
+const RUNTIME_WORKER_VERSION = "0.1.224-llm-cue-salvage-broad-evidence-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -42,7 +42,7 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js",
     "action-runtime.js",
     "storage-runtime.js",
-    "knowledge-runtime.js?v=kg-20260719-mechanism-evidence-priority-1",
+    "knowledge-runtime.js?v=kg-20260719-llm-cue-salvage-broad-evidence-1",
     "ai-agent-runtime.js?v=kg-20260717-reasoning-evidence-only-1",
     "orchestrator-agent-runtime.js"
   );

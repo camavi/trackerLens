@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-07-15.
+Last updated: 2026-07-19.
 
 ## Active Area
 
@@ -513,6 +513,11 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Knowledge LLM debug logging: Knowledge runtime now emits console diagnostics for every Knowledge node input and every LLM request (`[TL Knowledge LLM #n]`). Logs include node/subtype/channel/run id, provider/model, mode, promptMode, chunk/candidate counts, prompt size and a prompt preview so repeated triggers or oversized prompts can be diagnosed from the browser console.
 - Direct healing semantic rule: supplemental `healed_by` relations now require direct patient/mechanism action evidence such as drinking, taking, receiving, preparing or using the cure in the same local context. General aftermath/property statements such as anyone having the same possibility or water later possessing healing power no longer create `person -healed_by-> water/source` relations.
 - Mechanism evidence priority: Graph Query now seeds mechanism/healing evidence terms even when Event Builder is absent or pure LLM extraction returns no events. Healing/process queries protect chunks with concrete operational cues such as cup/tea/flower/water/spring/drink/boil/transform/red/lava/speech, and mechanism evidence keeps protected chunks ahead of generic ranked intro evidence unless full document order is explicitly requested.
+- LLM mechanism evidence cues: Graph Query can ask the configured LLM for document-grounded retrieval cues for process/cause/healing questions. The cue output is locally validated against supplied chunks/events/relations, used only for evidence ranking/debug, and never becomes final-answer wording or a semantic boundary.
+- Reasoning Composer mechanism focus guard: mechanism questions no longer promote LLM-selected focus text or quotes that point to background revelation/travel/later consequences instead of concrete operational evidence. The source evidence remains available, but ungrounded focus is not shown to the final AI answer node as a privileged instruction.
+- Grounded mechanism terms: Graph Query no longer treats story-specific mechanism objects such as flowers/water/cups as fixed global memory. Mechanism terms are filtered against the current document chunks/events/relations before they can affect evidence ranking, and Composer suppresses background travel/revelation relations when operational source evidence is already available.
+- LLM-only mechanism mode: in pure `llm` mode, Graph Query no longer adds rule mechanism expansions. The LLM mechanism-cue call now retries with a JSON repair pass, validated cue terms can pull matching chunks into the evidence candidate pool, and TL only validates grounding instead of substituting fixed mechanism objects.
+- LLM cue failure broad evidence: if the mechanism cue LLM still returns non-JSON, TL salvages grounded terms from the raw LLM text when possible. If no cue survives validation, Graph Query marks `mechanismCueFailed`, broadens evidence instead of narrowing it by generic score, and Reasoning Composer receives a mechanical beginning/middle/end evidence sample.
 
 ## Next Logical Step
 

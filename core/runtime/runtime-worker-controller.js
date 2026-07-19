@@ -1,5 +1,5 @@
 window.TrackerLensRuntimeWorker = (() => {
-  const WORKER_VERSION = "kg-20260719-mechanism-evidence-priority-1";
+  const WORKER_VERSION = "kg-20260719-llm-cue-salvage-broad-evidence-1";
   let worker = null;
   let port = null;
   let connected = false;
