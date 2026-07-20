@@ -7,6 +7,7 @@ window.TrackerLensAiAgentEditor = (() => {
   const optionItems = (items = []) => items.map((item) => typeof item === "string" ? ({ value: item, label: item }) : item);
   const splitList = (value = "") => String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
   const csvOf = (value = []) => Array.isArray(value) ? value.join(", ") : String(value || "");
+  const cleanText = (value = "", fallback = "") => String(value ?? fallback ?? "").trim();
   const rawAgent = (agent = null) => agent?.raw && typeof agent.raw === "object" ? agent.raw : agent || {};
   const agentField = (agent, key, fallback = "") => rawAgent(agent)?.[key] ?? agent?.[key] ?? fallback;
   const agentNested = (agent, key) => {
@@ -29,6 +30,108 @@ window.TrackerLensAiAgentEditor = (() => {
     agentNested(agent, "provider").profileId || agentNested(agent, "provider").providerId || "";
   const providerLabel = (provider = {}) =>
     `${provider.name || provider.provider || "Provider"} · ${provider.model || provider.provider || "model"}`;
+
+  const normalizeProviderName = (value = "") =>
+    cleanText(value).toLowerCase().replace(/[\s_-]+/g, "");
+
+  const fallbackProviderConfig = (providerType = "") => {
+    const key = normalizeProviderName(providerType);
+    if (key.includes("lmstudio")) {
+      return {
+        id: "local_lm_studio",
+        name: "LM Studio",
+        provider: "lm-studio",
+        providerType: "lm-studio",
+        endpoint: "http://127.0.0.1:1234/v1",
+        modelPath: "/models",
+        model: "local-model",
+      };
+    }
+    if (key.includes("ollama")) {
+      return {
+        id: "local_ollama",
+        name: "Ollama",
+        provider: "ollama",
+        providerType: "ollama",
+        endpoint: "http://127.0.0.1:11434",
+        modelPath: "/api/tags",
+        model: "llama3.1",
+      };
+    }
+    return null;
+  };
+
+  const joinEndpointPath = (base = "", path = "") => {
+    const cleanBase = cleanText(base).replace(/\/+$/, "");
+    const cleanPath = cleanText(path).replace(/^\/+/, "");
+    if (!cleanBase) return "";
+    return cleanPath ? `${cleanBase}/${cleanPath}` : cleanBase;
+  };
+
+  const aiProviderModelPaths = (provider = {}) => {
+    const kind = normalizeProviderName(provider.provider || provider.providerType || provider.name || provider.id);
+    if (kind.includes("ollama")) return [provider.modelPath || "/api/tags", "/api/tags"];
+    if (kind.includes("lmstudio")) return [provider.modelPath || "/models", "/api/v1/models", "/v1/models"];
+    return [provider.modelPath, provider.healthPath, "/models", "/api/v1/models"].filter(Boolean);
+  };
+
+  const aiProviderModelUrls = (provider = {}) => {
+    const base = cleanText(provider.endpoint || provider.baseUrl).replace(/\/+$/, "");
+    if (!base) return [];
+    const kind = normalizeProviderName(provider.provider || provider.providerType || provider.name || provider.id);
+    const urls = aiProviderModelPaths(provider).map((path) => joinEndpointPath(base, path));
+    if (kind.includes("lmstudio")) {
+      const root = base.replace(/\/v1$/i, "");
+      urls.push(joinEndpointPath(root, "/api/v1/models"));
+      urls.push(joinEndpointPath(root, "/v1/models"));
+      urls.push(joinEndpointPath(root, "/models"));
+    }
+    return [...new Set(urls.filter(Boolean))];
+  };
+
+  const parseAiModelList = (payload = {}) => {
+    const source = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload.models)
+          ? payload.models
+          : Array.isArray(payload.tags)
+            ? payload.tags
+            : [];
+    return [...new Set(source
+      .map((item) => cleanText(item?.id || item?.name || item?.model || item))
+      .filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+  };
+
+  const fetchAiProviderModels = async (provider = {}) => {
+    if (!provider?.endpoint && !provider?.baseUrl) return { models: [], error: "Provider endpoint non configurato" };
+    const urls = aiProviderModelUrls(provider);
+    let lastError = "";
+    for (const url of urls) {
+      if (!url) continue;
+      let timeout = 0;
+      try {
+        const controller = new AbortController();
+        timeout = window.setTimeout(() => controller.abort(), 3500);
+        const response = await fetch(url, { method: "GET", signal: controller.signal });
+        if (!response.ok) {
+          lastError = `${response.status} ${response.statusText}`;
+          continue;
+        }
+        const payload = await response.json();
+        const models = parseAiModelList(payload);
+        if (models.length) return { models, url };
+        lastError = "Nessun modello nella risposta";
+      } catch (error) {
+        lastError = error?.name === "AbortError" ? "Timeout richiesta modelli" : error?.message || "Errore lettura modelli";
+      } finally {
+        if (timeout) window.clearTimeout(timeout);
+      }
+    }
+    return { models: [], error: lastError || "Nessun endpoint modelli disponibile" };
+  };
 
   const AI_AGENT_TYPES = ["analyzer", "summarizer", "decision", "classifier", "predictor", "memory", "router", "planner", "debugger"];
   const AI_EXECUTION_MODES = ["on_event", "interval", "continuous", "manual", "scheduled"];
@@ -274,6 +377,14 @@ window.TrackerLensAiAgentEditor = (() => {
       { value: "", label: "Auto / local-first" },
       ...providers.filter((item) => !item.placeholder).map((item) => ({ value: item.id, label: providerLabel(item) })),
     ];
+    const modelState = {
+      providerKey: "",
+      loading: false,
+      error: "",
+      items: [],
+      value: provider.model || "local-model",
+      url: "",
+    };
     const tabModel = window.CMSwift.reactive.signal("general");
     const formId = `tl-ai-agent-editor-${String(agent?.id || Date.now()).replace(/[^A-Za-z0-9_-]/g, "_")}`;
     const dialogTitle = title || values.name || "Runtime Intelligence Agent";
@@ -287,6 +398,99 @@ window.TrackerLensAiAgentEditor = (() => {
         return;
       }
       await onSave?.({ payload, form, close, agent, dialog });
+    };
+    const providerForModelLookup = (form = document.getElementById(formId)) => {
+      const providerProfile = agentFormValue(form, "providerProfile");
+      const providerType = agentFormValue(form, "providerType") || provider.providerType || provider.provider || "ollama";
+      const selectedProvider = providers.find((item) => item.id === providerProfile) || null;
+      if (selectedProvider) return selectedProvider;
+      const normalizedType = normalizeProviderName(providerType);
+      return providers.find((item) => {
+        const itemType = normalizeProviderName(item.provider || item.providerType || item.name || item.id);
+        return itemType === normalizedType || itemType.includes(normalizedType) || normalizedType.includes(itemType);
+      }) || fallbackProviderConfig(providerType) || {};
+    };
+    const modelProviderKey = (providerConfig = {}) =>
+      [providerConfig.id, providerConfig.name, providerConfig.provider, providerConfig.providerType, providerConfig.endpoint || providerConfig.baseUrl]
+        .map((item) => cleanText(item))
+        .filter(Boolean)
+        .join("|");
+    const updateModelField = () => {
+      const host = document.querySelector(`#${formId} [data-ai-model-field-host="true"]`);
+      if (host) host.replaceWith(agentModelSelect());
+    };
+    const loadModelsForCurrentProvider = async ({ force = false } = {}) => {
+      const form = document.getElementById(formId);
+      if (!form) return;
+      const providerConfig = providerForModelLookup(form);
+      const key = modelProviderKey(providerConfig);
+      if (!force && modelState.providerKey === key && (modelState.items.length || modelState.loading)) return;
+      modelState.providerKey = key;
+      modelState.loading = true;
+      modelState.error = "";
+      modelState.items = [];
+      modelState.value = agentFormValue(form, "model") || modelState.value || providerConfig.model || providerConfig.defaultModel || "";
+      updateModelField();
+      const result = await fetchAiProviderModels(providerConfig);
+      const currentModel = agentFormValue(document.getElementById(formId), "model") || modelState.value || providerConfig.model || providerConfig.defaultModel || "";
+      modelState.loading = false;
+      modelState.error = result.error || "";
+      modelState.items = result.models || [];
+      modelState.url = result.url || "";
+      modelState.value = currentModel && (modelState.items.includes(currentModel) || !modelState.items.length)
+        ? currentModel
+        : modelState.items[0] || currentModel || "";
+      updateModelField();
+    };
+    const agentModelSelect = () => {
+      const currentValue = modelState.value || provider.model || "local-model";
+      const options = modelState.items.length
+        ? [...new Set([currentValue, ...modelState.items].filter(Boolean))]
+        : [currentValue || "", ""].filter((item, index, items) => item || index === items.length - 1);
+      const label = modelState.loading ? "Model (loading...)" : modelState.error ? "Model (fallback)" : "Model";
+      return _.div(
+        { class: "tl-ai-agent-field tl-ai-agent-model-field", "data-ai-model-field-host": "true" },
+        _.input({ type: "hidden", name: "model", value: currentValue }),
+        _.Select({
+          label,
+          value: currentValue,
+          options: optionItems(options.map((item) => ({
+            value: item,
+            label: item || (modelState.loading ? "Loading models..." : "No models loaded"),
+          }))),
+          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          onChange: (nextValue) => {
+            const value = selectValueOf(nextValue);
+            modelState.value = value;
+            const input = document.querySelector(`#${formId} input[name='model']`);
+            if (input) input.value = value;
+          },
+        }),
+        _.small(
+          { class: `tl-ai-agent-model-meta${modelState.error ? " is-error" : ""}` },
+          modelState.loading
+            ? "Loading models from provider..."
+            : modelState.items.length
+              ? `${modelState.items.length} models available`
+              : modelState.error || "Model list unavailable; saved value is still editable after provider refresh."
+        )
+      );
+    };
+    const syncProviderFieldsAndModels = (providerId = "") => {
+      const selected = providers.find((item) => item.id === providerId);
+      if (!selected) {
+        loadModelsForCurrentProvider({ force: true });
+        return;
+      }
+      const form = document.getElementById(formId) || document.querySelector(".tl-ai-agent-runtime-editor");
+      const providerType = form?.querySelector?.("input[name='providerType']");
+      const model = form?.querySelector?.("input[name='model']");
+      if (providerType) providerType.value = selected.providerType || selected.provider || providerType.value || "local";
+      if (model) {
+        model.value = selected.model || selected.defaultModel || model.value || "local-model";
+        modelState.value = model.value;
+      }
+      loadModelsForCurrentProvider({ force: true });
     };
     const tabs = [
       {
@@ -332,18 +536,12 @@ window.TrackerLensAiAgentEditor = (() => {
         content: _.div(
           { class: "tl-ai-agent-tab-grid" },
           agentSelect("Provider Profile", "providerProfile", selectedProviderId(agent), providerProfiles, {
-            onChange: (providerId) => {
-              const selected = providers.find((item) => item.id === providerId);
-              if (!selected) return;
-              const form = document.querySelector(".tl-ai-agent-runtime-editor");
-              const providerType = form?.querySelector?.("input[name='providerType']");
-              const model = form?.querySelector?.("input[name='model']");
-              if (providerType) providerType.value = selected.providerType || selected.provider || providerType.value || "local";
-              if (model) model.value = selected.model || selected.defaultModel || model.value || "local-model";
-            },
+            onChange: syncProviderFieldsAndModels,
           }),
-          agentSelect("Provider Type", "providerType", provider.providerType || provider.provider || "ollama", AI_PROVIDER_TYPES),
-          agentInput("Model", "model", provider.model || "local-model"),
+          agentSelect("Provider Type", "providerType", provider.providerType || provider.provider || "ollama", AI_PROVIDER_TYPES, {
+            onChange: () => loadModelsForCurrentProvider({ force: true }),
+          }),
+          agentModelSelect(),
           agentInput("Temperature", "temperature", provider.temperature ?? 0.2, { type: "number", step: "0.1" }),
           agentInput("Max Tokens", "maxTokens", provider.maxTokens ?? 800, { type: "number" }),
           agentInput("Top P", "topP", provider.topP ?? 0.9, { type: "number", step: "0.05" }),
@@ -475,6 +673,7 @@ window.TrackerLensAiAgentEditor = (() => {
       ),
     });
     dialog.open();
+    window.setTimeout(() => loadModelsForCurrentProvider({ force: true }), 0);
     return dialog;
   };
 

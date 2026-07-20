@@ -181,6 +181,17 @@
   white-space: nowrap;
 }
 
+.tl-ai-agent-model-meta {
+  min-height: 14px;
+  color: var(--tl-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tl-ai-agent-model-meta.is-error {
+  color: #fca5a5;
+}
+
 .tl-ai-agent-textarea-field span {
   color: #ffe3a5;
   font-size: 11px;
