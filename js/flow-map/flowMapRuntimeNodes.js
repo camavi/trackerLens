@@ -3819,7 +3819,89 @@ const persistRuntimeNodeConfig = async ({ node, form, close, force = false }) =>
 
 const flowAiConfigValue = (value = "") => Array.isArray(value) ? value.join(", ") : String(value || "");
 
-const aiAgentFromRuntimeNode = (node = {}) => {
+let runtimeDefaultAiSettingsCache = null;
+
+const normalizeRuntimeProviderName = (value = "") =>
+  String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+
+const readRuntimeDefaultAiSettings = async () => {
+  if (runtimeDefaultAiSettingsCache) return runtimeDefaultAiSettingsCache;
+  const fallback = {
+    provider: "Ollama",
+    model: "llama3.1",
+    temperature: 0.72,
+    maxTokens: 2048,
+    localFirst: true,
+  };
+  if (!window.indexedDB) {
+    runtimeDefaultAiSettingsCache = fallback;
+    return runtimeDefaultAiSettingsCache;
+  }
+  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
+  const storeName = window.tlConfig?.TABLES?.TL_SETTINGS || "tl_settings";
+  runtimeDefaultAiSettingsCache = await new Promise((resolve) => {
+    const request = indexedDB.open(dbName);
+    request.onerror = () => resolve(fallback);
+    request.onsuccess = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.close();
+        resolve(fallback);
+        return;
+      }
+      const transaction = db.transaction(storeName, "readonly");
+      const store = transaction.objectStore(storeName);
+      const get = store.get("global");
+      get.onsuccess = () => {
+        db.close();
+        resolve({ ...fallback, ...(get.result?.settings?.ai || {}) });
+      };
+      get.onerror = () => {
+        db.close();
+        resolve(fallback);
+      };
+    };
+  });
+  return runtimeDefaultAiSettingsCache;
+};
+
+const runtimeDefaultAiProviderConfig = async (providers = []) => {
+  const settings = await readRuntimeDefaultAiSettings();
+  const selected = normalizeRuntimeProviderName(settings.provider);
+  const provider = providers.find((item) => {
+    const candidates = [item.id, item.name, item.provider, item.providerType].map(normalizeRuntimeProviderName);
+    return candidates.some((candidate) => candidate && (candidate === selected || candidate.includes(selected) || selected.includes(candidate)));
+  }) || null;
+  const providerType = provider?.providerType || provider?.provider || (selected.includes("lmstudio") ? "lm-studio" : selected.includes("ollama") ? "ollama" : selected || "ollama");
+  return {
+    providerProfile: provider?.id || "",
+    providerType,
+    model: settings.model || provider?.model || provider?.defaultModel || (providerType === "ollama" ? "llama3.1" : "local-model"),
+    temperature: settings.temperature ?? 0.2,
+    maxTokens: settings.maxTokens ?? 800,
+  };
+};
+
+const runtimeAiProvidersForConfig = async () => {
+  let providers = [];
+  try {
+    providers = (await window.TrackerLensAiRuntimeStore?.list?.())?.providers || [];
+  } catch (error) {
+    console.warn("Provider AI non caricati per default runtime:", error);
+  }
+  if (!providers.length) providers = window.TrackerLensAiRuntimeStore?.localProviderDefaults?.() || [];
+  return providers;
+};
+
+const runtimeDefaultAiConfigForDialog = async () => {
+  const providers = await runtimeAiProvidersForConfig();
+  return {
+    providers,
+    defaults: await runtimeDefaultAiProviderConfig(providers),
+  };
+};
+
+const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const config = defaults.configObject || {};
   const subtype = nodeSubtype(node);
@@ -3858,11 +3940,11 @@ const aiAgentFromRuntimeNode = (node = {}) => {
       dropPolicy: config.dropPolicy || "queue",
     },
     provider: {
-      profileId: config.providerProfile || "",
-      providerType: config.providerType || config.provider || "ollama",
-      model: config.model || "local-model",
-      temperature: config.temperature ?? 0.2,
-      maxTokens: config.maxTokens ?? 800,
+      profileId: config.providerProfile || aiDefaults.providerProfile || "",
+      providerType: config.providerType || config.provider || aiDefaults.providerType || "ollama",
+      model: config.model || aiDefaults.model || "local-model",
+      temperature: config.temperature ?? aiDefaults.temperature ?? 0.2,
+      maxTokens: config.maxTokens ?? aiDefaults.maxTokens ?? 800,
       topP: config.topP ?? 0.9,
       streaming: config.streaming === true || config.streaming === "true",
       responseFormat: config.responseFormat || "json",
@@ -4032,9 +4114,10 @@ const aiAgentAliasSourceId = (node = {}) =>
   node.metadata?.aliasSourceAgentId || node.metadata?.config?.aliasSourceAgentId || "";
 
 const resolveAiAgentEditorRecord = async (node = {}) => {
-  if (!node.metadata?.aiAgentAlias) return aiAgentFromRuntimeNode(node);
+  const { defaults: aiDefaults } = await runtimeDefaultAiConfigForDialog();
+  if (!node.metadata?.aiAgentAlias) return aiAgentFromRuntimeNode(node, aiDefaults);
   const source = await findSavedAiAgent(aiAgentAliasSourceId(node));
-  if (!source) return aiAgentFromRuntimeNode(node);
+  if (!source) return aiAgentFromRuntimeNode(node, aiDefaults);
   return {
     ...source,
     workspaceId: source.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
@@ -4291,7 +4374,8 @@ const persistOrchestratorAiEditorPayload = async ({ node, payload, form, close }
 const detachAiAgentAliasNode = async ({ node, close = null } = {}) => {
   if (!node?.id || !node.metadata?.aiAgentAlias) return;
   const source = await findSavedAiAgent(aiAgentAliasSourceId(node));
-  const payload = source || aiAgentFromRuntimeNode(node);
+  const { defaults: aiDefaults } = source ? { defaults: {} } : await runtimeDefaultAiConfigForDialog();
+  const payload = source || aiAgentFromRuntimeNode(node, aiDefaults);
   const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
   const runtimeAgentId = `runtime_agent_${safeRuntimeId(workspaceId)}_${safeRuntimeId(payload.id || node.id)}_${Date.now()}`;
   const copyPayload = {
@@ -4364,12 +4448,7 @@ const detachAiAgentAliasNode = async ({ node, close = null } = {}) => {
 
 const requestAiAgentRuntimeConfig = async (node) => {
   if (!node?.id || !window.TrackerLensAiAgentEditor?.open) return;
-  let providers = [];
-  try {
-    providers = (await window.TrackerLensAiRuntimeStore?.list?.())?.providers || [];
-  } catch (error) {
-    console.warn("Provider AI non caricati per Flow Map:", error);
-  }
+  const { providers } = await runtimeDefaultAiConfigForDialog();
   const subtype = nodeSubtype(node);
   const config = nodeConfigObject(node);
   const configInput = (label, key, fallback = "", extra = {}) => _.label(
@@ -5240,13 +5319,11 @@ const requestRuntimeNodeConfig = async (node) => {
   const formId = `tl-flow-config-${String(node.id).replace(/[^A-Za-z0-9_-]/g, "_")}`;
   let formRef = null;
   let aiProviders = [];
+  let aiConfigDefaults = {};
   if (configFields.some((definition) => String(definition.type || "").startsWith("ai-"))) {
-    try {
-      aiProviders = (await window.TrackerLensAiRuntimeStore?.list?.())?.providers || [];
-    } catch (error) {
-      console.warn("Provider AI non caricati per configurazione runtime:", error);
-    }
-    if (!aiProviders.length) aiProviders = window.TrackerLensAiRuntimeStore?.localProviderDefaults?.() || [];
+    const aiDefaults = await runtimeDefaultAiConfigForDialog();
+    aiProviders = aiDefaults.providers;
+    aiConfigDefaults = aiDefaults.defaults;
   }
   const field = (name, label, value, placeholder = "") =>
     _.label(
@@ -5298,6 +5375,7 @@ const requestRuntimeNodeConfig = async (node) => {
   };
   const configField = (definition) => {
     const value = defaults[definition.key] ?? defaults.configObject?.[definition.key] ??
+      (AI_PROVIDER_CONFIG_KEYS.has(definition.key) ? aiConfigDefaults[definition.key] : undefined) ??
       (definition.key === "previewMode" ? defaults.configObject?.mode : undefined) ??
       definition.defaultValue ?? "";
     if (definition.type === "ai-provider-profile") {
@@ -5490,7 +5568,7 @@ const requestRuntimeNodeConfig = async (node) => {
     const nodeTab = knowledgeAiNodeTabMeta(subtype);
     if (window.TrackerLensAiAgentEditor?.open) {
       window.TrackerLensAiAgentEditor.open({
-        agent: aiAgentFromRuntimeNode(node),
+        agent: aiAgentFromRuntimeNode(node, aiConfigDefaults),
         providers: aiProviders,
         title: `Configure ${subtype}`,
         subtitle: `${node.label || node.id} · Knowledge AI runtime node`,
