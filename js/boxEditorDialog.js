@@ -1060,7 +1060,7 @@ window.TrackerLensBoxEditorDialog = (() => {
           _.div({ class: "tl-box-dialog-test-row" }, _.span("Stato test"), _.span({ class: `tl-box-dialog-state-pill ${trackerStateClass()}` }, state.trackerTestStatus)),
           _.div({ class: "tl-box-dialog-test-row" }, _.span("Latenza"), _.strong(state.trackerTestLatency)),
           _.div({ class: "tl-box-dialog-test-row" }, _.span("Ultima esecuzione"), _.strong(state.trackerLastRun)),
-          btn({ class: "is-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale")
+          btn({ class: "st-btn-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale")
         );
       }
       if (state.trackerTab === "Avanzate") {
@@ -1142,7 +1142,7 @@ window.TrackerLensBoxEditorDialog = (() => {
         ),
         _.div(
           { class: "tl-box-dialog-preview-foot" },
-          btn({ class: "is-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale"),
+          btn({ class: "st-btn-primary", onclick: runTrackerTest, disabled: state.trackerTestRunning }, icon("play_arrow", "sm"), state.trackerTestRunning ? "Test in corso" : "Esegui test manuale"),
           _.span("Risposta: ", _.strong({ class: `tl-box-dialog-state-pill ${trackerStateClass()}` }, state.trackerTestLatency))
         )
       );
@@ -1323,7 +1323,7 @@ window.TrackerLensBoxEditorDialog = (() => {
           disabled: state.loading || state.saving,
         }, icon(state.advanced ? "tune" : "code", "sm"), state.advanced ? "Settings" : "Avanzato"),
         btn({
-          class: "is-primary",
+          class: "st-btn-primary",
           disabled: state.loading || state.saving,
           onclick: () => {
             const form = document.querySelector(".tl-box-editor-dialog .tl-box-dialog-form");

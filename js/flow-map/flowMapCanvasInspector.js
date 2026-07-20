@@ -3517,7 +3517,7 @@ const openKnowledgeDocumentFullTextDialog = (document = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       copyRuntimeButton(document, "Copy document"),
-      btn({ class: "is-primary", onclick: close }, "Close")
+      btn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -3809,7 +3809,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
           },
         }, icon("sync", "sm"), "Refresh"),
         btn({
-          class: "is-primary is-compact tl-kdoc-action-upload",
+          class: "st-btn-primary is-compact",
           onclick: () => requestKnowledgeDocumentUpload(node, {
             onComplete: async () => {
               const refreshed = await knowledgeDocumentRecordsForNode(node);
@@ -3938,7 +3938,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ class: "tl-kdoc-action-copy", onclick: () => copyRuntimeValue(data.documents) }, icon("content_copy", "sm"), "Copy List"),
-      btn({ class: "is-primary", onclick: close }, "Close")
+      btn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -6454,7 +6454,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
       { align: "end", gap: 8 },
       btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: false })) }, icon("account_tree", "sm"), "Copy Graph"),
       btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: true })) }, icon("content_copy", "sm"), "Copy With Isolated"),
-      btn({ class: "is-primary", onclick: close }, "Close")
+      btn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -7226,7 +7226,7 @@ const renderInspector = () => {
       _.div(
         { class: "tl-flow-node-actions" },
         linkingSource ? inspectorSourceChip(linkingSource) : null,
-        inspectorActionButton({ label: draft ? "Configure Draft" : "Open Config", iconName: draft ? "edit" : "open_in_new", className: "is-primary", onclick: () => configureNode(node) }),
+        inspectorActionButton({ label: draft ? "Configure Draft" : "Open Config", iconName: draft ? "edit" : "open_in_new", className: "st-btn-primary", onclick: () => configureNode(node) }),
         inspectorActionButton({ label: "Duplicate", iconName: "content_copy", onclick: () => duplicateRuntimeNode(node) }),
         inspectorActionButton({ label: paused || disabled ? "Resume" : "Pause", iconName: paused || disabled ? "play_arrow" : "pause", onclick: () => (paused || disabled ? resumeNodeRuntime(node) : pauseNodeRuntime(node)) }),
         inspectorActionButton({ label: disabled ? "Enable" : "Disable", iconName: disabled ? "power_settings_new" : "block", onclick: () => (disabled ? resumeNodeRuntime(node) : disableNodeRuntime(node)) }),
@@ -7447,7 +7447,7 @@ const openFlowRecordDialog = ({ title = "Runtime record", subtitle = "", iconNam
     content: () => record?.version === "agent-runtime-v1" && record?.node
       ? renderAgentRuntimeNodeRecord(record)
       : _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2)),
-    actions: ({ close }) => btn({ class: "is-primary", onclick: close }, "Close"),
+    actions: ({ close }) => btn({ class: "st-btn-primary", onclick: close }, "Close"),
   });
   dialog.open();
 };

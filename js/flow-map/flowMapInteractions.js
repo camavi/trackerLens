@@ -880,7 +880,7 @@ const openEmbeddedFlowMapPreviewDialog = async (aliasNode = {}) => {
     content: () => renderEmbeddedFlowMapPreview(graph),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ class: "is-primary", onclick: close }, "Chiudi")
+      btn({ class: "st-btn-primary", onclick: close }, "Chiudi")
     ),
   });
   dialog.open();
@@ -1364,7 +1364,7 @@ const openExistingAiAgentsDialog = async (options = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Close"),
-      btn({ class: "is-primary", onclick: () => window.location.assign("ai.html") }, icon("add", "sm"), "AI Runtime Center")
+      btn({ class: "st-btn-primary", onclick: () => window.location.assign("ai.html") }, icon("add", "sm"), "AI Runtime Center")
     ),
   });
   dialog.open();
@@ -1432,7 +1432,7 @@ const openExistingFlowMapDialog = async (options = {}) => {
       btn({ onclick: close }, "Chiudi"),
       btn({ onclick: () => window.location.assign("libraryFlowmap.html") }, icon("account_tree", "sm"), "Library Flow Map"),
       btn({
-        class: "is-primary",
+        class: "st-btn-primary",
         onclick: async () => {
           if (isInserting) return;
           if (!selectedFlowMapId) {
@@ -1521,7 +1521,7 @@ const openExistingLibraryDialog = async (item, options = {}) => {
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Close"),
       btn({
-        class: "is-primary",
+        class: "st-btn-primary",
         onclick: () => {
           if (window.TrackerLensBoxEditorDialog?.open) {
             window.TrackerLensBoxEditorDialog.open({
@@ -2786,7 +2786,7 @@ const requestChannelRename = (channel, closeParent = null) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-primary", onclick: () => performChannelRename({ channel, form: formRef || document.getElementById(formId), close, closeParent }) }, icon("save", "sm"), "Validate Rename")
+      btn({ class: "st-btn-primary", onclick: () => performChannelRename({ channel, form: formRef || document.getElementById(formId), close, closeParent }) }, icon("save", "sm"), "Validate Rename")
     ),
   });
   dialog.open();
@@ -2858,7 +2858,7 @@ const requestChannelDelete = async (channel, closeParent = null) => {
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
       btn({
-        class: blocked ? "is-danger" : "is-primary",
+        class: blocked ? "is-danger" : "st-btn-primary",
         onclick: () => performChannelDelete({ channel, close, closeParent, force: blocked }),
       }, icon(blocked ? "delete_forever" : "delete", "sm"), blocked ? "Force Delete" : "Delete")
     ),

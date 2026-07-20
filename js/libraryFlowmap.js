@@ -567,7 +567,7 @@ const openCreateFlowMapDialog = () => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Annulla"),
-      btn({ class: "is-primary", onclick: () => createFlowMapFromDialog({ close, titleInput, descriptionInput, categoryInput, colorInput, versionInput }) }, icon("add", "sm"), "Crea")
+      btn({ class: "st-btn-primary", onclick: () => createFlowMapFromDialog({ close, titleInput, descriptionInput, categoryInput, colorInput, versionInput }) }, icon("add", "sm"), "Crea")
     ),
   });
   dialog.open();
@@ -587,7 +587,7 @@ const renderTopbar = () =>
     _.Toolbar(
       { class: "tl-library-actions", align: "center", gap: 16 },
       btn({ class: "tl-library-menu", onclick: importFlowMapFile }, icon("upload_file", "sm"), "Import"),
-      btn({ class: "tl-library-create", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map")
+      btn({ class: "st-btn-primary", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map")
     )
   );
 
@@ -746,10 +746,10 @@ const renderMain = () => {
       flowLibraryState.loading
         ? renderStateCard({ iconName: "hourglass_top", title: "Caricamento Flow Map", text: "Lettura dei flow runtime salvati in IndexedDB." })
         : flowLibraryState.error
-          ? renderStateCard({ iconName: "warning", title: "Libreria Flow Map non disponibile", text: flowLibraryState.error, action: btn({ class: "tl-empty-action", onclick: loadFlowLibrary }, icon("refresh", "sm"), "Riprova") })
+          ? renderStateCard({ iconName: "warning", title: "Libreria Flow Map non disponibile", text: flowLibraryState.error, action: btn({ class: "st-btn-primary", onclick: loadFlowLibrary }, icon("refresh", "sm"), "Riprova") })
           : items.length
             ? _.Grid({ class: "tl-library-grid", cols: "repeat(auto-fill, minmax(240px, 1fr))", gap: "28px 18px" }, ...items.map(renderFlowCard))
-            : renderStateCard({ iconName: "account_tree", title: "Nessun Flow Map salvato", text: "Crea o importa un Flow Map per iniziare a separarlo dal workspace.", action: btn({ class: "tl-empty-action", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map") })
+            : renderStateCard({ iconName: "account_tree", title: "Nessun Flow Map salvato", text: "Crea o importa un Flow Map per iniziare a separarlo dal workspace.", action: btn({ class: "st-btn-primary", onclick: openCreateFlowMapDialog }, icon("add", "sm"), "Nuovo Flow Map") })
     )
   );
 };

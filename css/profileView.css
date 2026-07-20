@@ -107,17 +107,6 @@ body {
   justify-self: end;
 }
 
-.tl-profile-edit.cms-btn,
-.tl-profile-fill.cms-btn,
-.tl-profile-plan-btn.cms-btn {
-  color: #fff;
-  border-color: rgba(255, 199, 44, 0.48);
-  border-radius: 8px;
-  background: linear-gradient(180deg, #d99a00, #7a5200);
-  box-shadow: 0 12px 30px rgba(122, 82, 0, 0.3);
-  font-weight: 800;
-}
-
 .tl-profile-menu.cms-btn {
   width: 42px;
   min-width: 42px;
@@ -406,9 +395,6 @@ body {
 .tl-profile-plan-btn.cms-btn {
   width: 100%;
   margin-top: 7px;
-  color: #161000;
-  border-color: rgba(255, 199, 44, 0.45);
-  background: linear-gradient(180deg, #ffd84f, #d99a00);
 }
 
 .tl-profile-hero-actions {

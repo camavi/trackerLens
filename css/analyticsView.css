@@ -121,20 +121,6 @@ body {
   justify-self: end;
 }
 
-.tl-analytics-edit.cms-btn,
-.tl-analytics-small-btn.cms-btn {
-  color: #161000;
-  border-color: rgba(255, 199, 44, 0.48);
-  border-radius: 8px;
-  background: linear-gradient(180deg, #ffd84f, #d99a00);
-  box-shadow: 0 10px 28px rgba(255, 199, 44, 0.2);
-  font-weight: 800;
-}
-
-.tl-analytics-edit.cms-btn {
-  min-width: 104px;
-}
-
 .tl-analytics-menu.cms-btn,
 .tl-analytics-icon-btn.cms-btn {
   width: 42px;
@@ -484,14 +470,10 @@ body {
   font-size: 12px;
 }
 
-.tl-analytics-log-btn.cms-btn,
-.tl-analytics-link-btn.cms-btn {
+.tl-analytics-block-action.cms-btn {
   width: 100%;
   height: 34px;
-  color: #ffe6a3;
-  border-color: rgba(214, 226, 235, 0.11);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.035);
 }
 
 .tl-analytics-realtime {
@@ -735,7 +717,7 @@ body {
   font-size: 11px;
 }
 
-.tl-analytics-endpoint-card .tl-analytics-link-btn.cms-btn {
+.tl-analytics-endpoint-card .tl-analytics-block-action.cms-btn {
   height: 30px;
   margin-top: 0;
 }

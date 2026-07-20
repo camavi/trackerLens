@@ -7686,7 +7686,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       (plan.nodes || []).length ? _.div(
         { class: "tl-flow-prompt-plan-actions" },
         btn({
-          class: "is-primary",
+          class: "st-btn-primary",
           disabled: draft.busy || preflight?.ok === false,
           onclick: () => createPlanSnapshot(plan),
         }, icon("add_link", "sm"), "Crea flow")
@@ -7986,7 +7986,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
               candidate.reason ? _.small(candidate.reason) : null
             ),
             candidate.usable ? btn({
-              class: "is-primary",
+              class: "st-btn-primary",
               disabled: draft.busy,
               onclick: () => analyze(prompt),
               title: "Prepara Apply con questo URL esplicito",
@@ -8181,7 +8181,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
                 },
               }, icon("build_circle", "sm"), "Prepare Fix") : null,
               runtimeInsight.canPrepareEndpointConfig ? btn({
-                class: "is-primary",
+                class: "st-btn-primary",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
@@ -8324,7 +8324,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           canFixAll ? _.div(
             { class: "tl-flow-prompt-diagnostics-actions" },
             btn({
-              class: "is-primary",
+              class: "st-btn-primary",
               disabled: draft.busy,
               onclick: (event) => {
                 event.preventDefault();
@@ -8372,7 +8372,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.em(pendingAction.summary || "")
           ),
           pendingStatus === "ready" ? btn({
-            class: "is-primary",
+            class: "st-btn-primary",
             disabled: draft.busy,
             onclick: () => applyAgentAction(pendingAction),
           }, icon("check", "sm"), "Apply") : null

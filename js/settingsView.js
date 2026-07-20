@@ -412,7 +412,7 @@ const renderTopbar = () =>
     ),
     _.Toolbar(
       { class: "tl-settings-actions", align: "center", gap: 14 },
-      btn({ class: "tl-settings-edit", onclick: () => saveSettings(false) }, icon("edit", "sm"), "Edit"),
+      btn({ class: "st-btn-primary", onclick: () => saveSettings(false) }, icon("edit", "sm"), "Edit"),
       btn({ class: "tl-settings-menu", "aria-label": "Menu impostazioni" }, icon("more_vert"))
     )
   );
@@ -431,7 +431,7 @@ const renderHeader = () =>
       _.Toolbar(
         { class: "tl-settings-head-actions", gap: 14 },
         _.span({ class: "tl-settings-live-pill", "data-settings-live-pill": "true" }, dot(settingsState.error ? "error" : "online"), settingsState.error || settingsState.notice || "Sistema Online"),
-        btn({ class: "tl-settings-save", onclick: () => saveSettings(false) }, icon("save", "sm"), "Salva Modifiche")
+        btn({ class: "st-btn-primary", onclick: () => saveSettings(false) }, icon("save", "sm"), "Salva Modifiche")
       )
     )
   );
@@ -738,7 +738,7 @@ const renderAiProvider = () =>
           }
         ),
         btn({
-          class: "tl-settings-model-set",
+          class: "st-btn-primary tl-settings-model-set",
           disabled: !settingsState.aiModels.selected || settingsState.aiModels.loading,
           onclick: setSelectedAiModelAsDefault,
         }, icon("check", "sm"), "Set")
@@ -749,16 +749,16 @@ const renderAiProvider = () =>
       settingsState.aiModels.loading
         ? [icon("hourglass_empty", "sm"), _.span("Fetching model list from selected provider...")]
         : settingsState.aiModels.error
-          ? [icon("warning", "sm"), _.span(settingsState.aiModels.error), btn({ class: "tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Retry")]
+          ? [icon("warning", "sm"), _.span(settingsState.aiModels.error), btn({ class: "st-btn-primary tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Retry")]
           : settingsState.aiModels.items.length
-            ? [icon("dns", "sm"), _.span(`${settingsState.aiModels.items.length} models available`), btn({ class: "tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Refresh")]
-            : [icon("info", "sm"), _.span("Select a local provider to load models automatically."), btn({ class: "tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Load")]
+            ? [icon("dns", "sm"), _.span(`${settingsState.aiModels.items.length} models available`), btn({ class: "st-btn-primary tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Refresh")]
+            : [icon("info", "sm"), _.span("Select a local provider to load models automatically."), btn({ class: "st-btn-primary tl-settings-model-refresh", onclick: () => loadAiModelsForSelectedProvider({ force: true }) }, icon("refresh", "sm"), "Load")]
     ),
     renderField("Modello predefinito", renderSettingInput("ai.model")),
     renderToggleRow("Local AI first", Boolean(settingsState.settings.ai.localFirst), (checked) => mutateSetting("ai.localFirst", Boolean(checked), { persist: true })),
     renderSettingRange("Temperatura", "ai.temperature", 0, 2, 0.01),
     renderSettingRange("Token massimi", "ai.maxTokens", 256, 8192, 1),
-    btn({ class: "tl-settings-primary", onclick: testAiConnection }, icon("radar", "sm"), "Testa Connessione")
+    btn({ class: "st-btn-primary", onclick: testAiConnection }, icon("radar", "sm"), "Testa Connessione")
   );
 
 const renderConnections = () =>
@@ -807,7 +807,7 @@ const renderStorage = () =>
     ),
     renderSettingToggle("Compressione Dati", "storage.compression"),
     renderSettingToggle("Cleanup automatico", "storage.autoCleanup"),
-    btn({ class: "tl-settings-primary", onclick: applyRuntimeRetention }, icon("cleaning_services", "sm"), "Applica retention runtime")
+    btn({ class: "st-btn-primary", onclick: applyRuntimeRetention }, icon("cleaning_services", "sm"), "Applica retention runtime")
   );
 
 const renderNotifications = () =>
@@ -820,7 +820,7 @@ const renderNotifications = () =>
     renderSettingToggle("Avvisi Performance", "notifications.performance"),
     renderSettingToggle("Riepilogo Giornaliero", "notifications.dailySummary"),
     renderField("Email notifiche", renderSettingInput("notifications.emailAddress")),
-    btn({ class: "tl-settings-primary", onclick: testNotifications }, icon("mail", "sm"), "Testa Notifiche")
+    btn({ class: "st-btn-primary", onclick: testNotifications }, icon("mail", "sm"), "Testa Notifiche")
   );
 
 const runtimeServices = () => {
@@ -927,7 +927,7 @@ const renderBackup = () => {
         patchSettingsBackupPanel();
       })
     ),
-    _.Toolbar({ class: "tl-settings-backup-actions", gap: 10 }, btn({ class: "tl-settings-primary", onclick: runBackupNow }, icon("backup", "sm"), "Esegui Backup Ora"), btn({ class: "tl-settings-ghost", onclick: importConfiguration }, icon("restore", "sm"), "Ripristina Backup"))
+    _.Toolbar({ class: "tl-settings-backup-actions", gap: 10 }, btn({ class: "st-btn-primary", onclick: runBackupNow }, icon("backup", "sm"), "Esegui Backup Ora"), btn({ class: "tl-settings-ghost", onclick: importConfiguration }, icon("restore", "sm"), "Ripristina Backup"))
   );
 };
 
@@ -966,7 +966,7 @@ const renderSecurity = () => {
           },
         })
       ),
-      btn({ class: "tl-settings-primary tl-settings-security-add", onclick: addApiKey }, icon("add", "sm"), "Aggiungi Nuova Chiave")
+      btn({ class: "st-btn-primary tl-settings-security-add", onclick: addApiKey }, icon("add", "sm"), "Aggiungi Nuova Chiave")
     ),
     _.div(
       { class: "tl-settings-key-list" },
@@ -1011,7 +1011,7 @@ const renderSystemInfo = () => {
       ["Memoria totale", totalMemory],
       ["Utilizzo Memoria", usedMemory],
     ].map(([label, value]) => _.p(_.span(label), _.strong(value))),
-    btn({ class: "tl-settings-primary", onclick: runDiagnostics }, icon("fact_check", "sm"), "Diagnostica Sistema")
+    btn({ class: "st-btn-primary", onclick: runDiagnostics }, icon("fact_check", "sm"), "Diagnostica Sistema")
   );
 };
 

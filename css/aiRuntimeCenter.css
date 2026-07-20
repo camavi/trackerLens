@@ -120,16 +120,6 @@ body {
   justify-self: end;
 }
 
-.tl-ai-edit.cms-btn,
-.tl-ai-small-btn.cms-btn {
-  color: #161000;
-  border-color: rgba(255, 199, 44, 0.52);
-  border-radius: 8px;
-  background: linear-gradient(180deg, #ffd84f, #d99a00);
-  box-shadow: 0 10px 28px rgba(255, 199, 44, 0.2);
-  font-weight: 800;
-}
-
 .tl-ai-menu.cms-btn,
 .tl-ai-icon-btn.cms-btn {
   width: 42px;

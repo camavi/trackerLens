@@ -465,7 +465,7 @@ const renderTopbar = () =>
     ),
     _.Toolbar(
       { class: "tl-analytics-actions", align: "center", gap: 16 },
-      btn({ class: "tl-analytics-edit" }, icon("edit", "sm"), "Edit"),
+      btn({ class: "st-btn-primary" }, icon("edit", "sm"), "Edit"),
       btn({ class: "tl-analytics-menu", "aria-label": "Menu analytics" }, icon("more_vert"))
     )
   );
@@ -530,8 +530,8 @@ const renderHeader = () =>
       _.Toolbar(
         { class: "tl-analytics-head-actions", gap: 14 },
         _.span({ class: "tl-analytics-live-pill" }, dot(), "Sistema Online"),
-        btn({ class: "tl-analytics-small-btn" }, icon("calendar_today", "sm"), "Ultimi 30 minuti"),
-        btn({ class: "tl-analytics-small-btn", onclick: () => openDevTools("performance") }, icon("speed", "sm"), "DevTools"),
+        btn({ class: "st-btn-primary" }, icon("calendar_today", "sm"), "Ultimi 30 minuti"),
+        btn({ class: "st-btn-primary", onclick: () => openDevTools("performance") }, icon("speed", "sm"), "DevTools"),
         btn({ class: "tl-analytics-icon-btn", "aria-label": "Aggiorna", onclick: mountAnalytics }, icon("refresh", "sm"))
       )
     ),
@@ -546,7 +546,7 @@ const renderLiveStream = () =>
       { class: "tl-analytics-event-list", "data-analytics-live-events": "true" },
       ...renderLiveEventRows()
     ),
-    btn({ class: "tl-analytics-log-btn", onclick: () => openDevTools("events") }, icon("article", "sm"), "Visualizza tutto il log")
+    btn({ class: "st-btn-primary tl-analytics-block-action", onclick: () => openDevTools("events") }, icon("article", "sm"), "Visualizza tutto il log")
   );
 
 const chartPoints = (values = [], maxValue = Math.max(1, ...values)) =>
@@ -623,7 +623,7 @@ const renderGauge = (state = getChartState()) =>
         _.div({ class: "tl-analytics-service" }, _.span(icon(iconName, "sm"), name), _.strong({ class: `is-${status}` }, dot(), serviceState))
       )
     ),
-    btn({ class: "tl-analytics-link-btn", onclick: () => openDevTools("overview") }, "Vedi tutti i servizi", icon("chevron_right", "sm"))
+    btn({ class: "st-btn-primary tl-analytics-block-action", onclick: () => openDevTools("overview") }, "Vedi tutti i servizi", icon("chevron_right", "sm"))
   );
 
 const renderMetricsArea = () =>
@@ -635,7 +635,7 @@ const renderMetricsArea = () =>
 const renderTrackerTable = () =>
   _.section(
     { class: "tl-analytics-tracker-table" },
-    _.Row({ justify: "space-between", align: "center" }, _.h3("Monitoraggio boxTracker"), btn({ class: "tl-analytics-small-btn", onclick: () => openDevTools("performance") }, icon("speed", "sm"), "DevTools Performance")),
+    _.Row({ justify: "space-between", align: "center" }, _.h3("Monitoraggio boxTracker"), btn({ class: "st-btn-primary", onclick: () => openDevTools("performance") }, icon("speed", "sm"), "DevTools Performance")),
     _.div(
       { class: "tl-analytics-table-wrap" },
       _.table(
@@ -675,7 +675,7 @@ const renderTopEndpointCard = () =>
     ...analyticsState.endpoints.slice(0, 3).map(([name, count, width]) =>
       _.div({ class: "tl-analytics-endpoint" }, _.span(name), _.strong(count), _.span({ class: "tl-analytics-bar", style: { "--w": `${width}%` } }))
     ),
-    btn({ class: "tl-analytics-link-btn" }, "Vedi tutti gli endpoint")
+    btn({ class: "st-btn-primary tl-analytics-block-action" }, "Vedi tutti gli endpoint")
   );
 
 const donutColors = ["#d99a00", "#35c979", "#368df8", "#ffc72c", "#8a95a3"];
@@ -752,7 +752,7 @@ const renderAnalyticsCards = () =>
       { class: "tl-analytics-bottom-card is-workspace" },
       _.h3("Workspace Activity"),
       ...analyticsState.workspaces.map(([name, width]) => _.div({ class: "tl-analytics-workspace-bar" }, _.span(name), _.span({ class: "tl-analytics-bar", style: { "--w": `${width}%` } }))),
-      btn({ class: "tl-analytics-link-btn" }, "Visualizza tutti i workspace")
+      btn({ class: "st-btn-primary tl-analytics-block-action" }, "Visualizza tutti i workspace")
     ),
     renderTopEndpointCard()
   );

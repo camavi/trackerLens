@@ -248,7 +248,7 @@ const requestFlowPortDialog = (node, editingPortName = "") => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ type: "button", onclick: close }, "Annulla"),
-      btn({ type: "button", class: "is-primary", onclick: () => save(close) }, icon("save", "sm"), existing ? "Salva" : "Aggiungi")
+      btn({ type: "button", class: "st-btn-primary", onclick: () => save(close) }, icon("save", "sm"), existing ? "Salva" : "Aggiungi")
     ),
   });
   dialog.open();
@@ -420,6 +420,15 @@ const payloadEditorDefaultItems = (node = {}, config = {}) => {
       { id: "payload_priority", key: "priority", label: "Priority", value: config.priority || "normal", type: "select", options: "normal, high, urgent", icon: "", iconColor: "", description: "", enabled: true, visible: true },
     ];
   }
+  if (subtype === "knowledge-mechanism-cue-agent") {
+    return [
+      { id: "payload_query", key: "query", label: "Query", value: config.query || "", type: "note", icon: "search", iconColor: "", description: "", enabled: true, visible: true },
+      { id: "payload_collectionId", key: "collectionId", label: "Collection", value: config.collectionId || "", type: "string", icon: "folder", iconColor: "", description: "", enabled: true, visible: true },
+      { id: "payload_documentId", key: "documentId", label: "Document", value: config.documentId || "", type: "string", icon: "article", iconColor: "", description: "", enabled: true, visible: false },
+      { id: "payload_maxChunks", key: "maxChunks", label: "Max chunks", value: config.maxChunks || "24", type: "int", icon: "segment", iconColor: "", description: "", enabled: true, visible: true },
+      { id: "payload_maxChunkChars", key: "maxChunkChars", label: "Max chars", value: config.maxChunkChars || "620", type: "int", icon: "article", iconColor: "", description: "", enabled: true, visible: true },
+    ];
+  }
   if (subtype === "graph-query") {
     return [
       { id: "payload_query", key: "query", label: "Query", value: config.query || "", type: "note", icon: "search", iconColor: "", description: "", enabled: true, visible: true },
@@ -480,7 +489,7 @@ const normalizePayloadEditorItems = (node = {}, config = {}) => {
 };
 
 const payloadEditorAvailable = (node = {}, config = {}) =>
-  ["manual-json", "task", "graph-query"].includes(nodeSubtype(node)) ||
+  ["manual-json", "task", "graph-query", "knowledge-mechanism-cue-agent"].includes(nodeSubtype(node)) ||
   (nodeCategory(node) === "sources" && Boolean(config.payloadJson || config.payload || config.testPayload));
 
 const payloadObjectFromItems = (items = []) => {
@@ -811,7 +820,7 @@ const openPayloadItemDialog = ({ root, row = null, item = {}, formId = "", index
     _.Toolbar(
       { align: "end", gap: 8 },
       btn({ type: "button", onclick: close }, "Cancel"),
-      btn({ type: "button", class: "is-primary", onclick: () => save(close) }, icon("save", "sm"), "Save Payload")
+      btn({ type: "button", class: "st-btn-primary", onclick: () => save(close) }, icon("save", "sm"), "Save Payload")
     )
   );
   dialog = _.Dialog({
@@ -970,6 +979,7 @@ const runtimeContractSchemaFields = (schema = {}) =>
 
 const AI_PROVIDER_CONFIG_KEYS = new Set(["providerProfile", "providerType", "model", "temperature", "maxTokens", "topP", "streaming", "responseFormat"]);
 const AI_PROMPT_CONFIG_KEYS = new Set(["systemPrompt", "promptTemplate", "outputInstructions"]);
+const KNOWLEDGE_RULE_MODE_CONFIG_KEYS = new Set(["entityMode", "dictionaryMode", "eventMode", "enrichmentMode", "cueMode", "queryExpansionMode", "compositionMode"]);
 const AI_PROVIDER_FIELD_DEFINITIONS = Object.freeze([
   { key: "providerProfile", label: "Provider Profile", type: "ai-provider-profile" },
   { key: "providerType", label: "Provider Type", type: "ai-provider-type" },
@@ -1022,6 +1032,13 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
       outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity.",
     };
   }
+  if (subtype === "knowledge-mechanism-cue-agent") {
+    return {
+      systemPrompt: "You are a Knowledge Mechanism Cue Agent. You do not answer the user. You identify only document-grounded retrieval cues that help find the concrete method, cause, transformation and direct outcome evidence in the supplied chunks.",
+      promptTemplate: "Read the question and chunk previews in document order. For how/process/healing questions, prioritize the required sequence: item/tool/substance, preparation, container, transformation, action performed by or on the target, and the target's direct state change. Separate those from later consequences, background, public effects or generic setup.",
+      outputInstructions: "Return strict JSON with operationalTerms, transformationTerms, outcomeTerms, downrankTerms and rationale. Use only exact source-language words or short phrases present in the chunks. Put later consequences or broad properties after the target outcome in downrankTerms unless the question asks for those consequences. Do not add final-answer wording or causal conclusions.",
+    };
+  }
   if (subtype === "graph-query") {
     return {
       systemPrompt: "You are a Knowledge Graph Query Expander. Improve retrieval only from the user's query and runtime intent. Do not answer, summarize, filter evidence or decide what the final answer should contain.",
@@ -1050,6 +1067,325 @@ const knowledgeAiPromptFieldDefinitions = (subtype = "") => {
     { key: "promptTemplate", label: "Prompt Template", type: "textarea", rows: 7, defaultValue: defaults.promptTemplate },
     { key: "outputInstructions", label: "Output Instructions", type: "textarea", rows: 5, defaultValue: defaults.outputInstructions },
   ];
+};
+
+const knowledgeCustomRulesDefaults = (subtype = "") => {
+  const base = {
+    version: 1,
+    mode: "extend",
+    modeHelp: "extend aggiunge questi valori ai default runtime; replace sostituisce i default dichiarativi supportati quando presenti.",
+  };
+  const graphSourceTerms = [
+    "dice", "disse", "detto", "racconta", "spiega", "rivela", "indica", "comunica", "avverte",
+    "segreto", "soluzione", "consiglio", "istruzione", "informazione", "metodo", "luogo",
+    "tells", "told", "says", "said", "explains", "reveals", "warns", "secret", "solution", "advice", "instruction", "method", "place",
+    "dijo", "cuenta", "explica", "revela", "advierte", "secreto", "solucion", "consejo", "metodo",
+    "dit", "raconte", "explique", "revele", "conseil", "methode",
+    "sagt", "sagte", "erklart", "geheimnis", "losung", "methode",
+  ];
+  const graphDangerTerms = [
+    "pericolo", "pericoli", "pericoloso", "rischio", "ostacolo", "minaccia", "attacco", "ferisce", "ferito", "mostro", "nemico", "affronta",
+    "danger", "dangerous", "risk", "obstacle", "threat", "attack", "injured", "wounded", "monster", "enemy", "confront",
+    "peligro", "riesgo", "amenaza", "ataque", "herido", "monstruo",
+    "danger", "dangereux", "risque", "menace", "attaque", "blesse", "monstre",
+    "gefahr", "risiko", "bedrohung", "angriff", "verletzt",
+  ];
+  const mechanismTerms = {
+    operational: [
+      "fiore", "flower", "fleur", "flor",
+      "acqua", "water", "eau", "agua",
+      "sorgente", "source", "spring", "fonte",
+      "tazza", "cup", "te", "tea", "infusione", "tisana",
+      "beve", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
+      "riempie", "fill", "filled",
+      "immerge", "immerse", "immerso", "immersa",
+    ],
+    transformation: ["trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled"],
+    outcome: ["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"],
+    downrank: [],
+    terms: ["cura", "guarire", "guarito", "heal", "healed", "processo", "metodo", "cause", "outcome"],
+  };
+  if (subtype === "graph-query") {
+    return {
+      ...base,
+      expansionTerms: {
+        source: graphSourceTerms,
+        danger: graphDangerTerms,
+        retrieval: [],
+      },
+      mechanismTerms,
+    };
+  }
+  if (subtype === "knowledge-mechanism-cue-agent") {
+    return {
+      ...base,
+      mechanismTerms,
+    };
+  }
+  if (subtype === "semantic-relation-enricher") {
+    return {
+      ...base,
+      semanticRelationRules: [
+        {
+          relationType: "friend_of",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["proper-noun"],
+          cuePatterns: ["friend|friends|friendship|amico|amica|amici|amicizia|amigo|amiga|amistad|ami|amie|freund"],
+          negativePatterns: [],
+          confidence: 0.74,
+          explanation: "friendship cue",
+        },
+        {
+          relationType: "helps",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["proper-noun", "creature", "concept"],
+          cuePatterns: ["help|helps|helped|aiuta|aiuto|aiut[oò]|ayuda|aide|hilft"],
+          negativePatterns: ["tried|tries|tent|cerca|prova"],
+          confidence: 0.72,
+          explanation: "help cue",
+        },
+        {
+          relationType: "tries_to_help",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["proper-noun", "creature", "concept"],
+          cuePatterns: ["tried.{0,80}help|tries.{0,80}help|cerca.{0,80}aiut|tenta.{0,80}aiut|prova.{0,80}aiut"],
+          negativePatterns: [],
+          confidence: 0.7,
+          explanation: "attempted help cue",
+        },
+        {
+          relationType: "healed_by",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["object", "source"],
+          cuePatterns: ["heal|healed|heals|cure|cured|cura|cur[oò]|guarisce|guar[iì]|guarito"],
+          negativePatterns: ["bastone|stick|spada|sword|arma|weapon|pietra|stone"],
+          confidence: 0.78,
+          explanation: "healing cue",
+        },
+        {
+          relationType: "cannot_speak",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["concept", "quote"],
+          cuePatterns: ["cannot.{0,80}speak|could not.{0,80}speak|unable.{0,80}speak|non poteva.{0,80}parlare|non riesce.{0,80}parlare|mute|muto|muta"],
+          negativePatterns: [],
+          confidence: 0.76,
+          explanation: "failed speech cue",
+        },
+        {
+          relationType: "uses",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["object"],
+          cuePatterns: ["uses|used|using|utilizza|utilizz[oò]|usa|us[oò]|afferra|prende|prese|takes|took|with|con"],
+          negativePatterns: [],
+          confidence: 0.72,
+          explanation: "use/action-object cue",
+        },
+        {
+          relationType: "has_property",
+          sourceTypes: ["object", "concept", "source"],
+          targetTypes: ["concept", "object"],
+          cuePatterns: ["has|had|property|quality|possesses|possessed|possiede|possedeva|propriet[aà]|potere|capacit"],
+          negativePatterns: [],
+          confidence: 0.64,
+          explanation: "property cue",
+        },
+        {
+          relationType: "lives_in",
+          sourceTypes: ["proper-noun"],
+          targetTypes: ["location"],
+          cuePatterns: ["lives|lived|dwells|abita|abitava|vive|viveva|habite|wohn"],
+          negativePatterns: [],
+          confidence: 0.68,
+          explanation: "location residence cue",
+        },
+        {
+          relationType: "opposes",
+          sourceTypes: ["proper-noun", "creature"],
+          targetTypes: ["proper-noun", "creature", "concept"],
+          cuePatterns: ["opposes|opposed|against|contro|oppone|contrasta|defeats|sconfigge"],
+          negativePatterns: [],
+          confidence: 0.7,
+          explanation: "opposition cue",
+        },
+      ],
+    };
+  }
+  return {
+    ...base,
+    notes: "Custom declarative rules for this Knowledge node. The runtime ignores executable code.",
+  };
+};
+
+const parseKnowledgeCustomRules = (value = "") => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+};
+
+const knowledgeCustomRulesText = (node = {}, subtype = "") => {
+  const current = nodeConfigObject(node).customRules;
+  if (typeof current === "string" && current.trim()) {
+    const parsed = parseKnowledgeCustomRules(current);
+    return parsed ? JSON.stringify(parsed, null, 2) : current;
+  }
+  if (current && typeof current === "object" && !Array.isArray(current)) return JSON.stringify(current, null, 2);
+  return JSON.stringify(knowledgeCustomRulesDefaults(subtype), null, 2);
+};
+
+const knowledgeRulesModeValue = (form = null) => {
+  const field = form?.querySelector?.("[data-knowledge-rule-mode-field='true']");
+  return String(field?.value || "").toLowerCase();
+};
+
+const knowledgeRulesActive = (form = null) => ["rules", "hybrid"].includes(knowledgeRulesModeValue(form));
+
+const knowledgeRuleModeKeyForSubtype = (subtype = "") => ({
+  "entity-extractor": "entityMode",
+  "knowledge-dictionary-builder": "dictionaryMode",
+  "knowledge-event-builder": "eventMode",
+  "semantic-relation-enricher": "enrichmentMode",
+  "knowledge-mechanism-cue-agent": "cueMode",
+  "graph-query": "queryExpansionMode",
+  "knowledge-reasoning-composer": "compositionMode",
+}[subtype] || "");
+
+const knowledgeRulesActiveForNode = (node = {}, subtype = "") => {
+  const key = knowledgeRuleModeKeyForSubtype(subtype);
+  if (!key) return false;
+  return ["rules", "hybrid"].includes(String(nodeConfigObject(node)[key] || "").toLowerCase());
+};
+
+const refreshKnowledgeRulesButtons = (form = null) => {
+  if (!form) return;
+  const active = knowledgeRulesActive(form);
+  form.querySelectorAll("[data-knowledge-rules-action='true']").forEach((item) => {
+    item.hidden = !active;
+    item.style.display = active ? "" : "none";
+  });
+};
+
+const openKnowledgeCustomRulesDialog = ({ node = {}, subtype = "", form = null, hidden = null } = {}) => {
+  const input = hidden || form?.querySelector?.("[data-config-key='customRules']");
+  const initialText = String(input?.value || knowledgeCustomRulesText(node, subtype));
+  const editorId = `tl-rules-editor-${Date.now()}`;
+  let editor = null;
+  let latestText = initialText;
+  let errorNode = null;
+  const validate = () => {
+    try {
+      const parsed = JSON.parse(latestText || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("customRules deve essere un oggetto JSON.");
+      if (errorNode) errorNode.textContent = "";
+      return parsed;
+    } catch (error) {
+      if (errorNode) errorNode.textContent = error?.message || "JSON non valido.";
+      return null;
+    }
+  };
+  const dialog = _.Dialog({
+    class: "tl-flow-config-dialog tl-flow-rules-dialog",
+    panelClass: "tl-flow-config-panel tl-flow-rules-panel",
+    size: "lg",
+    title: "Edit Rules",
+    subtitle: `${node.label || node.id || subtype} · customRules`,
+    icon: "rule",
+    closeButton: true,
+    closeOnOutside: false,
+    closeOnBackdrop: false,
+    content: () => _.div(
+      { class: "tl-flow-rules-editor-body" },
+      _.input({ type: "hidden", id: `${editorId}-fallback`, value: initialText }),
+      _.div({ id: editorId, class: "tl-flow-rules-codemirror-host" }),
+      _.p({ class: "tl-flow-muted" }, "JSON dichiarativo. Viene applicato quando la modalità del nodo è Rules o Hybrid; non viene eseguito codice JavaScript."),
+      _.p({ class: "tl-flow-error-text", id: `${editorId}-error` })
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({
+        onclick: () => {
+          const formatted = JSON.stringify(knowledgeCustomRulesDefaults(subtype), null, 2);
+          latestText = formatted;
+          editor?.setValue?.(formatted);
+        },
+      }, icon("restart_alt", "sm"), "Reset default"),
+      btn({
+        onclick: () => {
+          const parsed = validate();
+          if (!parsed) return;
+          const formatted = JSON.stringify(parsed, null, 2);
+          latestText = formatted;
+          editor?.setValue?.(formatted);
+        },
+      }, icon("check", "sm"), "Validate"),
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        class: "st-btn-primary",
+        onclick: () => {
+          const parsed = validate();
+          if (!parsed) return;
+          if (input) input.value = JSON.stringify(parsed, null, 2);
+          editor?.destroy?.();
+          close();
+        },
+      }, icon("save", "sm"), "Save Rules")
+    ),
+  });
+  dialog.open();
+  errorNode = document.getElementById(`${editorId}-error`);
+  const host = document.getElementById(editorId);
+  if (host && window.TLCodeMirror?.createEditor) {
+    editor = window.TLCodeMirror.createEditor({
+      parent: host,
+      doc: initialText,
+      language: "javascript",
+      onChange: (value) => {
+        latestText = value;
+        if (errorNode) errorNode.textContent = "";
+      },
+    });
+    queueMicrotask(() => editor?.focus?.());
+  } else {
+    host?.replaceChildren?.(_.textarea({
+      rows: 18,
+      value: initialText,
+      oninput: (event) => {
+        latestText = event.currentTarget.value;
+      },
+    }));
+  }
+};
+
+const renderKnowledgeCustomRulesControl = ({ node = {}, subtype = "", formId = "" } = {}) => {
+  if (!subtype || !formId || !knowledgeRuleModeKeyForSubtype(subtype)) return null;
+  const active = knowledgeRulesActiveForNode(node, subtype);
+  return _.div(
+    {
+      class: "tl-flow-config-field is-wide tl-flow-rules-control",
+      "data-knowledge-rules-action": "true",
+      hidden: !active,
+      style: active ? null : { display: "none" },
+    },
+    _.input({ type: "hidden", "data-config-key": "customRules", value: knowledgeCustomRulesText(node, subtype) }),
+    btn({
+      class: "st-btn-primary tl-flow-rules-edit-action",
+      onclick: (event) => {
+        event.preventDefault();
+        const form = document.getElementById(formId) || event.currentTarget.closest("form");
+        openKnowledgeCustomRulesDialog({
+          node,
+          subtype,
+          form,
+          hidden: form?.querySelector?.("[data-config-key='customRules']"),
+        });
+      },
+    }, icon("rule", "sm"), "Edit Rules")
+  );
 };
 
 const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
@@ -1384,6 +1720,19 @@ const configFieldDefinitions = (node = {}) => {
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.graph.proposed" },
+      ]);
+    }
+    if (subtype === "knowledge-mechanism-cue-agent") {
+      return withAiProviderConfigFields([
+        { key: "cueMode", label: "Cue mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
+        { key: "query", label: "Query", type: "textarea", placeholder: "come guarisce Liber?" },
+        { key: "maxChunks", label: "Max chunks", placeholder: "24" },
+        { key: "maxChunkChars", label: "Max chars per chunk", placeholder: "620" },
+        { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"], defaultValue: "document" },
+        { key: "documentId", label: "Document ID", placeholder: "optional" },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.mechanism.cues" },
       ]);
     }
     if (subtype === "graph-query") {
@@ -2774,6 +3123,14 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.proposed" },
     ],
+    "knowledge-mechanism-cue-agent": [
+      { iconName: "psychology_alt", label: "Mode", value: config.cueMode || "llm" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.providerType || "lm-studio" },
+      { iconName: "search", label: "Query", value: config.query || "runtime query" },
+      { iconName: "article", label: "Chunks", value: config.maxChunks || "24" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "" },
+      { iconName: "hub", label: "Output", value: output || "knowledge.mechanism.cues" },
+    ],
     "graph-query": payloadRows.length ? [
       ...payloadRows,
       { iconName: "hub", label: "Output", value: output || "knowledge.graph.context" },
@@ -3470,8 +3827,9 @@ const aiAgentFromRuntimeNode = (node = {}) => {
     subtype === "knowledge-event-builder" ? "classifier" :
       subtype === "semantic-relation-enricher" ? "classifier" :
         subtype === "knowledge-graph-builder-agent" ? "planner" :
-          subtype === "orchestrator" ? "planner" :
-            "";
+          subtype === "knowledge-mechanism-cue-agent" ? "classifier" :
+            subtype === "orchestrator" ? "planner" :
+              "";
   const agentType = config.agentType || knowledgeAgentType || subtype || "analyzer";
   const split = window.TrackerLensAiAgentEditor?.splitList || ((value) => String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean));
   return {
@@ -4439,7 +4797,7 @@ const requestCustomRuntimeNodeConfig = (node) => {
         },
       }, icon("add_box", "sm"), "Customize Node"),
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-primary", onclick: () => persistCustomRuntimeNodeConfig({ node, draft, close }) }, icon("save", "sm"), "Save Node")
+      btn({ class: "st-btn-primary", onclick: () => persistCustomRuntimeNodeConfig({ node, draft, close }) }, icon("save", "sm"), "Save Node")
     ),
   });
   dialog.open();
@@ -4836,7 +5194,7 @@ const requestOrchestratorAgentConfig = (node) => {
     actions: ({ close }) => _.Toolbar(
       { class: "tl-ai-agent-editor-footer", align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "tl-ai-save-btn", onclick: () => save(close) }, icon("save", "sm"), "Save Orchestrator")
+      btn({ class: "st-btn-primary", onclick: () => save(close) }, icon("save", "sm"), "Save Orchestrator")
     ),
   });
   dialog.open();
@@ -4868,6 +5226,7 @@ const knowledgeAiNodeTabMeta = (subtype = "") => {
   if (subtype === "knowledge-event-builder") return { label: "Event Builder", icon: "timeline" };
   if (subtype === "semantic-relation-enricher") return { label: "Semantic", icon: "psychology" };
   if (subtype === "knowledge-graph-builder-agent") return { label: "Graph Builder", icon: "auto_awesome" };
+  if (subtype === "knowledge-mechanism-cue-agent") return { label: "Mechanism Cue", icon: "psychology_alt" };
   return { label: "Knowledge", icon: "schema" };
 };
 
@@ -5010,14 +5369,23 @@ const requestRuntimeNodeConfig = async (node) => {
       );
     }
     if (definition.type === "select") {
-      return _.label(
+      const isRuleModeField = KNOWLEDGE_RULE_MODE_CONFIG_KEYS.has(definition.key);
+      const selectControl = _.label(
         { class: "tl-flow-config-field" },
         _.span(definition.label),
         _.select(
-          { "data-config-key": definition.key, value },
+          {
+            "data-config-key": definition.key,
+            ...(isRuleModeField ? { "data-knowledge-rule-mode-field": "true" } : {}),
+            value,
+            onchange: isRuleModeField ? (event) => refreshKnowledgeRulesButtons(event.currentTarget.closest("form")) : undefined,
+          },
           ...(definition.options || []).map((option) => _.option({ value: option, selected: option === value }, option))
         )
       );
+      return isRuleModeField
+        ? _.fragment(selectControl, renderKnowledgeCustomRulesControl({ node, subtype, formId }))
+        : selectControl;
     }
     if (definition.type === "textarea") {
       return _.label(
@@ -5194,7 +5562,7 @@ const requestRuntimeNodeConfig = async (node) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-primary", onclick: () => persistRuntimeNodeConfig({ node, form: formRef || document.getElementById(formId), close }) }, icon("save", "sm"), "Save Node")
+      btn({ class: "st-btn-primary", onclick: () => persistRuntimeNodeConfig({ node, form: formRef || document.getElementById(formId), close }) }, icon("save", "sm"), "Save Node")
     ),
   });
   dialog.open();
@@ -5855,7 +6223,7 @@ const requestNodeRename = (node) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-primary", onclick: () => save(close) }, icon("save", "sm"), "Rename")
+      btn({ class: "st-btn-primary", onclick: () => save(close) }, icon("save", "sm"), "Rename")
     ),
   });
   dialog.open();

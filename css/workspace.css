@@ -98,17 +98,6 @@ body {
   background: var(--tl-border-soft);
 }
 
-.tl-save-btn.cms-btn {
-  border-color: var(--tl-border);
-}
-
-.tl-publish-btn.cms-btn {
-  color: #111820;
-  background: var(--tl-accent);
-  border-color: var(--tl-accent);
-  font-weight: 800;
-}
-
 .tl-workspace-body {
   display: grid;
   grid-template-columns: 84px 230px minmax(520px, 1fr);

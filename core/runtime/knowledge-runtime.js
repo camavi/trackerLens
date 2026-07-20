@@ -310,23 +310,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return textOf(payload?.text || payload?.content || payload?.body || payload?.markdown || payload?.document || payload);
   };
 
-  let knowledgeLlmDebugSeq = 0;
   const compactDebugText = (text = "", limit = 1000) =>
     String(text || "").replace(/\s+/g, " ").trim().slice(0, limit);
 
-  const knowledgeLlmDebug = (label = "", details = {}) => {
-    try {
-      const seq = knowledgeLlmDebugSeq += 1;
-      const payload = {
-        at: new Date().toISOString(),
-        seq,
-        label,
-        ...details,
-      };
-      console.log(`[TL Knowledge LLM #${seq}] ${label}`, payload);
-      self.TrackerLensKnowledgeDebug?.(payload);
-    } catch (_) {}
-  };
+  const knowledgeLlmDebug = () => {};
 
   const splitConfigList = (value = "") =>
     Array.isArray(value)
@@ -1174,6 +1161,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
   };
 
+  const customKnowledgeRules = (config = {}) => {
+    const raw = config.customRules;
+    if (!raw) return {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+    try {
+      const parsed = JSON.parse(String(raw || ""));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  };
+
+  const customRulesMode = (rules = {}) =>
+    String(rules.mode || "extend").toLowerCase().trim() === "replace" ? "replace" : "extend";
+
+  const customRuleValues = (...values) => unique(values.flatMap((value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") return value.split(/[\n,]+/g);
+    return [];
+  }).map((item) => String(item || "").trim()).filter(Boolean));
+
+  const customRuleTokens = (values = [], { stopWords = new Set(), queryTokens = [] } = {}) =>
+    graphQueryExpansionTokensFromValues(values, { stopWords, queryTokens: Array.isArray(queryTokens) ? queryTokens : [] });
+
   const graphQueryExpansionTokensFromValues = (values = [], { stopWords = new Set(), queryTokens = [] } = {}) =>
     unique((Array.isArray(values) ? values : [])
       .flatMap((value) => normalizeEntityToken(value).split(/\s+/))
@@ -1309,14 +1320,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!["llm", "hybrid"].includes(mode) || !(intent.process || intent.healing || intent.cause)) {
       return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
     }
-    const chunkLimit = Math.max(6, Math.min(24, Number(config.mechanismCueChunkLimit || 24)));
+    const chunkLimit = Math.max(6, Math.min(24, Number(config.mechanismCueChunkLimit || config.maxChunks || 24)));
     const candidateChunks = [...(Array.isArray(chunks) ? chunks : [])]
       .slice(0, chunkLimit)
       .sort((left, right) => Number(left.ordinal ?? left.index ?? 0) - Number(right.ordinal ?? right.index ?? 0))
       .map((chunk) => ({
         id: chunk.id || "",
         ordinal: chunk.ordinal ?? chunk.index ?? null,
-        text: String(chunk.text || "").replace(/\s+/g, " ").slice(0, Math.max(240, Math.min(900, Number(config.mechanismCueChunkChars || 620)))),
+        text: String(chunk.text || "").replace(/\s+/g, " ").slice(0, Math.max(240, Math.min(900, Number(config.mechanismCueChunkChars || config.maxChunkChars || 620)))),
       }))
       .filter((chunk) => chunk.text);
     if (!candidateChunks.length) {
@@ -1355,17 +1366,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = providerType === "ollama"
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
-    const systemPrompt = knowledgeAiTextConfig(
-      config.mechanismCueSystemPrompt,
-      "You are a Knowledge Graph mechanism cue generator. You never answer the question. You only identify document-grounded retrieval cues that help find process, cause and outcome evidence in the provided chunks."
+    const currentMechanismCueDefaults = {
+      systemPrompt: "You are a Knowledge Mechanism Cue Agent. You do not answer the user. You identify only document-grounded retrieval cues that help find the concrete method, cause, transformation and direct outcome evidence in the supplied chunks.",
+      promptTemplate: "Read the question and chunk previews in document order. For how/process/healing questions, prioritize the required sequence: item/tool/substance, preparation, container, transformation, action performed by or on the target, and the target's direct state change. Separate those from later consequences, background, public effects or generic setup.",
+      outputInstructions: "Return strict JSON with operationalTerms, transformationTerms, outcomeTerms, downrankTerms and rationale. Use only exact source-language words or short phrases present in the chunks. Put later consequences or broad properties after the target outcome in downrankTerms unless the question asks for those consequences. Do not add final-answer wording or causal conclusions.",
+    };
+    const staleMechanismCueDefaults = new Set([
+      "You are a Knowledge Mechanism Cue Agent. You do not answer the user. You identify only document-grounded retrieval cues that help find process, cause, method, transformation and outcome evidence in the supplied chunks.",
+      "Read the question and chunk previews. Return short source-language terms or phrases that appear in the supplied material and can help Graph Query rank the real mechanism. Separate setup/actions, transformations, outcomes and generic background terms.",
+      "Return strict JSON with operationalTerms, transformationTerms, outcomeTerms, downrankTerms and rationale. Do not add final-answer wording, causal conclusions or terms absent from the chunks. Put background/setup clues that should not dominate retrieval in downrankTerms.",
+    ]);
+    const cuePromptConfig = (value = "", fallback = "") => {
+      const text = String(value || "").trim();
+      return knowledgeAiTextConfig(staleMechanismCueDefaults.has(text) ? "" : text, fallback);
+    };
+    const systemPrompt = cuePromptConfig(
+      config.mechanismCueSystemPrompt || config.systemPrompt,
+      currentMechanismCueDefaults.systemPrompt
     );
-    const promptTemplate = knowledgeAiTextConfig(
-      config.mechanismCuePromptTemplate,
-      "Read the question and the chunk previews. Return short terms or phrases that appear in the supplied material and would help the runtime rank the evidence for the real mechanism. Separate setup/actions, transformations and outcomes."
+    const promptTemplate = cuePromptConfig(
+      config.mechanismCuePromptTemplate || config.promptTemplate,
+      currentMechanismCueDefaults.promptTemplate
     );
-    const outputInstructions = knowledgeAiTextConfig(
-      config.mechanismCueOutputInstructions,
-      "Return strict JSON only. Do not add facts, conclusions, final-answer wording or terms that are absent from the supplied chunks. If a setup clue is only background and should not dominate the answer, put it in downrankTerms."
+    const outputInstructions = cuePromptConfig(
+      config.mechanismCueOutputInstructions || config.outputInstructions,
+      currentMechanismCueDefaults.outputInstructions
     );
     const prompt = [
       systemPrompt,
@@ -1536,6 +1561,185 @@ window.TrackerLensKnowledgeRuntime = (() => {
     } catch (error) {
       return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "" };
     }
+  };
+
+  const emptyGraphMechanismCueResult = () => ({
+    terms: [],
+    operationalTerms: [],
+    transformationTerms: [],
+    outcomeTerms: [],
+    downrankTerms: [],
+    provider: "",
+    model: "",
+    usage: {},
+    error: "",
+    promptMode: "",
+    rationale: "",
+    external: false,
+  });
+
+  const normalizeGraphMechanismCuePayload = (value = {}, { external = false, sourceNodeId = "" } = {}) => {
+    const cue = value?.mechanismCue && typeof value.mechanismCue === "object"
+      ? value.mechanismCue
+      : value && typeof value === "object"
+        ? value
+        : {};
+    const cueList = (items = []) => graphQueryExpansionTokensFromValues(
+      Array.isArray(items) ? items : String(items || "").split(/[\s,;]+/g)
+    ).slice(0, 48);
+    const operationalTerms = cueList(cue.operationalTerms || cue.operationTerms || []);
+    const transformationTerms = cueList(cue.transformationTerms || cue.transformTerms || []);
+    const outcomeTerms = cueList(cue.outcomeTerms || cue.resultTerms || []);
+    const downrankTerms = cueList(cue.downrankTerms || cue.backgroundTerms || []);
+    const terms = unique([
+      ...(cueList(cue.terms || cue.mechanismTerms || [])),
+      ...operationalTerms,
+      ...transformationTerms,
+      ...outcomeTerms,
+    ]).slice(0, 64);
+    return {
+      terms,
+      operationalTerms,
+      transformationTerms,
+      outcomeTerms,
+      downrankTerms,
+      provider: String(cue.provider || value?.provider || ""),
+      model: String(cue.model || value?.model || ""),
+      usage: cue.usage && typeof cue.usage === "object" ? cue.usage : {},
+      error: String(cue.error || value?.error || ""),
+      promptMode: String(cue.promptMode || value?.promptMode || ""),
+      rationale: String(cue.rationale || value?.rationale || "").slice(0, 240),
+      external,
+      sourceNodeId: String(cue.sourceNodeId || value?.sourceNodeId || sourceNodeId || ""),
+      id: String(value?.mechanismCueId || cue.id || value?.id || ""),
+    };
+  };
+
+  const buildKnowledgeMechanismCues = async ({ workspaceId, node = {}, payload = {}, event = {}, config = {} } = {}) => {
+    const query = String(payload?.query || payload?.text || payload?.question || payload?.entity || payload?.label || config.query || "").trim();
+    if (!query) throw new Error("Knowledge Mechanism Cue query vuota");
+    const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
+    const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
+    const rawGraphScope = String(payload?.graphScope || config.graphScope || "").toLowerCase();
+    const graphScope = rawGraphScope === "document" && !configuredDocumentId && collectionId
+      ? "collection"
+      : rawGraphScope || (configuredDocumentId ? "document" : collectionId ? "collection" : "workspace");
+    const aggregateDocuments = graphScope === "collection" || graphScope === "workspace" || graphScope === "all";
+    const [chunksAll, relationsAll, eventsAll] = await Promise.all([
+      listStore(STORES.chunks),
+      listStore(STORES.relations),
+      listStore(STORES.events),
+    ]);
+    const workspaceChunks = byWorkspace(chunksAll, workspaceId)
+      .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId);
+    const latestChunkDocument = [...workspaceChunks]
+      .filter((chunk) => chunk.documentId)
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || "") - Date.parse(a.updatedAt || a.createdAt || ""))[0] || null;
+    const documentId = aggregateDocuments ? "" : configuredDocumentId || latestChunkDocument?.documentId || "";
+    const scopedChunks = workspaceChunks
+      .filter((chunk) => !documentId || chunk.documentId === documentId)
+      .sort((left, right) => Number(left.ordinal ?? left.index ?? 0) - Number(right.ordinal ?? right.index ?? 0));
+    const scopedRelations = byWorkspace(relationsAll, workspaceId)
+      .filter((relation) => !documentId || relation.documentId === documentId)
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId);
+    const scopedEvents = byWorkspace(eventsAll, workspaceId)
+      .filter((item) => !documentId || item.documentId === documentId)
+      .filter((item) => !collectionId || item.collectionId === collectionId)
+      .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    const queryLanguage = detectLanguage(query, payload?.language || config.language || "");
+    const queryStopWords = languageStopWordSet({ ...config, language: queryLanguage }, query);
+    const queryTokens = normalizeEntityToken(query).split(/\s+/).filter((token) => token.length > 1 && !queryStopWords.has(token));
+    const intent = graphQueryIntent(query);
+    const cueConfig = {
+      ...config,
+      mechanismCueMode: config.cueMode || config.mechanismCueMode || config.queryExpansionMode || "llm",
+      mechanismCueSystemPrompt: config.systemPrompt || config.mechanismCueSystemPrompt,
+      mechanismCuePromptTemplate: config.promptTemplate || config.mechanismCuePromptTemplate,
+      mechanismCueOutputInstructions: config.outputInstructions || config.mechanismCueOutputInstructions,
+      mechanismCueChunkLimit: config.maxChunks || config.mechanismCueChunkLimit,
+      mechanismCueChunkChars: config.maxChunkChars || config.mechanismCueChunkChars,
+    };
+    let mechanismCue = await callGraphMechanismCueAi({
+      query,
+      intent,
+      chunks: scopedChunks,
+      relations: scopedRelations,
+      events: scopedEvents,
+      config: cueConfig,
+      stopWords: queryStopWords,
+      queryTokens,
+    });
+    const cueRules = customKnowledgeRules(cueConfig);
+    const useCustomRuleCue = graphMechanismCueMode(cueConfig) !== "llm";
+    if (useCustomRuleCue) {
+      const customOperational = customRuleTokens(customRuleValues(cueRules.mechanismTerms?.operational, cueRules.mechanismTerms?.operations), { stopWords: queryStopWords });
+      const customTransformation = customRuleTokens(customRuleValues(cueRules.mechanismTerms?.transformation, cueRules.mechanismTerms?.transformations), { stopWords: queryStopWords });
+      const customOutcome = customRuleTokens(customRuleValues(cueRules.mechanismTerms?.outcome, cueRules.mechanismTerms?.outcomes), { stopWords: queryStopWords });
+      const customDownrank = customRuleTokens(customRuleValues(cueRules.mechanismTerms?.downrank, cueRules.mechanismTerms?.background), { stopWords: queryStopWords });
+      const customTerms = customRuleTokens(customRuleValues(cueRules.mechanismTerms?.terms, cueRules.mechanismTerms?.evidence), { stopWords: queryStopWords });
+      if ([customOperational, customTransformation, customOutcome, customDownrank, customTerms].some((items) => items.length)) {
+        mechanismCue = {
+          ...mechanismCue,
+          terms: unique([...(customRulesMode(cueRules) === "replace" ? [] : (mechanismCue.terms || [])), ...customTerms, ...customOperational, ...customTransformation, ...customOutcome]),
+          operationalTerms: unique([...(customRulesMode(cueRules) === "replace" ? [] : (mechanismCue.operationalTerms || [])), ...customOperational]),
+          transformationTerms: unique([...(customRulesMode(cueRules) === "replace" ? [] : (mechanismCue.transformationTerms || [])), ...customTransformation]),
+          outcomeTerms: unique([...(customRulesMode(cueRules) === "replace" ? [] : (mechanismCue.outcomeTerms || [])), ...customOutcome]),
+          downrankTerms: unique([...(customRulesMode(cueRules) === "replace" ? [] : (mechanismCue.downrankTerms || [])), ...customDownrank]),
+          promptMode: mechanismCue.promptMode || "custom-rules",
+          rationale: mechanismCue.rationale || "Custom declarative mechanism cue rules.",
+        };
+      }
+    }
+    if (mechanismCue.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: mechanismCue.usage, provider: mechanismCue.provider, model: mechanismCue.model });
+    }
+    const normalizedCue = normalizeGraphMechanismCuePayload(mechanismCue, { external: true, sourceNodeId: node.id });
+    const context = [
+      `Knowledge Mechanism Cues: ${query}`,
+      `Scope: ${graphScope}${collectionId ? ` collection=${collectionId}` : ""}${documentId ? ` document=${documentId}` : ""}`,
+      normalizedCue.terms.length ? `Terms: ${normalizedCue.terms.join(", ")}` : "Terms: none",
+      normalizedCue.operationalTerms.length ? `Operational: ${normalizedCue.operationalTerms.join(", ")}` : "",
+      normalizedCue.transformationTerms.length ? `Transformation: ${normalizedCue.transformationTerms.join(", ")}` : "",
+      normalizedCue.outcomeTerms.length ? `Outcome: ${normalizedCue.outcomeTerms.join(", ")}` : "",
+      normalizedCue.downrankTerms.length ? `Downrank: ${normalizedCue.downrankTerms.join(", ")}` : "",
+      normalizedCue.rationale ? `Rationale: ${normalizedCue.rationale}` : "",
+    ].filter(Boolean).join("\n");
+    const record = {
+      ...clonePayload(payload),
+      id: uniqueId("kmechcue"),
+      workspaceId,
+      query,
+      collectionId,
+      documentId,
+      graphScope,
+      mechanismCue: normalizedCue,
+      mechanismCueId: "",
+      terms: normalizedCue.terms,
+      operationalTerms: normalizedCue.operationalTerms,
+      transformationTerms: normalizedCue.transformationTerms,
+      outcomeTerms: normalizedCue.outcomeTerms,
+      downrankTerms: normalizedCue.downrankTerms,
+      context,
+      ai: {
+        provider: normalizedCue.provider,
+        model: normalizedCue.model,
+        error: normalizedCue.error,
+        promptMode: normalizedCue.promptMode,
+        rationale: normalizedCue.rationale,
+      },
+      source: {
+        method: "llm-mechanism-cue-agent",
+        inputChannel: event?.channel || "",
+        sourceNodeId: event?.sourceNodeId || "",
+        chunkCount: scopedChunks.length,
+        eventCount: scopedEvents.length,
+        relationCount: scopedRelations.length,
+      },
+      createdAt: nowIso(),
+    };
+    record.mechanismCueId = record.id;
+    record.mechanismCue = { ...normalizedCue, id: record.id, sourceNodeId: node.id };
+    return record;
   };
 
   const graphHealingMechanismCueScore = (text = "", intent = {}) => {
@@ -5336,8 +5540,57 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return { source, target };
   };
 
-  const inferRuleSemanticRelation = ({ source = {}, target = {}, relation = {}, chunk = {} } = {}) => {
+  const customSemanticRulePatterns = (values = []) => customRuleValues(values).map((value) => {
+    try {
+      return new RegExp(value, "i");
+    } catch (_) {
+      return new RegExp(escapedRegExp(value), "i");
+    }
+  });
+
+  const inferCustomSemanticRelation = ({ source = {}, target = {}, chunk = {}, config = {} } = {}) => {
+    const rules = customKnowledgeRules(config);
+    const relationRules = Array.isArray(rules.semanticRelationRules)
+      ? rules.semanticRelationRules
+      : Array.isArray(rules.relationRules)
+        ? rules.relationRules
+        : [];
+    if (!relationRules.length) return null;
+    const text = chunk?.text || "";
+    const context = normalizeEntityToken(semanticContext(text, source, target));
+    if (!context) return null;
+    for (const rule of relationRules) {
+      if (!rule || typeof rule !== "object") continue;
+      const relationType = String(rule.relationType || rule.type || "").toLowerCase().trim();
+      if (!relationType || !semanticRelationTypes.has(relationType) || !semanticRelationAllowed(relationType, config)) continue;
+      const sourceTypes = customRuleValues(rule.sourceTypes || rule.sourceType);
+      const targetTypes = customRuleValues(rule.targetTypes || rule.targetType);
+      if (sourceTypes.length && !sourceTypes.includes(String(source.entityType || ""))) continue;
+      if (targetTypes.length && !targetTypes.includes(String(target.entityType || ""))) continue;
+      const cuePatterns = customSemanticRulePatterns(rule.cuePatterns || rule.patterns || rule.cues);
+      const negativePatterns = customSemanticRulePatterns(rule.negativePatterns || rule.blockPatterns || rule.excludePatterns);
+      if (negativePatterns.some((pattern) => pattern.test(context))) continue;
+      if (!cuePatterns.length && rule.allowWithoutCue !== true) continue;
+      if (cuePatterns.length && !cuePatterns.some((pattern) => pattern.test(context))) continue;
+      const oriented = orientSemanticRelation({ relationType, source, target, text });
+      if (!oriented.source?.id || !oriented.target?.id || oriented.source.id === oriented.target.id) continue;
+      return {
+        relationType,
+        source: oriented.source,
+        target: oriented.target,
+        confidence: Math.max(0.4, Math.min(0.98, Number(rule.confidence || 0.72))),
+        evidence: semanticEvidenceForRelation(text, oriented.source, oriented.target),
+        explanation: String(rule.explanation || `custom rule: ${relationType}`).slice(0, 260),
+        method: "custom-rule",
+      };
+    }
+    return null;
+  };
+
+  const inferRuleSemanticRelation = ({ source = {}, target = {}, relation = {}, chunk = {}, config = {} } = {}) => {
     if (!source?.id || !target?.id || source.id === target.id) return null;
+    const customRelation = inferCustomSemanticRelation({ source, target, chunk, config });
+    if (customRelation) return customRelation;
     const text = chunk?.text || "";
     const context = normalizeEntityToken(semanticContext(text, source, target));
     if (!context) return null;
@@ -6570,7 +6823,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       : "";
     if (useRuleFallback) {
       const ruleResults = candidates
-        .map((candidate) => ({ candidate, semantic: inferRuleSemanticRelation({ source: candidate.source, target: candidate.target, relation: candidate.relation, chunk: candidate.chunk }) }))
+        .map((candidate) => ({ candidate, semantic: inferRuleSemanticRelation({ source: candidate.source, target: candidate.target, relation: candidate.relation, chunk: candidate.chunk, config }) }))
         .filter((item) => item.semantic && item.semantic.confidence >= threshold)
         .filter((item) => semanticRelationAllowed(item.semantic.relationType, config));
       const supplementalRuleResults = scopedChunks
@@ -6906,6 +7159,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const queryStopWords = languageStopWordSet({ ...config, language: queryLanguage }, cleanQuery);
     const queryTokens = cleanToken.split(/\s+/).filter((token) => token.length > 1 && !queryStopWords.has(token));
     const intent = graphQueryIntent(cleanQuery);
+    const hasExternalMechanismCue = Boolean(
+      payload?.mechanismCue ||
+      payload?.mechanismCueId ||
+      payload?.operationalTerms ||
+      event?.channel === "knowledge.mechanism.cues"
+    );
+    const externalMechanismCue = hasExternalMechanismCue
+      ? normalizeGraphMechanismCuePayload(payload, { external: true, sourceNodeId: event?.sourceNodeId || "" })
+      : null;
     const queryExpansionMode = graphQueryExpansionMode(config);
     const aiExpansion = ["llm", "hybrid"].includes(queryExpansionMode)
       ? await callGraphQueryExpansionAi({ query: cleanQuery, intent, config, stopWords: queryStopWords, queryTokens })
@@ -6915,7 +7177,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
     const ruleSourceExpansionTokens = graphSourceExpansionTokens({ query: cleanQuery, intent, stopWords: queryStopWords });
     const ruleDangerExpansionTokens = graphDangerExpansionTokens({ intent, stopWords: queryStopWords });
-    const ruleExpansionTokens = unique([...ruleSourceExpansionTokens, ...ruleDangerExpansionTokens]);
+    const rulesConfig = customKnowledgeRules(config);
+    const customExpansionValues = customRuleValues(
+      rulesConfig.expansionTerms?.retrieval,
+      rulesConfig.expansionTerms?.all,
+      rulesConfig.queryExpansionTerms,
+      intent.source ? rulesConfig.expansionTerms?.source : [],
+      intent.danger ? rulesConfig.expansionTerms?.danger : []
+    );
+    const customExpansionTokens = customRuleTokens(customExpansionValues, { stopWords: queryStopWords, queryTokens });
+    const ruleExpansionTokens = customRulesMode(rulesConfig) === "replace" && customExpansionTokens.length
+      ? customExpansionTokens
+      : unique([...ruleSourceExpansionTokens, ...ruleDangerExpansionTokens, ...customExpansionTokens]);
     const sourceExpansionTokens = queryExpansionMode === "llm"
       ? unique(aiExpansion.tokens || [])
       : queryExpansionMode === "hybrid"
@@ -7256,7 +7529,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const mechanismCueChunks = scopedChunks.length <= mechanismCueChunkLimit
       ? scopedChunks
       : [...new Map(evidenceCandidates.map((item) => [item.chunk?.id, item.chunk]).filter(([id, chunk]) => id && chunk)).values()];
-    const mechanismCueAi = ["llm", "hybrid"].includes(mechanismCueMode) && (intent.process || intent.healing || intent.cause)
+    const mechanismCueAi = externalMechanismCue ||
+      (["llm", "hybrid"].includes(mechanismCueMode) && (intent.process || intent.healing || intent.cause)
       ? await callGraphMechanismCueAi({
         query: cleanQuery,
         intent,
@@ -7267,8 +7541,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         stopWords: queryStopWords,
         queryTokens,
       })
-      : { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "", promptMode: "", rationale: "" };
-    if (mechanismCueAi.usage?.totalTokens) {
+      : emptyGraphMechanismCueResult());
+    if (!mechanismCueAi.external && mechanismCueAi.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: mechanismCueAi.usage, provider: mechanismCueAi.provider, model: mechanismCueAi.model });
     }
     const mechanismSourceTokens = new Set(normalizeEntityToken([
@@ -7298,12 +7572,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const llmMechanismCueFailed = mechanismCueMode === "llm" &&
       (intent.process || intent.healing || intent.cause) &&
       !(mechanismCueAi.terms || []).length;
+    const customMechanismTerms = {
+      operational: customRuleTokens(customRuleValues(rulesConfig.mechanismTerms?.operational, rulesConfig.mechanismTerms?.operations), { stopWords: queryStopWords }),
+      transformation: customRuleTokens(customRuleValues(rulesConfig.mechanismTerms?.transformation, rulesConfig.mechanismTerms?.transformations), { stopWords: queryStopWords }),
+      outcome: customRuleTokens(customRuleValues(rulesConfig.mechanismTerms?.outcome, rulesConfig.mechanismTerms?.outcomes), { stopWords: queryStopWords }),
+      downrank: customRuleTokens(customRuleValues(rulesConfig.mechanismTerms?.downrank, rulesConfig.mechanismTerms?.background), { stopWords: queryStopWords }),
+      terms: customRuleTokens(customRuleValues(rulesConfig.mechanismTerms?.terms, rulesConfig.mechanismTerms?.evidence), { stopWords: queryStopWords }),
+    };
     const baseMechanismEvidenceTerms = useRuleMechanismExpansion && (intent.healing || intent.process || intent.cause)
       ? "cure cura guarire guar guarito healed heal process processo method metodo step passaggio prepare prepara preparare use using usa usato cause causa result risultato outcome esito"
       : "";
     const mechanismEvidenceTerms = unique([
       baseMechanismEvidenceTerms,
       ...(mechanismCueAi.terms || []),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.terms : []),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.operational : []),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.transformation : []),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.outcome : []),
       ...mechanismEvidenceEvents.flatMap((item) => [
       ...(item.objects || []),
       ...(item.roles?.patient || []),
@@ -7332,12 +7617,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled",
     ] : [];
     const mechanismOperationalTerms = new Set([
-      ...ruleMechanismOperationalTerms,
+      ...(customRulesMode(rulesConfig) === "replace" && customMechanismTerms.operational.length ? [] : ruleMechanismOperationalTerms),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.operational : []),
       ...(mechanismCueAi.operationalTerms || []),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.transformation : []),
       ...(mechanismCueAi.transformationTerms || []),
     ]);
-    const mechanismOutcomeTerms = new Set([...(useRuleMechanismExpansion ? ["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"] : []), ...(mechanismCueAi.outcomeTerms || [])]);
-    const mechanismDownrankTerms = new Set(mechanismCueAi.downrankTerms || []);
+    const mechanismOutcomeTerms = new Set([
+      ...(customRulesMode(rulesConfig) === "replace" && customMechanismTerms.outcome.length ? [] : (useRuleMechanismExpansion ? ["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"] : [])),
+      ...(useRuleMechanismExpansion ? customMechanismTerms.outcome : []),
+      ...(mechanismCueAi.outcomeTerms || []),
+    ]);
+    const mechanismDownrankTerms = new Set([...(useRuleMechanismExpansion ? customMechanismTerms.downrank : []), ...(mechanismCueAi.downrankTerms || [])]);
     if (includeEvidence && llmMechanismCueFailed) {
       const evidenceCandidateIds = new Set(evidenceCandidates.map((item) => item.chunk?.id).filter(Boolean));
       scopedChunks.forEach((chunk) => {
@@ -7605,6 +7896,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         },
         mechanismCue: {
           mode: mechanismCueMode,
+          external: mechanismCueAi.external === true,
+          sourceNodeId: mechanismCueAi.sourceNodeId || "",
+          id: mechanismCueAi.id || "",
           provider: mechanismCueAi.provider || "",
           model: mechanismCueAi.model || "",
           error: mechanismCueAi.error || "",
@@ -8783,6 +9077,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         } else if (subtype === "knowledge-graph") {
           result = await buildKnowledgeGraphSnapshot({ workspaceId: this.workspaceId, node, payload, event, config });
           outputChannel = nodeOutput(node, config, "knowledge.graph.updated");
+        } else if (subtype === "knowledge-mechanism-cue-agent") {
+          result = await buildKnowledgeMechanismCues({ workspaceId: this.workspaceId, node, payload, event, config });
+          outputChannel = nodeOutput(node, config, "knowledge.mechanism.cues");
         } else if (subtype === "semantic-relation-enricher") {
           result = await enrichSemanticRelations({ workspaceId: this.workspaceId, node, payload, event, config });
           if (result.semanticRelations?.length) {

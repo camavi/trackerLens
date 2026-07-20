@@ -411,9 +411,9 @@ const renderHeader = () =>
       _.span({ class: "tl-separator" }),
       btn({ class: `tl-top-icon${workspaceState.previewMode ? " is-active" : ""}`, "aria-label": "Anteprima desktop", onclick: togglePreview }, icon("desktop_windows")),
       btn({ class: `tl-top-icon${workspaceState.workspace.showGrid ? " is-active" : ""}`, "aria-label": "Vista griglia", onclick: () => updateWorkspaceConfig("showGrid", !workspaceState.workspace.showGrid, "Vista griglia aggiornata") }, icon("dashboard")),
-      btn({ class: "tl-save-btn", onclick: saveWorkspace }, icon("cloud_upload", "sm"), "Salva"),
+      btn({ class: "st-btn-primary", onclick: saveWorkspace }, icon("cloud_upload", "sm"), "Salva"),
       btn({ class: "tl-top-icon", "aria-label": "Export workspace", onclick: exportCurrentWorkspace }, icon("download")),
-      btn({ class: "tl-publish-btn", onclick: publishWorkspace }, icon("language", "sm"), "Pubblica"),
+      btn({ class: "st-btn-primary", onclick: publishWorkspace }, icon("language", "sm"), "Pubblica"),
       btn({ class: `tl-top-icon${workspaceState.actionMenuOpen ? " is-active" : ""}`, "aria-label": "Altre azioni", onclick: toggleActionMenu }, icon("more_vert")),
       btn({ class: "tl-top-icon", "aria-label": "Chiudi", onclick: () => openChromePage("popup.html") }, icon("close"))
     )

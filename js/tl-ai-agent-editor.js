@@ -235,7 +235,7 @@ window.TrackerLensAiAgentEditor = (() => {
         typeof footerActions === "function" ? footerActions({ close, formId, dialog }) : null,
         btn({ onclick: close }, cancelLabel),
         btn({
-          class: "tl-ai-save-btn",
+          class: "st-btn-primary",
           onclick: async () => saveFromForm({ close }),
         }, icon("save", "sm"), saveLabel)
       ),
@@ -468,7 +468,7 @@ window.TrackerLensAiAgentEditor = (() => {
         typeof footerActions === "function" ? footerActions({ close, formId, dialog }) : null,
         btn({ onclick: close }, cancelLabel),
         btn({
-          class: "tl-ai-save-btn",
+          class: "st-btn-primary",
           "data-ai-agent-save": "true",
           onclick: async () => saveFromForm({ form: document.getElementById(formId), close }),
         }, icon("save", "sm"), saveLabel)

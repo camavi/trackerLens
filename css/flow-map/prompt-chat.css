@@ -2415,19 +2415,10 @@
   font-style: normal;
 }
 
-.tl-flow-prompt-plan-actions .cms-btn.is-primary {
+.tl-flow-prompt-plan-actions .cms-btn.st-btn-primary {
   min-height: 34px;
   padding: 8px 12px;
-  border-color: rgba(34, 211, 238, 0.28);
   border-radius: 8px;
-  color: #ecfeff;
-  background: rgba(34, 211, 238, 0.12);
-  font-weight: 800;
-}
-
-.tl-flow-prompt-plan-actions .cms-btn.is-primary:hover:not(:disabled) {
-  border-color: rgba(34, 211, 238, 0.48);
-  background: rgba(34, 211, 238, 0.18);
 }
 
 .tl-flow-prompt-preflight {

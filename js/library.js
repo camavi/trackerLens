@@ -510,7 +510,7 @@ const renderTopbar = () =>
       { class: "tl-library-actions", align: "center", gap: 16 },
       btn({ class: "tl-library-menu", onclick: importPortableFile }, icon("upload_file", "sm"), "Import"),
       btn({ class: "tl-library-menu tl-library-verify", onclick: scanMarketplaceTrust }, icon("verified_user", "sm"), libraryState.verifying ? "Scan" : "Verify"),
-      btn({ class: "tl-library-create", onclick: openCreateBox }, icon("edit", "sm"), "Crea nuovo box"),
+      btn({ class: "st-btn-primary", onclick: openCreateBox }, icon("edit", "sm"), "Crea nuovo box"),
       btn({ class: "tl-library-menu", "aria-label": "Menu libreria" }, icon("more_vert"))
     )
   );
@@ -772,7 +772,7 @@ const renderEmptyState = () =>
       _.div({ class: "tl-empty-icon" }, icon(libraryState.favoritesOnly ? "star_outline" : "inventory_2", "md")),
       _.h2(libraryState.favoritesOnly ? "Nessun preferito salvato" : libraryState.type === "workspace" ? "Nessun workspace salvato" : "Nessun elemento in libreria"),
       _.p(libraryState.favoritesOnly ? "Aggiungi una stella a workspace, boxLens o boxTracker per ritrovarli qui." : "Workspace, boxLens e boxTracker salvati in locale appariranno in questa libreria."),
-      btn({ class: "tl-empty-action", onclick: openCreateBox }, icon("add", "sm"), "Crea nuovo box")
+      btn({ class: "st-btn-primary", onclick: openCreateBox }, icon("add", "sm"), "Crea nuovo box")
     )
   );
 
@@ -795,7 +795,7 @@ const renderErrorState = () =>
       _.div({ class: "tl-empty-icon" }, icon("warning", "md")),
       _.h2("Libreria non disponibile"),
       _.p(libraryState.error),
-      btn({ class: "tl-empty-action", onclick: loadLibrary }, icon("refresh", "sm"), "Riprova")
+      btn({ class: "st-btn-primary", onclick: loadLibrary }, icon("refresh", "sm"), "Riprova")
     )
   );
 

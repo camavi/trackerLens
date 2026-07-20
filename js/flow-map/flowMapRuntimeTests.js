@@ -3514,6 +3514,7 @@ const runKnowledgeGraphSampleTest = async () => {
         "Answer only from the provided Knowledge Graph context, reasoning facts and source evidence.",
         "Do not add facts, numbers, order markers, quantities, colors, names, places or causal steps unless they are explicitly present in the provided evidence.",
         "If the evidence says \"un fiore\" or \"a flower\", do not infer \"second flower\", \"another flower\" or any count not stated.",
+        "Do not merge separate source details into a new label. If evidence says \"sorgente d'acqua cristallina\" and separately says it emanates \"luce magica\", do not rewrite it as \"fonte magica\" or \"sorgente magica\" unless that exact phrase appears in evidence.",
         "Prefer the structured required facts for the answer sequence, and use source excerpts only to support wording.",
         "If the provided evidence is insufficient, say exactly what evidence is missing.",
       ].join("\n"),
@@ -3537,6 +3538,7 @@ const runKnowledgeGraphSampleTest = async () => {
         "",
         "Before answering, silently check every concrete detail against the provided evidence.",
         "Do not include any detail that is not explicitly supported by the context.",
+        "When naming objects, places or substances, preserve the wording used by the evidence instead of inventing compressed labels.",
       ].join("\n"),
     },
   });
@@ -4465,7 +4467,7 @@ const openWorkspaceSettings = async () => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-primary", onclick: () => saveWorkspaceSettings({ close, nameInput, titleInput, descriptionInput, statusInput }) }, icon("save", "sm"), "Save")
+      btn({ class: "st-btn-primary", onclick: () => saveWorkspaceSettings({ close, nameInput, titleInput, descriptionInput, statusInput }) }, icon("save", "sm"), "Save")
     ),
   });
   dialog.open();
@@ -4967,7 +4969,7 @@ const openAgentRuntimeDialog = async () => {
         },
       }, icon("sync", "sm"), "Inspect"),
       btn({
-        class: "is-primary",
+        class: "st-btn-primary",
         onclick: async () => {
           run = await window.TrackerLensAgentRuntime.runFlow({
             workspaceId,
@@ -5034,7 +5036,7 @@ const renderHeader = () =>
         ? btn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, icon("stop", "sm"), "Stop")
         : null,
       btn({ onclick: openDevTools }, icon("developer_board", "sm"), "DevTools"),
-      btn({ class: "is-primary", onclick: () => window.location.assign("connections.html") }, icon("link", "sm"), "Connections")
+      btn({ class: "st-btn-primary", onclick: () => window.location.assign("connections.html") }, icon("link", "sm"), "Connections")
     )
   );
 

@@ -372,7 +372,7 @@ const renderTopbar = () =>
       { class: "tl-profile-top-actions", align: "center", gap: 16 },
       btn(
         {
-          class: "tl-profile-edit",
+          class: "st-btn-primary",
           onclick: isAuthenticated() ? handleLogout : () => openAuthDialog("login"),
           disabled: authState.busy || authState.status === "checking",
           title: isAuthenticated() ? "Logout" : authStatusLabel(),
@@ -426,7 +426,7 @@ const renderHero = () => {
       _.aside(
         { class: "tl-profile-plan" },
         _.div(_.span({ class: "tl-profile-plan-icon" }, icon("crown", "lg")), _.div(_.span("Piano Attuale"), _.strong(planLabel(user.plan)), _.em(authenticated ? "Backend Laravel" : "Modalita locale"))),
-        btn({ class: "tl-profile-plan-btn", disabled: !authenticated }, "Gestisci Abbonamento")
+        btn({ class: "st-btn-primary tl-profile-plan-btn", disabled: !authenticated }, "Gestisci Abbonamento")
       ),
       _.Toolbar(
         { class: "tl-profile-hero-actions", gap: 12 },
@@ -539,7 +539,7 @@ const renderAuthForm = () =>
     authState.error ? _.p({ class: "tl-profile-auth-error" }, authState.error) : null,
     btn(
       {
-        class: "tl-profile-fill",
+        class: "st-btn-primary tl-profile-fill",
         type: "submit",
         disabled: !apiClient || authState.busy || authState.status === "checking",
       },
@@ -623,7 +623,7 @@ const renderSecurity = () =>
         _.div({ class: "tl-profile-security-row" }, _.span({ class: "tl-profile-security-icon" }, icon(iconName, "sm")), _.div(_.strong(label), meta ? _.small(meta) : null), _.em({ class: `is-${tone}` }, state))
       )
     ),
-    btn({ class: "tl-profile-fill" }, "Gestisci Sicurezza")
+    btn({ class: "st-btn-primary tl-profile-fill" }, "Gestisci Sicurezza")
   );
 
 const renderDevices = () =>
@@ -648,7 +648,7 @@ const renderSystem = () =>
     { class: "tl-profile-card tl-profile-system" },
     _.h3("Informazioni Sistema"),
     _.div({ class: "tl-profile-info-list" }, ...systemRows().map(([label, value]) => _.p(_.span(label), _.strong(value)))),
-    btn({ class: "tl-profile-fill" }, "Diagnostica Sistema")
+    btn({ class: "st-btn-primary tl-profile-fill" }, "Diagnostica Sistema")
   );
 
 const renderFooter = () =>

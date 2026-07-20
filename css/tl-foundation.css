@@ -59,6 +59,33 @@ textarea {
   font: inherit;
 }
 
+button.cms-btn.st-btn-primary,
+.cms-btn.st-btn-primary,
+.st-btn-primary.cms-btn,
+.st-btn-primary {
+  min-width: 92px;
+  color: #161000;
+  border-color: rgba(255, 199, 44, 0.5);
+  background: linear-gradient(180deg, #ffd84f, #d99a00);
+  font-weight: 800;
+}
+
+button.cms-btn.st-btn-primary *,
+.cms-btn.st-btn-primary *,
+.st-btn-primary.cms-btn *,
+.st-btn-primary * {
+  color: inherit;
+}
+
+button.cms-btn.st-btn-primary:hover:not(:disabled),
+.cms-btn.st-btn-primary:hover:not(:disabled),
+.st-btn-primary.cms-btn:hover:not(:disabled),
+.st-btn-primary:hover:not(:disabled) {
+  color: #161000;
+  border-color: rgba(255, 216, 79, 0.72);
+  background: linear-gradient(180deg, #ffe36f, #e5a600);
+}
+
 .tl-sr-only {
   position: absolute;
   width: 1px;

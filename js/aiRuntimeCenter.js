@@ -305,7 +305,7 @@ const renderTopbar = () =>
     ),
     _.Toolbar(
       { class: "tl-ai-actions", align: "center", gap: 16 },
-      btn({ class: "tl-ai-edit", onclick: () => openProviderEditorDialog() }, icon("add", "sm"), "Provider"),
+      btn({ class: "st-btn-primary", onclick: () => openProviderEditorDialog() }, icon("add", "sm"), "Provider"),
       btn({ class: "tl-ai-menu", "aria-label": "Impostazioni AI", onclick: () => window.location.assign("settings.html#ai") }, icon("settings", "sm"))
     )
   );
@@ -349,7 +349,7 @@ const renderHeader = () =>
       _.Toolbar(
         { class: "tl-ai-head-actions", gap: 14 },
         _.span({ class: "tl-ai-live-pill" }, dot(aiRuntimeMeta.error ? "error" : "online"), aiRuntimeMeta.error ? "AI System Error" : "AI System Online"),
-        btn({ class: "tl-ai-small-btn" }, icon("settings", "sm"), "Impostazioni AI"),
+        btn({ class: "st-btn-primary", onclick: () => window.location.assign("settings.html#ai") }, icon("settings", "sm"), "Impostazioni AI"),
         btn({ class: "tl-ai-icon-btn", "aria-label": "Aggiorna runtime AI", onclick: refreshAiRuntime }, icon("refresh", "sm"))
       )
     ),
@@ -700,7 +700,7 @@ const openProviderEditorDialog = (provider = null) => {
       _.Toolbar(
         { align: "end", gap: 8 },
         btn({ onclick: close }, "Annulla"),
-        btn({ class: "tl-ai-save-btn", type: "submit" }, icon("save", "sm"), "Salva")
+        btn({ class: "st-btn-primary", type: "submit" }, icon("save", "sm"), "Salva")
       )
     ),
   });
@@ -918,7 +918,7 @@ const openPromptEditorDialog = (prompt = null) => {
       _.Toolbar(
         { align: "end", gap: 8 },
         btn({ onclick: close }, "Annulla"),
-        btn({ class: "tl-ai-save-btn", type: "submit" }, icon("save", "sm"), "Salva")
+        btn({ class: "st-btn-primary", type: "submit" }, icon("save", "sm"), "Salva")
       )
     ),
   });
