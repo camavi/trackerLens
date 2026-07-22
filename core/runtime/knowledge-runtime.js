@@ -750,7 +750,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const knowledgeCompletionLimit = ({ config = {}, providerType = "", provider = {}, requested = 900, min = 128, max = 1800 } = {}) => {
     const wanted = knowledgeAiNumberConfig(config.maxTokens, requested);
     const context = knowledgeContextSize(config, providerType, provider);
-    const localLimit = isLmStudioProvider(providerType, provider) ? Math.max(192, Math.floor(context * 0.12)) : max;
+    const explicitCompletionLimit = Number(config.completionTokenLimit || config.maxCompletionTokens || provider.completionTokenLimit || provider.maxCompletionTokens || 0);
+    const localCompletionRatio = Number(config.completionContextRatio || provider.completionContextRatio || 0.5);
+    const localLimit = isLmStudioProvider(providerType, provider)
+      ? Math.max(min, Math.min(max, Number.isFinite(explicitCompletionLimit) && explicitCompletionLimit > 0
+        ? explicitCompletionLimit
+        : Math.floor(context * Math.max(0.2, Math.min(0.75, localCompletionRatio)))))
+      : max;
     return Math.max(min, Math.min(max, wanted, localLimit));
   };
 
@@ -965,7 +971,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return {
       ...config,
       dictionaryMode: config.dictionaryMode || "hybrid",
-      eventMode: config.eventMode || "hybrid",
+      eventMode: config.eventMode || "llm",
       entityMode: config.entityMode || "hybrid",
       compositionMode: config.compositionMode || "hybrid",
     };
@@ -2794,7 +2800,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const sentChunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
         sourceChunks.slice(0, sentChunkLimit).forEach((chunk) => attemptedChunkIds.add(chunk.id || ""));
         const prompt = promptFor({ promptMode, sourceChunks });
-        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 192, max: 1800 });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 640, max: 1800 });
         const body = providerType === "ollama"
           ? {
             model,
@@ -2882,20 +2888,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (attempt.candidates.length) fallbackResult = attempt;
         if (attempt.error && !attempt.retryable) break;
       }
-      if (mode === "hybrid") {
-        return {
-          candidates: fallbackResult?.candidates || [],
-          provider: provider.id || providerType || "provider",
-          model: lastModel,
-          usage: totalUsage,
-          error: fallbackResult ? "" : (lastError || "sparse-ai-dictionary-output"),
-          promptMode: fallbackResult?.promptMode || "",
-          stats: resultStatsFor(fallbackResult?.candidates || []),
-        };
-      }
       const chunkCandidates = [];
       const chunkPromptModes = [];
-      for (const chunk of chunks.slice(0, chunkPassLimit)) {
+      const globalCandidates = fallbackResult?.candidates || [];
+      const shouldRunChunkPass = mode === "llm" || (mode === "hybrid" && globalCandidates.length < minGlobalDictionaryCandidates);
+      for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
         attemptedChunkIds.add(chunk.id || "");
         const attempt = await runDictionaryPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (attempt.candidates.length) {
@@ -2904,15 +2901,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
           productiveChunkIds.add(chunk.id || "");
         }
       }
-      if (chunkCandidates.length) {
-        const mergedCandidates = mergeDictionaryCandidates([], chunkCandidates, maxTerms);
+      if (globalCandidates.length || chunkCandidates.length) {
+        const mergedCandidates = mergeDictionaryCandidates(globalCandidates, chunkCandidates, maxTerms);
         return {
           candidates: mergedCandidates,
           provider: provider.id || providerType || "provider",
           model: lastModel,
           usage: totalUsage,
           error: "",
-          promptMode: unique(chunkPromptModes).join("+") || "chunk",
+          promptMode: unique([fallbackResult?.promptMode || "", ...chunkPromptModes]).join("+") || fallbackResult?.promptMode || "chunk",
           stats: resultStatsFor(mergedCandidates),
         };
       }
@@ -3061,17 +3058,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     });
     const useRuleFallback = mode === "rules" ||
       (mode === "hybrid" && !aiDictionaryUsable);
+    const useHybridCompletion = mode === "hybrid";
     const sourceAnchorCandidates = mode === "llm" || mode === "rules" || effectiveConfig.useSourceAnchors === false
       ? []
       : extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms });
-    const ruleCandidates = useRuleFallback
+    const ruleCandidates = useRuleFallback || useHybridCompletion
       ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency })
       : [];
     const finalCandidates = mode === "llm"
       ? (aiResult.candidates || []).slice(0, maxTerms)
-      : useRuleFallback
-        ? mergeDictionaryCandidates(ruleCandidates, aiResult.candidates || [], maxTerms)
-        : mergeDictionaryCandidates(sourceAnchorCandidates, aiResult.candidates || [], maxTerms);
+      : mode === "hybrid"
+        ? mergeDictionaryCandidates(ruleCandidates, mergeDictionaryCandidates(sourceAnchorCandidates, aiResult.candidates || [], maxTerms), maxTerms)
+        : mergeDictionaryCandidates(ruleCandidates, aiResult.candidates || [], maxTerms);
     const records = [];
     for (const candidate of finalCandidates) {
       const chunk = candidate.evidenceChunk || scopedChunks[0] || {};
@@ -3183,6 +3181,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         candidateCount: aiResult.candidates?.length || 0,
         minHybridCandidates: minHybridAiTerms,
         hybridFallback: useRuleFallback,
+        hybridMerged: mode === "hybrid",
+        ruleCompletionCount: mode === "hybrid" || mode === "rules" ? ruleCandidates.length : 0,
+        sourceAnchorCount: sourceAnchorCandidates.length,
         fallbackReason: useRuleFallback && mode === "hybrid" ? "sparse-ai-dictionary-output" : "",
         chunkCoverage: aiResult.stats || {
           inputChunkCount: scopedChunks.length,
@@ -3205,6 +3206,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }, {}),
       usableSeedCount: records.filter((entry) => entry.usableAsSeed).length,
       context,
+      status: mode === "hybrid" && (aiResult.candidates?.length || 0) > 0 && useRuleFallback
+        ? "partial-ai-merged"
+        : useRuleFallback
+          ? "fallback"
+          : "ready",
       createdAt: now,
     };
   };
@@ -3718,6 +3724,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = providerType === "ollama"
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
+    const promptBudget = knowledgePromptBudget({
+      config,
+      providerType,
+      provider,
+      chunksLength: chunks.length,
+      defaultChunkLimit: chunks.length || 8,
+      defaultChunkChars: 1600,
+    });
     const allowedTypes = [...knowledgeEventTypes];
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
@@ -3874,6 +3888,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const repaired = parseAiJsonObject(repairText);
         return Array.isArray(repaired?.events) ? { ...repaired, promptMode: `${promptMode}-repair` } : null;
       };
+      const eventProposalHasValidCandidate = (events = [], sourceChunks = chunks) =>
+        (events || []).some((item) => {
+          const quote = String(item?.evidence?.quote || item?.quote || "").replace(/\s+/g, " ").trim();
+          if (normalizeKnowledgeText(quote).length < 24) return false;
+          if (!normalizeAiKnowledgeEventTypeForEvidence(item?.eventType || item?.type || "", quote).eventType) return false;
+          const chunk = sourceChunks.find((candidateChunk) => quote && evidenceQuoteInChunk(candidateChunk, quote)) ||
+            chunks.find((candidateChunk) => quote && evidenceQuoteInChunk(candidateChunk, quote));
+          return Boolean(chunk && knowledgeEventQuoteHasCleanBoundary(chunk, quote));
+        });
       const runEventPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const prompt = promptFor({ mode: promptMode, sourceChunks });
         const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 160, max: 1200 });
@@ -3928,6 +3951,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         lastModel = data.model || lastModel;
         const proposal = parseAiJsonObject(text);
         if (Array.isArray(proposal?.events)) {
+          if (!eventProposalHasValidCandidate(proposal.events, sourceChunks)) {
+            lastError = "empty-accepted-ai-events";
+            return { events: [], rejectedCandidates: Array.isArray(proposal.rejectedCandidates) ? proposal.rejectedCandidates : [], error: lastError, retryable: mode === "llm", promptMode };
+          }
           return {
             events: proposal.events,
             rejectedCandidates: Array.isArray(proposal.rejectedCandidates) ? proposal.rejectedCandidates : [],
@@ -3940,6 +3967,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         const salvagedEvents = salvageEventObjectsFromText(text);
         if (salvagedEvents.length) {
+          if (!eventProposalHasValidCandidate(salvagedEvents, sourceChunks)) {
+            lastError = "empty-accepted-ai-events";
+            return { events: [], rejectedCandidates: [], error: lastError, retryable: mode === "llm", promptMode: `${promptMode}-salvage` };
+          }
           return {
             events: salvagedEvents,
             rejectedCandidates: [],
@@ -3966,43 +3997,45 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         return { events: [], rejectedCandidates: [], error: lastError, retryable: true, promptMode };
       };
+      const llmEvents = [];
+      const llmRejectedCandidates = [];
+      const llmPromptModes = [];
+      const maxAcceptedEvents = Math.max(1, Math.min(120, Number(config.maxEvents || 80)));
       for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runEventPromptAttempt({ promptMode });
-        if (Array.isArray(attempt.events) && attempt.events.length) return attempt;
-        if (attempt.error && !attempt.retryable) break;
-      }
-      if (mode === "hybrid") {
-        return {
-          events: [],
-          rejectedCandidates: [],
-          provider: provider.id || providerType || "provider",
-          model: lastModel,
-          usage: totalUsage,
-          error: lastError || "sparse-ai-events",
-          promptMode: "",
-        };
+        if (Array.isArray(attempt.rejectedCandidates)) llmRejectedCandidates.push(...attempt.rejectedCandidates);
+        if (Array.isArray(attempt.events) && attempt.events.length) {
+          llmEvents.push(...attempt.events);
+          llmPromptModes.push(attempt.promptMode || promptMode);
+        }
+        if (attempt.error && !attempt.retryable && mode !== "hybrid") break;
       }
       const chunkEvents = [];
       const chunkRejectedCandidates = [];
       const chunkPromptModes = [];
-      for (const chunk of chunks.slice(0, Math.min(chunks.length, Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)))))) {
+      const chunkPassLimit = Math.min(chunks.length, Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8))));
+      const shouldRunChunkPass = mode === "llm" || (mode === "hybrid" && llmEvents.length < Math.max(1, Math.min(8, Number(config.minHybridAiEvents || 4))));
+      for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
         const attempt = await runEventPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (Array.isArray(attempt.events) && attempt.events.length) {
           chunkEvents.push(...attempt.events);
           chunkPromptModes.push(attempt.promptMode || "chunk");
         }
         if (Array.isArray(attempt.rejectedCandidates)) chunkRejectedCandidates.push(...attempt.rejectedCandidates);
-        if (chunkEvents.length >= Math.max(1, Math.min(120, Number(config.maxEvents || 80)))) break;
+        if (llmEvents.length + chunkEvents.length >= maxAcceptedEvents) break;
       }
-      if (chunkEvents.length) {
+      const combinedEvents = [...llmEvents, ...chunkEvents];
+      const combinedRejectedCandidates = [...llmRejectedCandidates, ...chunkRejectedCandidates];
+      const combinedPromptModes = unique([...llmPromptModes, ...chunkPromptModes]);
+      if (combinedEvents.length) {
         return {
-          events: chunkEvents.slice(0, Math.max(1, Math.min(120, Number(config.maxEvents || 80)))),
-          rejectedCandidates: chunkRejectedCandidates.slice(0, 60),
+          events: combinedEvents.slice(0, maxAcceptedEvents),
+          rejectedCandidates: combinedRejectedCandidates.slice(0, 60),
           provider: provider.id || providerType || "provider",
           model: lastModel,
           usage: totalUsage,
           error: "",
-          promptMode: unique(chunkPromptModes).join("+") || "chunk",
+          promptMode: combinedPromptModes.join("+") || "chunk",
         };
       }
       return { events: [], rejectedCandidates: [], provider: provider.id || providerType || "provider", model: lastModel, usage: totalUsage, error: lastError || "empty-ai-events", promptMode: "" };
@@ -4205,9 +4238,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       (extractionMode === "hybrid" && !aiEventsUsable);
     const candidateSource = extractionMode === "llm"
       ? aiCandidates
-      : useRuleFallback
-        ? ruleCandidates
-        : aiCandidates;
+      : extractionMode === "hybrid"
+        ? [...aiCandidates, ...ruleCandidates]
+        : ruleCandidates;
     const seen = new Set();
     const selectedCandidates = candidateSource
       .sort((left, right) =>
@@ -4351,11 +4384,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
         minHybridEvents: minHybridAiEvents,
         promptMode: aiResult.promptMode || "",
         ruleFallback: useRuleFallback,
+        hybridMerged: extractionMode === "hybrid",
+        ruleCompletionCount: extractionMode === "hybrid" || extractionMode === "rules" ? ruleCandidates.length : 0,
         fallbackReason: useRuleFallback && extractionMode === "hybrid" ? "sparse-ai-event-output" : "",
         rejectedCandidates,
       },
       context,
-      status: useRuleFallback ? "fallback" : "ready",
+      status: extractionMode === "hybrid" && aiCandidates.length > 0 && useRuleFallback
+        ? "partial-ai-merged"
+        : useRuleFallback
+          ? "fallback"
+          : "ready",
       createdAt: now,
     };
   };

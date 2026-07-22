@@ -4159,7 +4159,7 @@ const runKnowledgeAgentToolsSampleTest = async () => {
     subtype: "knowledge-event-builder",
     category: "knowledge",
     paletteLabel: "Event Builder",
-    config: { ...sampleAiConfig, eventMode: "hybrid", collectionId, outputChannel: "knowledge.events.updated" },
+    config: { ...sampleAiConfig, eventMode: "llm", collectionId, outputChannel: "knowledge.events.updated" },
   });
   const entities = nodeBase({
     name: "entities",

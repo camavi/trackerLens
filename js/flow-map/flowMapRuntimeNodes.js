@@ -4059,10 +4059,24 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   ...payload.metrics,
 });
 
-const persistKnowledgeAiEditorPayload = async ({ node, payload, form, close }) => {
+const knowledgeAiEditorCustomConfigMap = ({ form = null, dialog = null } = {}) => {
+  const config = { ...readConfigMap(form) };
+  const roots = [
+    form?.closest?.(".tl-ai-agent-dialog"),
+    dialog?.element,
+    dialog?.el,
+    document.querySelector(".tl-ai-agent-dialog"),
+  ].filter(Boolean);
+  roots.forEach((root) => {
+    Object.assign(config, readConfigMap(root));
+  });
+  return config;
+};
+
+const persistKnowledgeAiEditorPayload = async ({ node, payload, form, dialog, close }) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const agentConfig = aiAgentPayloadConfig(payload);
-  const customConfig = readConfigMap(form);
+  const customConfig = knowledgeAiEditorCustomConfigMap({ form, dialog });
   const input = payload.channels?.inputs?.[0] || defaults.input;
   const output = payload.channels?.outputChannel || payload.channels?.outputs?.[0] || defaults.output;
   const update = runtimeNodeUpdateFromValues({
@@ -5585,7 +5599,7 @@ const requestRuntimeNodeConfig = async (node) => {
             ),
           },
         ] : [],
-        onSave: ({ payload, form, close }) => persistKnowledgeAiEditorPayload({ node, payload, form, close }),
+        onSave: ({ payload, form, dialog, close }) => persistKnowledgeAiEditorPayload({ node, payload, form, dialog, close }),
       });
       return;
     }
