@@ -28,6 +28,7 @@ Last updated: 2026-06-11.
 - `runtime/stores.md`: IndexedDB stores and ownership.
 - `runtime/channels.md`: channel registry and event bus.
 - `runtime/dependencies.md`: dependency safety model.
+- `runtime/connected-node-tools.md`: Agent/LLM protocol for discovering and querying connected node tools.
 - `runtime/ai-memory.md`: workspace/global/short AI memory.
 
 ## Archive

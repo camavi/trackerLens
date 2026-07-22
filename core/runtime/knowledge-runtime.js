@@ -612,6 +612,56 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return headers;
   };
 
+  const openAiJsonModeSupported = (providerType = "", config = {}) => {
+    const type = String(providerType || config.providerType || config.provider || "").toLowerCase();
+    const forced = config.forceResponseFormat === true || String(config.forceResponseFormat || "").toLowerCase() === "true";
+    if (forced) return true;
+    if (type.includes("lm-studio") || type.includes("lmstudio")) return false;
+    return ["openai", "openai-compatible", "custom-openai"].some((item) => type.includes(item));
+  };
+
+  const withJsonObjectResponseFormat = (body = {}, providerType = "", config = {}) =>
+    openAiJsonModeSupported(providerType, config)
+      ? { ...body, response_format: { type: "json_object" } }
+      : body;
+
+  const isLmStudioProvider = (providerType = "", provider = {}) =>
+    /lm[-_\s]?studio|lmstudio/i.test([
+      providerType,
+      provider.provider,
+      provider.providerType,
+      provider.id,
+      provider.name,
+    ].filter(Boolean).join(" "));
+
+  const knowledgeContextSize = (config = {}, providerType = "", provider = {}) => {
+    const explicit = Number(config.contextSize || config.contextWindow || config.contextTokens || config.nCtx || provider.contextSize || provider.nCtx || 0);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    return isLmStudioProvider(providerType, provider) ? 4096 : 8192;
+  };
+
+  const knowledgeCompletionLimit = ({ config = {}, providerType = "", provider = {}, requested = 900, min = 128, max = 1800 } = {}) => {
+    const wanted = knowledgeAiNumberConfig(config.maxTokens, requested);
+    const context = knowledgeContextSize(config, providerType, provider);
+    const localLimit = isLmStudioProvider(providerType, provider) ? Math.max(192, Math.floor(context * 0.12)) : max;
+    return Math.max(min, Math.min(max, wanted, localLimit));
+  };
+
+  const knowledgePromptBudget = ({ config = {}, providerType = "", provider = {}, chunksLength = 1, defaultChunkLimit = 8, defaultChunkChars = 1600 } = {}) => {
+    const local = isLmStudioProvider(providerType, provider);
+    const rawChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || defaultChunkLimit || chunksLength || 1)));
+    const rawChunkChars = Math.max(400, Math.min(3600, Number(config.maxChunkChars || defaultChunkChars || 1200)));
+    if (!local || config.allowLargeLocalContext === true || String(config.allowLargeLocalContext || "").toLowerCase() === "true") {
+      return { chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit), maxChunkChars: rawChunkChars };
+    }
+    const context = knowledgeContextSize(config, providerType, provider);
+    const contextScale = context <= 4096 ? 1 : Math.min(2, Math.floor(context / 4096));
+    return {
+      chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit, Math.max(1, contextScale * 2)),
+      maxChunkChars: Math.min(rawChunkChars, context <= 4096 ? 900 : 1200),
+    };
+  };
+
   const pickEmbeddingProvider = async (config = {}) => {
     const requestedProfile = String(config.providerProfile || config.profileId || "").trim();
     const requestedType = String(config.providerType || config.provider || "").trim().toLowerCase();
@@ -795,6 +845,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
     node.metadata?.config && typeof node.metadata.config === "object" && !Array.isArray(node.metadata.config)
       ? node.metadata.config
       : {};
+  const isAgentToolsSampleNode = (node = {}) =>
+    /agent tools sample/i.test([
+      node.id,
+      node.label,
+      node.metadata?.paletteAction,
+      node.metadata?.source,
+      node.metadata?.config?.purpose,
+    ].filter(Boolean).join(" "));
+  const agentToolsBoundedKnowledgeConfig = (node = {}, config = {}) => {
+    if (!isAgentToolsSampleNode(node)) return config;
+    return {
+      ...config,
+      dictionaryMode: config.dictionaryMode || "hybrid",
+      eventMode: config.eventMode || "hybrid",
+      entityMode: config.entityMode || "hybrid",
+      compositionMode: config.compositionMode || "hybrid",
+    };
+  };
   const nodeStatus = (node = {}) =>
     String(node.runtime?.status || node.metadata?.runtimeStatus || node.status || "idle").toLowerCase();
   const isKnowledgeNode = (node = {}) =>
@@ -802,8 +870,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     !node.metadata?.library &&
     !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
   const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))];
+  const isToolAccessDependency = (dependency = {}) =>
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || "") === "tool-access";
   const nodeIncomingDependencies = (node = {}, dependencies = []) =>
-    (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+    (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id && !isToolAccessDependency(dependency));
   const dependencyChannel = (dependency = {}) =>
     dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "";
   const dependencyChannels = (dependency = {}) =>
@@ -937,7 +1007,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return score + Math.min(3, Number(entity.confidence || 0) * 3);
   };
 
-  const graphDangerIntentPattern = /\b(?:pericol\w*|risch\w*|ostacol\w*|minacc\w*|attacc\w*|attacco|ferit\w*|ferisc\w*|ferend\w*|ferir\w*|colp\w*|mostr\w*|nemic\w*|affront\w*|danger\w*|risk\w*|obstacle\w*|threat\w*|attack\w*|hurt\w*|injur\w*|wound\w*|violent\w*|monster\w*|enem\w*|face|faced|facing|confront\w*|peligro\w*|riesgo\w*|obst[aá]cul\w*|amenaz\w*|ataque|ataca\w*|herid\w*|monstru\w*|enfrent\w*|dangereux|risque\w*|menace\w*|attaque\w*|bless\w*|monstre\w*|affront\w*|gefahr\w*|gefährlich\w*|risiko\w*|hindernis\w*|bedrohung\w*|angriff\w*|verletzt\w*)\b/;
+  const graphDangerIntentPattern = /\b(?:pericol\w*|risch\w*|ostacol\w*|minacc\w*|attacc\w*|attacco|ferit\w*|ferisc\w*|ferend\w*|ferir\w*|colp\w*|mostr\w*|nemic\w*|ennemic\w*|affront\w*|danger\w*|risk\w*|obstacle\w*|threat\w*|attack\w*|hurt\w*|injur\w*|wound\w*|violent\w*|monster\w*|enem\w*|face|faced|facing|confront\w*|peligro\w*|riesgo\w*|obst[aá]cul\w*|amenaz\w*|ataque|ataca\w*|herid\w*|monstru\w*|enfrent\w*|dangereux|risque\w*|menace\w*|attaque\w*|bless\w*|monstre\w*|affront\w*|gefahr\w*|gefährlich\w*|risiko\w*|hindernis\w*|bedrohung\w*|angriff\w*|verletzt\w*)\b/;
 
   const graphQueryIntent = (query = "") => {
     const normalized = normalizeEntityToken(query);
@@ -1112,7 +1182,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     let score = 0;
     if (/\b(?:pericol\w*|danger\w*|peligro\w*|dangereux|gefahr\w*|gefährlich\w*|risque\w*|risk\w*|risch\w*)\b/.test(normalized)) score += 8;
     if (/\b(?:ostacol\w*|obstacle\w*|obst[aá]cul\w*|hindernis\w*|cammino difficile|percorso difficile|difficult path|difficile)\b/.test(normalized)) score += 6;
-    if (/\b(?:minacc\w*|threat\w*|menace\w*|bedrohung\w*|nemic\w*|enem\w*|monstr\w*|mostr\w*|monster\w*|troll)\b/.test(normalized)) score += 8;
+    if (/\b(?:minacc\w*|threat\w*|menace\w*|bedrohung\w*|nemic\w*|ennemic\w*|enem\w*|monstr\w*|mostr\w*|monster\w*|troll)\b/.test(normalized)) score += 8;
     if (/\b(?:attacc\w*|attacco|colp\w*|ferit\w*|ferisc\w*|ferend\w*|ferir\w*|violent\w*|hurt\w*|injur\w*|wound\w*|attack\w*|ataque|ataca\w*|herid\w*|bless\w*|verletz\w*)\b/.test(normalized)) score += 10;
     if (/\b(?:affront\w*|face|faced|facing|confront\w*|enfrent\w*|affronter|begegnet)\b/.test(normalized)) score += 5;
     if (/\b(?:oscura|oscuro|dark|darkness|sombre|foresta|forest|bosque|wald)\b/.test(normalized) &&
@@ -1123,7 +1193,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const graphDangerExpansionTokens = ({ intent = {}, stopWords = new Set() } = {}) => {
     if (!intent.danger) return [];
     const terms = [
-      "pericolo", "pericoli", "pericoloso", "rischio", "ostacolo", "ostacoli", "minaccia", "attacco", "attacca", "ferisce", "ferito", "colpisce", "violento", "mostro", "nemico", "affronta",
+      "pericolo", "pericoli", "pericoloso", "rischio", "ostacolo", "ostacoli", "minaccia", "attacco", "attacca", "ferisce", "ferito", "colpisce", "violento", "mostro", "nemico", "ennemico", "affronta",
       "danger", "dangerous", "risk", "obstacle", "obstacles", "threat", "attack", "attacks", "hurt", "injured", "wounded", "violent", "monster", "enemy", "face", "faced", "confront",
       "peligro", "peligroso", "riesgo", "obstaculo", "amenaza", "ataque", "herido", "monstruo", "enfrenta",
       "danger", "dangereux", "risque", "obstacle", "menace", "attaque", "blesse", "monstre", "affronte",
@@ -1206,6 +1276,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = providerType === "ollama"
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
+    const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 2200 });
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
       "You are a Knowledge Graph Query Expander. Improve retrieval only from the user's query and runtime intent. Do not answer, summarize, filter evidence or decide what the final answer should contain."
@@ -1456,14 +1527,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
             num_predict: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
           },
         }
-        : {
+        : withJsonObjectResponseFormat({
           model,
           messages: [{ role: "user", content: prompt }],
           temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
           max_tokens: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-          response_format: { type: "json_object" },
-        };
+        }, providerType, config);
       knowledgeLlmDebug("graph-mechanism-cues:request", {
         mode,
         provider: provider.id || providerType || "",
@@ -1510,7 +1580,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ].join("\n\n");
         const repairBody = providerType === "ollama"
           ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 520 } }
-          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 520, top_p: 0.9, response_format: { type: "json_object" } };
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 520, top_p: 0.9 }, providerType, config);
         let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
         let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
         if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
@@ -1794,6 +1864,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (intent.cause && ["transforms", "drinks", "heals", "speaks"].includes(event.eventType)) score += 8;
     if (intent.danger && ["encounters", "confronts", "attacks", "hurts", "opposes", "threatens", "moves"].includes(event.eventType)) score += 10;
     if (intent.danger && graphDangerCueScore(event.evidence?.text || event.evidence?.quote || text, intent) >= 10) score += 14;
+    if (score <= 0) return 0;
     score += Math.min(4, Number(event.confidence || 0) * 4);
     return score;
   };
@@ -2306,8 +2377,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const maxTerms = Math.max(8, Math.min(120, Number(config.maxTerms || 60)));
-    const configuredChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)));
-    const configuredMaxChunkChars = Math.max(600, Math.min(3200, Number(config.maxChunkChars || 1600)));
+    const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
+    const configuredChunkLimit = promptBudget.chunkLimit;
+    const configuredMaxChunkChars = promptBudget.maxChunkChars;
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
       "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence."
@@ -2400,11 +2472,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Schema: {\"entries\":[{\"term\":\"\",\"type\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term\",\"aliases\":[],\"semanticHints\":[],\"relationCues\":[],\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}]}",
           "Keep only entries, labels and quotes already present in the model output. Do not invent new entries, aliases or evidence.",
           "Input:",
-          rawText.slice(0, 5000),
+          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
         ].join("\n\n");
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
         const repairBody = providerType === "ollama"
-          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 1200 } }
-          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 1200, top_p: 0.9, response_format: { type: "json_object" } };
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
         let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
         let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
         if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
@@ -2433,6 +2506,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const sentChunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
         sourceChunks.slice(0, sentChunkLimit).forEach((chunk) => attemptedChunkIds.add(chunk.id || ""));
         const prompt = promptFor({ promptMode, sourceChunks });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 192, max: 1800 });
         const body = providerType === "ollama"
           ? {
             model,
@@ -2442,17 +2516,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
             options: {
               temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
               top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-              num_predict: Math.max(256, Math.min(1800, knowledgeAiNumberConfig(config.maxTokens, 900))),
+              num_predict: completionMaxTokens,
             },
           }
-          : {
+          : withJsonObjectResponseFormat({
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-            max_tokens: Math.max(256, Math.min(1800, knowledgeAiNumberConfig(config.maxTokens, 900))),
+            max_tokens: completionMaxTokens,
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            response_format: { type: "json_object" },
-          };
+          }, providerType, config);
         knowledgeLlmDebug("dictionary:request", {
           mode,
           promptMode,
@@ -2487,6 +2560,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
+          if (mode === "hybrid") return { candidates: [], error: lastError, retryable: false, promptMode };
           const repaired = await repairDictionaryJson({ text, promptMode, sourceChunks });
           if (repaired) return { candidates: repaired.candidates, error: "", promptMode: repaired.promptMode };
           return { candidates: [], error: lastError, retryable: true, promptMode };
@@ -2500,7 +2574,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       };
       const minGlobalDictionaryCandidates = Math.max(6, Math.min(maxTerms, Number(config.minLlmDictionaryTerms || Math.max(12, chunks.length))));
       let fallbackResult = null;
-      for (const promptMode of ["full", "compact", "micro"]) {
+      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runDictionaryPromptAttempt({ promptMode });
         if (attempt.candidates.length >= minGlobalDictionaryCandidates) {
           return {
@@ -2651,21 +2725,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId || payloadChunks.length);
     if (!scopedChunks.length) throw new Error("Chunk Knowledge non trovati per Knowledge Dictionary Builder");
     const combinedText = scopedChunks.map((chunk) => chunk.text || "").join("\n\n");
-    const language = detectLanguage(combinedText, preferredRuntimeLanguage(config, payload) || scopedChunks[0]?.metadata?.language || "");
-    const maxTerms = Math.max(8, Number(config.maxTerms || 120));
-    const minFrequency = Math.max(1, Number(config.minFrequency || 1));
-    const scope = String(config.scope || "document").trim().toLowerCase() || "document";
-    const mode = dictionaryBuildMode(config);
-    const replaceExisting = config.replaceExisting !== false;
+    const effectiveConfig = agentToolsBoundedKnowledgeConfig(node, config);
+    const language = detectLanguage(combinedText, preferredRuntimeLanguage(effectiveConfig, payload) || scopedChunks[0]?.metadata?.language || "");
+    const maxTerms = Math.max(8, Number(effectiveConfig.maxTerms || 120));
+    const minFrequency = Math.max(1, Number(effectiveConfig.minFrequency || 1));
+    const scope = String(effectiveConfig.scope || "document").trim().toLowerCase() || "document";
+    const mode = dictionaryBuildMode(effectiveConfig);
+    const replaceExisting = effectiveConfig.replaceExisting !== false;
     if (replaceExisting && documentId) await deleteDictionaryEntries({ workspaceId, documentId });
     const now = nowIso();
     const aiResult = ["llm", "hybrid"].includes(mode)
-      ? await callKnowledgeDictionaryAi({ chunks: scopedChunks, language, config })
+      ? await callKnowledgeDictionaryAi({ chunks: scopedChunks, language, config: effectiveConfig })
       : { candidates: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
     }
-    const minHybridAiTerms = Math.max(4, Math.min(maxTerms, Number(config.minHybridAiTerms || Math.max(12, scopedChunks.length * 2))));
+    const minHybridAiTerms = Math.max(4, Math.min(maxTerms, Number(effectiveConfig.minHybridAiTerms || Math.max(12, scopedChunks.length * 2))));
     const aiDictionaryUsable = hybridAiCountUsable({
       count: aiResult.candidates?.length || 0,
       min: minHybridAiTerms,
@@ -3334,8 +3409,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const compact = promptMode === "compact";
       const micro = promptMode === "micro";
       const chunkPass = promptMode === "chunk";
-      const chunkLimit = chunkPass ? 1 : micro ? 1 : compact ? Math.min(2, sourceChunks.length) : sourceChunks.length;
-      const chunkChars = chunkPass ? 1200 : micro ? 800 : compact ? 1200 : Math.max(600, Math.min(3600, Number(config.maxChunkChars || 2200)));
+      const chunkLimit = chunkPass ? 1 : micro ? 1 : compact ? Math.min(2, promptBudget.chunkLimit, sourceChunks.length) : Math.min(promptBudget.chunkLimit, sourceChunks.length);
+      const chunkChars = chunkPass ? Math.min(900, promptBudget.maxChunkChars) : micro ? Math.min(700, promptBudget.maxChunkChars) : compact ? Math.min(1000, promptBudget.maxChunkChars) : promptBudget.maxChunkChars;
       const termLimit = micro ? 12 : compact ? 24 : 60;
       const eventLimit = chunkPass ? 8 : micro ? 6 : compact ? 14 : Math.max(1, Math.min(120, Number(config.maxEvents || 80)));
       const schema = {
@@ -3448,11 +3523,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Schema: {\"events\":[{\"eventType\":\"\",\"subject\":\"\",\"objects\":[],\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"rejectedCandidates\":[]}",
           "Keep only items already present in the model output. Do not invent new events, subjects, objects or quotes.",
           "Input:",
-          rawText.slice(0, 5000),
+          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
         ].join("\n\n");
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
         const repairBody = providerType === "ollama"
-          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 1200 } }
-          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 1200, top_p: 0.9, response_format: { type: "json_object" } };
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
         let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
         let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
         if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
@@ -3474,6 +3550,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       };
       const runEventPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const prompt = promptFor({ mode: promptMode, sourceChunks });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 160, max: 1200 });
         const body = providerType === "ollama"
           ? {
             model,
@@ -3482,17 +3559,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
             options: {
               temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
               top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-              num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1200)),
+              num_predict: completionMaxTokens,
             },
           }
-          : {
+          : withJsonObjectResponseFormat({
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-            max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1200)),
+            max_tokens: completionMaxTokens,
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            response_format: { type: "json_object" },
-          };
+          }, providerType, config);
         const eventPromptChunkLimit = promptMode === "chunk" ? 1 : promptMode === "micro" ? 1 : promptMode === "compact" ? Math.min(2, sourceChunks.length) : sourceChunks.length;
         knowledgeLlmDebug("event-builder:request", {
           mode,
@@ -3549,6 +3625,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           };
         }
         lastError = "invalid-ai-json";
+        if (mode === "hybrid") return { events: [], rejectedCandidates: [], error: lastError, retryable: false, promptMode };
         const repaired = await repairEventJson({ text, promptMode });
         if (repaired) {
           return {
@@ -3563,7 +3640,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         return { events: [], rejectedCandidates: [], error: lastError, retryable: true, promptMode };
       };
-      for (const promptMode of ["full", "compact", "micro"]) {
+      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runEventPromptAttempt({ promptMode });
         if (Array.isArray(attempt.events) && attempt.events.length) return attempt;
         if (attempt.error && !attempt.retryable) break;
@@ -3640,7 +3717,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const minConfidence = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.55)));
     const now = nowIso();
     const chunkById = new Map(scopedChunks.map((chunk) => [chunk.id, chunk]));
-    const extractionMode = knowledgeEventExtractionMode(config);
+    const effectiveConfig = agentToolsBoundedKnowledgeConfig(node, config);
+    const extractionMode = knowledgeEventExtractionMode(effectiveConfig);
     const wantsAi = ["llm", "hybrid"].includes(extractionMode);
     const wantsRules = extractionMode !== "llm";
     const ruleCandidates = [];
@@ -3714,7 +3792,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }
     }
     const aiResult = wantsAi
-      ? await callKnowledgeEventAi({ chunks: scopedChunks, dictionaryEntries, config })
+      ? await callKnowledgeEventAi({ chunks: scopedChunks, dictionaryEntries, config: effectiveConfig })
       : { events: [], rejectedCandidates: [], provider: "", model: "", error: "", promptMode: "" };
     if (wantsAi && aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
@@ -4373,8 +4451,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const maxEntities = Math.max(8, Math.min(120, Number(config.maxEntities || 48)));
     const maxRelations = Math.max(0, Math.min(160, Number(config.maxRelations || 64)));
-    const configuredChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8)));
-    const configuredMaxChunkChars = Math.max(600, Math.min(3200, Number(config.maxChunkChars || 1600)));
+    const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
+    const configuredChunkLimit = promptBudget.chunkLimit;
+    const configuredMaxChunkChars = promptBudget.maxChunkChars;
     const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.");
     const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use supplied chunks and dictionary terms to propose precise entities and directly supported relations. Keep entities stable, avoid weak fragments, and do not collapse later consequences into earlier causes.");
     const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return strict JSON with entities and relations. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.");
@@ -4439,11 +4518,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Schema: {\"entities\":[{\"label\":\"\",\"entityType\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term\",\"aliases\":[],\"confidence\":0.0,\"evidence\":{\"quote\":\"\"},\"explanation\":\"\"}],\"relations\":[{\"source\":\"\",\"relationType\":\"\",\"target\":\"\",\"confidence\":0.0,\"evidence\":{\"quote\":\"\"},\"explanation\":\"\"}]}",
           "Keep only items already present in the model output. Do not invent new labels, quotes or relations.",
           "Input:",
-          rawText.slice(0, 5000),
+          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
         ].join("\n\n");
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
         const repairBody = providerType === "ollama"
-          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 1200 } }
-          : { model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 1200, top_p: 0.9, response_format: { type: "json_object" } };
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
         let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
         let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
         if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
@@ -4470,9 +4550,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const prompt = promptFor({ promptMode, sourceChunks });
         const entityPromptChunkLimit = promptMode === "chunk" ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : promptMode === "compact" ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 192, max: 1600 });
         const body = providerType === "ollama"
-          ? { model, prompt, stream: false, format: "json", options: { temperature: knowledgeAiNumberConfig(config.temperature, 0.05), top_p: knowledgeAiNumberConfig(config.topP, 0.9), num_predict: Math.max(256, Math.min(2200, knowledgeAiNumberConfig(config.maxTokens, 1200))) } }
-          : { model, messages: [{ role: "user", content: prompt }], temperature: knowledgeAiNumberConfig(config.temperature, 0.05), max_tokens: Math.max(256, Math.min(2200, knowledgeAiNumberConfig(config.maxTokens, 1200))), top_p: knowledgeAiNumberConfig(config.topP, 0.9), response_format: { type: "json_object" } };
+          ? { model, prompt, stream: false, format: "json", options: { temperature: knowledgeAiNumberConfig(config.temperature, 0.05), top_p: knowledgeAiNumberConfig(config.topP, 0.9), num_predict: completionMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: prompt }], temperature: knowledgeAiNumberConfig(config.temperature, 0.05), max_tokens: completionMaxTokens, top_p: knowledgeAiNumberConfig(config.topP, 0.9) }, providerType, config);
         knowledgeLlmDebug("entity-extractor:request", {
           mode,
           promptMode,
@@ -4506,6 +4587,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
+          if (mode === "hybrid") return { entities: [], relations: [], error: lastError, retryable: false };
           const repaired = await repairEntityJson({ text, promptMode });
           if (repaired) {
             return { entities: repaired.entities, relations: repaired.relations, error: "", promptMode: repaired.promptMode };
@@ -4524,7 +4606,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ? 0
         : Math.max(3, Math.min(maxRelations, Number(config.minLlmEntityRelations || Math.max(8, Math.ceil(chunks.length * 0.75)))));
       const minGlobalEntityCandidates = Math.max(6, Math.min(maxEntities, Number(config.minLlmEntityCandidates || Math.max(12, Math.ceil(chunks.length * 1.25)))));
-      for (const promptMode of ["full", "compact", "micro"]) {
+      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runPromptAttempt({ promptMode });
         const attemptUsable = maxRelations === 0
           ? attempt.entities.length >= minGlobalEntityCandidates
@@ -4788,9 +4870,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       normalizeEntityToken(entry.term || entry.label || ""),
       entry,
     ]));
-    const mode = entityAiMode(config);
+    const effectiveConfig = agentToolsBoundedKnowledgeConfig(node, config);
+    const mode = entityAiMode(effectiveConfig);
     const aiResult = ["llm", "hybrid"].includes(mode)
-      ? await callEntityExtractionAi({ chunks: validChunks, dictionaryEntries: dictionarySeedEntries, config })
+      ? await callEntityExtractionAi({ chunks: validChunks, dictionaryEntries: dictionarySeedEntries, config: effectiveConfig })
       : { entities: [], relations: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
@@ -8551,7 +8634,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let lastText = "";
       let lastModel = model;
       let totalUsage = {};
-      for (const promptMode of ["full", "compact", "micro"]) {
+      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const prompt = promptFor({ mode: promptMode });
         const body = providerType === "ollama"
           ? {
@@ -8851,6 +8934,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       this.signature = "";
       this.bus = null;
       this.runtime = { nodes: [], dependencies: [] };
+      this.executionKeys = new Set();
     }
 
     stop() {
@@ -8960,6 +9044,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const config = nodeConfig(node);
       const subtype = nodeSubtype(node);
       const runId = event?.meta?.runId || payload?.runId || "";
+      const executionKey = `${node.id}:${runId || "live"}:${event?.id || event?.channel || Date.now()}`;
+      if (this.executionKeys.has(executionKey)) return;
+      this.executionKeys.add(executionKey);
+      if (this.executionKeys.size > 500) this.executionKeys = new Set([...this.executionKeys].slice(-250));
       knowledgeLlmDebug("node-input", {
         workspaceId: this.workspaceId,
         nodeId: node.id,

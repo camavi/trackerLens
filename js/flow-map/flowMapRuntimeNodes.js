@@ -6787,9 +6787,13 @@ const requestRuntimeLinkMappingDialog = ({ source, target, validation, sourcePor
               payloadPath: read("payloadPath", ""),
               transform: read("transform", ""),
               note: read("note", ""),
-              linkType: validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE
-                ? AGENT_CONTROL_PORT_TYPE
-                : "data",
+              linkType: read(
+                "linkType",
+                currentMapping.linkType ||
+                  (validation.sourcePort?.type === AGENT_CONTROL_PORT_TYPE || validation.targetPort?.type === AGENT_CONTROL_PORT_TYPE
+                    ? AGENT_CONTROL_PORT_TYPE
+                    : "data")
+              ),
             });
             dialog.close();
             try {
@@ -6826,6 +6830,25 @@ const requestRuntimeLinkMappingDialog = ({ source, target, validation, sourcePor
             { name: "mode", "data-mapping-key": "mode", value: currentMapping.mode || "pass-through" },
             ...["pass-through", "path", "json-map", "template", "custom-transform"].map((mode) =>
               _.option({ value: mode, selected: mode === (currentMapping.mode || "pass-through") }, mode))
+          )
+        ),
+        _.label(
+          { class: "tl-flow-config-field" },
+          _.span("Link role"),
+          _.select(
+            {
+              name: "linkType",
+              "data-mapping-key": "linkType",
+              value: currentMapping.linkType || "data",
+            },
+            ...[
+              ["data", "Data flow"],
+              ["tool-access", "Agent tool access"],
+              ["optional-hint", "Optional hint"],
+              ["rebuild-trigger", "Rebuild trigger"],
+              [AGENT_CONTROL_PORT_TYPE, "Agent control"],
+            ].map(([value, label]) =>
+              _.option({ value, selected: value === (currentMapping.linkType || "data") }, label))
           )
         ),
         _.label(
@@ -6939,7 +6962,7 @@ const createRuntimeLink = async (source, target, options = {}) => {
     targetPort,
     channel,
     ...(options.mapping || {}),
-    linkType: agentControlLink ? AGENT_CONTROL_PORT_TYPE : (options.mapping?.linkType || "data"),
+    linkType: options.mapping?.linkType || (agentControlLink ? AGENT_CONTROL_PORT_TYPE : "data"),
   });
   const connectionId = `flow_conn_${Date.now()}`;
   const connection = {

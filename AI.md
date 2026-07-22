@@ -33,6 +33,7 @@ Last updated: 2026-06-25.
 - Runtime stores/channels/dependencies: `docs/ai/runtime/`
 - Runtime contract: `docs/ai/runtime/contract.md`
 - Agent runtime: `docs/ai/runtime/agent-runtime.md`
+- Connected node tools: `docs/ai/runtime/connected-node-tools.md`
 - AI memory runtime: `docs/ai/runtime/ai-memory.md`
 - Knowledge runtime: `core/runtime/knowledge-runtime.js`, plus `docs/ai/current-focus.md` and `docs/ai/task-registry.md`
 - API/backend integration: `docs/ai/api-backend.md`

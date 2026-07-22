@@ -171,6 +171,7 @@ const state = {
   knowledgeInspectorDocuments: {},
   knowledgeInspectorDictionaries: {},
   knowledgeInspectorEvents: {},
+  agentToolDebug: {},
   knowledgeUploadProgress: {},
   aiProcessing: {},
   runtimeWorker: {
@@ -415,6 +416,29 @@ const syncOrchestratorAgentRuntime = (workspaceId = state.filters.workspaceId) =
   }
 };
 
+const stopPageRuntimes = (workspaceId = state.filters.workspaceId) => {
+  const id = workspaceId || "workspace_global";
+  try { window.TrackerLensProcessorRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+  try { window.TrackerLensActionRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+  try { window.TrackerLensStorageRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+  try { window.TrackerLensKnowledgeRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+  try { window.TrackerLensAiAgentRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+  try { window.TrackerLensOrchestratorAgentRuntime?.get?.(id)?.stop?.(); } catch (_) {}
+};
+
+const stopBackgroundRuntime = (workspaceId = state.filters.workspaceId) => {
+  const id = workspaceId || "workspace_global";
+  try {
+    window.TrackerLensRuntimeWorker?.stop?.(id);
+  } catch (_) {}
+  state.runtimeWorker = {
+    ...state.runtimeWorker,
+    connected: false,
+    status: "stopped",
+    workspaceId: id,
+  };
+};
+
 const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId, options = {}) => {
   if (!window.TrackerLensRuntimeWorker?.start) return false;
   const id = workspaceId || "workspace_global";
@@ -431,6 +455,7 @@ const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId, options 
     };
     return true;
   }
+  stopPageRuntimes(id);
   const status = window.TrackerLensRuntimeWorker.status?.() || {};
   const active = (status.workspaces || []).find((workspace) => workspace.workspaceId === id);
   if (forceRefresh && window.TrackerLensRuntimeWorker.restart) {
@@ -479,6 +504,7 @@ const syncBackgroundRuntime = (workspaceId = state.filters.workspaceId, options 
 
 const syncPageRuntimes = (workspaceId = state.filters.workspaceId) => {
   if (isFlowMapRecoveryMode()) return;
+  stopBackgroundRuntime(workspaceId);
   syncProcessorRuntime(workspaceId);
   syncActionRuntime(workspaceId);
   syncStorageRuntime(workspaceId);
@@ -1192,7 +1218,9 @@ const loadRuntime = async (options = {}) => {
     });
     state.previewClearedAt = loadStoredPreviewClears(workspaceId);
     rebuildPreviewPayloadsFromEvents();
-    if (!syncBackgroundRuntime(workspaceId, { forceRefresh: force })) {
+    if (state.testRun?.running) {
+      syncPageRuntimes(workspaceId);
+    } else if (!syncBackgroundRuntime(workspaceId, { forceRefresh: force })) {
       syncPageRuntimes(workspaceId);
     }
     state.graphEngine = engineResult;

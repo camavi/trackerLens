@@ -427,6 +427,17 @@ const isAgentControlEdge = (dependency = {}) =>
   dependencyPort(dependency, "out") === AGENT_CONTROL_PORT_NAME ||
   dependencyPort(dependency, "in") === AGENT_CONTROL_PORT_NAME;
 
+const isToolAccessEdge = (dependency = {}) =>
+  String(dependency.metadata?.linkType || dependency.mapping?.linkType || "") === "tool-access";
+
+const linkTypeLabel = (value = "") => ({
+  data: "Data flow",
+  "tool-access": "Agent tool access",
+  "optional-hint": "Optional hint",
+  "rebuild-trigger": "Rebuild trigger",
+  "agent-control": "Agent control",
+}[String(value || "data")] || String(value || "data"));
+
 const isAgentBridgeNode = (node = {}) =>
   nodeSubtype(node) === "agent-bridge";
 
@@ -777,9 +788,10 @@ const drawFlowEdges = () => {
     const isSelected = state.focus.edgeId === dependency.id;
     const isBus = isAllEdge(dependency);
     const isAgentControl = isAgentControlEdge(dependency);
+    const isToolAccess = isToolAccessEdge(dependency);
     const isDimmed = state.hoverNodeId && !edgeMatchesHover(dependency);
     if (isLive) hasLiveEdge = true;
-    const rgb = isError ? toneRgb("red") : isAgentControl ? toneRgb("cyan") : toneRgb(graphTone(sourceNode));
+    const rgb = isError ? toneRgb("red") : isAgentControl ? toneRgb("cyan") : isToolAccess ? toneRgb("violet") : toneRgb(graphTone(sourceNode));
 
     ctx.save();
     ctx.lineCap = "round";
@@ -807,7 +819,7 @@ const drawFlowEdges = () => {
       ctx.strokeStyle = rgba(rgb, isError ? 0.96 : 0.86);
       ctx.lineWidth = isSelected ? 4 : isBus ? 3 : 2;
       ctx.shadowBlur = 0;
-      ctx.setLineDash(dependency.metadata?.virtual ? [8, 7] : isLive ? [12, 10] : []);
+      ctx.setLineDash(dependency.metadata?.virtual ? [8, 7] : isToolAccess ? [5, 7] : isLive ? [12, 10] : []);
       ctx.lineDashOffset = isLive ? -state.edgePhase : 0;
       ctx.stroke();
     }
@@ -1976,7 +1988,7 @@ const renderCanvas = () => {
             {
               role: "button",
               tabindex: 0,
-              class: `tl-flow-edge-label${state.focus.edgeId === dependency.id ? " is-selected" : ""}${impactClassForEdge(dependency, impact)}${dependency.metadata?.virtual ? " is-virtual" : ""}${isAllEdge(dependency) ? " is-bus" : ""}${isAgentControlEdge(dependency) ? " is-agent-control" : ""}${recentEvent || activeTestEdge || processingEdge ? " is-live" : ""}${recentEvent?.status === "error" ? " is-error" : ""}${activeTestEdge || processingEdge ? " is-test-path" : ""}`,
+              class: `tl-flow-edge-label${state.focus.edgeId === dependency.id ? " is-selected" : ""}${impactClassForEdge(dependency, impact)}${dependency.metadata?.virtual ? " is-virtual" : ""}${isAllEdge(dependency) ? " is-bus" : ""}${isAgentControlEdge(dependency) ? " is-agent-control" : ""}${isToolAccessEdge(dependency) ? " is-tool-access" : ""}${recentEvent || activeTestEdge || processingEdge ? " is-live" : ""}${recentEvent?.status === "error" ? " is-error" : ""}${activeTestEdge || processingEdge ? " is-test-path" : ""}`,
               "data-edge-id": dependency.id,
               title: edgeDebugTitle(dependency),
               style: { "--x": rect ? `${midpoint.x}px` : `${midpoint.x}%`, "--y": rect ? `${midpoint.y}px` : `${midpoint.y}%` },
@@ -2955,6 +2967,24 @@ const knowledgeTableName = (key = "", fallback = "") =>
   window.tlConfig?.TABLES?.[key] || fallback;
 
 const cmsInputValue = (value) => value?.target?.value ?? value?.currentTarget?.value ?? value;
+
+const flowMapParseJsonLoose = (text = "") => {
+  if (!text || typeof text !== "string") return null;
+  const clean = text.trim();
+  const candidates = [
+    clean,
+    clean.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim(),
+    clean.slice(clean.indexOf("{"), clean.lastIndexOf("}") + 1),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next JSON candidate.
+    }
+  }
+  return null;
+};
 
 const isKnowledgeDocumentStoreNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
@@ -3944,6 +3974,242 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
   dialog.open();
 };
 
+const agentToolWorkspaceId = (node = {}) =>
+  node.workspaceId || state.filters.workspaceId || "workspace_global";
+
+const loadAgentToolDebug = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || !window.TrackerLensAgentRuntime?.inspectConnectedTools) return;
+  const cached = state.agentToolDebug[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.agentToolDebug = {
+    ...(state.agentToolDebug || {}),
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const manifest = await window.TrackerLensAgentRuntime.inspectConnectedTools({
+      workspaceId: agentToolWorkspaceId(node),
+      nodeId: node.id,
+    });
+    state.agentToolDebug = {
+      ...(state.agentToolDebug || {}),
+      [node.id]: {
+        ...(state.agentToolDebug[node.id] || {}),
+        loading: false,
+        manifest,
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.agentToolDebug = {
+      ...(state.agentToolDebug || {}),
+      [node.id]: {
+        ...(state.agentToolDebug[node.id] || {}),
+        loading: false,
+        manifest: null,
+        loadedAt: Date.now(),
+        error: error?.message || "Agent tools unavailable",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
+const defaultAgentToolArgs = (tool = {}) => {
+  const name = String(tool.name || "");
+  if (["searchChunks", "defineTerm", "resolveAmbiguity", "getTimeline", "findEvents", "verifyEvent", "findEntities", "findRelations", "getGraphEvidence"].includes(name)) {
+    if (name === "defineTerm" || name === "resolveAmbiguity") return { term: "" };
+    if (name === "verifyEvent") return { claim: "" };
+    if (name === "findEntities" || name === "findRelations" || name === "getGraphEvidence") return { query: "", limit: 8 };
+    return { query: "", limit: 8 };
+  }
+  if (name === "getFullDocument") return { maxChars: 12000 };
+  if (name === "getChunkWindow") return { chunkId: "", radius: 1 };
+  if (name === "listKeyTerms") return { limit: 12 };
+  return {};
+};
+
+const openAgentToolProbeDialog = ({ selected = {}, manifest = {}, tool = {} } = {}) => {
+  if (!selected?.id || !manifest?.nodeId || !tool?.name) return;
+  const model = {
+    argsText: JSON.stringify(defaultAgentToolArgs(tool), null, 2),
+    running: false,
+    error: "",
+  };
+  let host = null;
+  const setLastResult = (result = null, error = "") => {
+    state.agentToolDebug = {
+      ...(state.agentToolDebug || {}),
+      [selected.id]: {
+        ...(state.agentToolDebug?.[selected.id] || {}),
+        lastToolCall: {
+          selectedNodeId: selected.id,
+          targetNodeId: manifest.nodeId,
+          targetLabel: manifest.label || manifest.nodeId,
+          relation: manifest.relation || "",
+          tool: tool.name,
+          args: flowMapParseJsonLoose(model.argsText) || {},
+          result,
+          error,
+          calledAt: new Date().toISOString(),
+        },
+      },
+    };
+  };
+  const rerender = () => {
+    if (!host) return;
+    host.replaceChildren(
+      _.div(
+        { class: "tl-flow-detail-list" },
+        _.div({ class: "tl-flow-kg-stat-row" }, _.span("Target"), _.strong(`${manifest.label || manifest.nodeId} · ${manifest.relation || "self"}`)),
+        _.div({ class: "tl-flow-kg-stat-row" }, _.span("Tool"), _.strong(tool.name)),
+        _.label(
+          { class: "is-wide tl-flow-field" },
+          _.span("Args JSON"),
+          _.textarea({
+            class: "tl-flow-storage-record-preview",
+            rows: 8,
+            spellcheck: "false",
+            value: model.argsText,
+            oninput: (event) => {
+              model.argsText = String(cmsInputValue(event) || "");
+            },
+          })
+        ),
+        model.error ? _.p({ class: "tl-flow-muted" }, model.error) : null
+      )
+    );
+  };
+  const dialog = _.Dialog({
+    class: "tl-flow-edge-delete-dialog",
+    panelClass: "tl-flow-edge-delete-panel",
+    size: "lg",
+    title: "Probe Agent Tool",
+    subtitle: `${tool.name} -> ${manifest.label || manifest.nodeId}`,
+    icon: "terminal",
+    closeButton: true,
+    content: () => {
+      host = _.div();
+      setTimeout(rerender, 0);
+      return host;
+    },
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Close"),
+      btn({
+        class: "st-btn-primary",
+        onclick: async () => {
+          const args = flowMapParseJsonLoose(model.argsText);
+          if (!args || typeof args !== "object" || Array.isArray(args)) {
+            model.error = "Args must be a JSON object.";
+            rerender();
+            return;
+          }
+          model.running = true;
+          model.error = "";
+          rerender();
+          try {
+            const result = await window.TrackerLensAgentRuntime.callConnectedNodeTool({
+              workspaceId: agentToolWorkspaceId(selected),
+              nodeId: manifest.nodeId,
+              tool: tool.name,
+              args,
+              agentNodeId: selected.id,
+            });
+            setLastResult(result, "");
+            close();
+            mount({ preserveScroll: true });
+          } catch (error) {
+            const message = error?.message || "Agent tool call failed";
+            model.error = message;
+            setLastResult(null, message);
+            rerender();
+            mount({ preserveScroll: true });
+          } finally {
+            model.running = false;
+          }
+        },
+      }, icon(model.running ? "hourglass_top" : "play_arrow", "sm"), model.running ? "Running" : "Run Probe")
+    ),
+  });
+  dialog.open();
+};
+
+const renderInspectorAgentTools = (node = {}) => {
+  if (!window.TrackerLensAgentRuntime?.inspectConnectedTools) {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "Agent Runtime non disponibile."));
+  }
+  loadAgentToolDebug(node);
+  const record = state.agentToolDebug?.[node.id] || { loading: true, manifest: null };
+  const manifest = record.manifest || null;
+  const manifests = manifest?.manifests || [];
+  const last = record.lastToolCall || null;
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3("Agent Tools Debug"),
+    ...[
+      ["Status", record.loading ? "loading..." : record.error ? "error" : "ready"],
+      ["Tool count", record.loading ? "loading..." : manifest?.toolCount || 0],
+      ["MCP ready", manifest?.mcpReady ? "yes" : "N/D"],
+      ["Scope", manifest?.scope || "N/D"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    record.error ? _.p({ class: "tl-flow-muted" }, record.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        manifest ? copyRuntimeButton(manifest, "Copy tool manifest") : null,
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh Agent tools",
+          onclick: () => loadAgentToolDebug(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    manifests.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Connected tool manifests"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...manifests.map((item) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`${item.label || item.nodeId} · ${item.relation || "self"} · ${item.toolCount || 0} tools`),
+              _.span(`${item.subtype || item.type || "node"} · ${item.nodeId || ""}`),
+              ...(item.tools || []).slice(0, 8).map((tool) =>
+                _.div(
+                  { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+                  _.code(tool.mcpName || tool.name),
+                  _.span(`${tool.mode || "read"}${tool.requiresEvidence ? " · evidence" : ""}`),
+                  btn({
+                    class: "is-ghost is-compact",
+                    title: `Probe ${tool.name}`,
+                    disabled: tool.mode !== "read" || !window.TrackerLensAgentRuntime?.callConnectedNodeTool,
+                    onclick: () => openAgentToolProbeDialog({ selected: node, manifest: item, tool }),
+                  }, icon("terminal", "sm"), "Probe")
+                )
+              )
+            )
+          )
+        )
+      )
+      : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento Agent tools..." : "Nessun Agent tool trovato per questo nodo/scope."),
+    last
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Last probe result"),
+        _.pre({ class: "tl-flow-storage-record-preview" }, JSON.stringify(last, null, 2))
+      )
+      : null
+  );
+};
+
 const renderInspectorKnowledgeDocument = (node = {}) => {
   if (!isKnowledgeDocumentStoreNode(node)) {
     return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
@@ -4835,6 +5101,7 @@ const invalidateClearUiStateForNodes = (nodes = []) => {
     "knowledgeInspectorDocuments",
     "knowledgeInspectorDictionaries",
     "knowledgeInspectorEvents",
+    "agentToolDebug",
   ].forEach((key) => {
     state[key] = { ...(state[key] || {}) };
     ids.forEach((id) => delete state[key][id]);
@@ -7018,6 +7285,7 @@ const renderEdgeInspector = (edge) => {
   const mappingPath = edge.metadata?.payloadPath || edge.mapping?.payloadPath || "";
   const mappingTransform = edge.metadata?.transform || edge.mapping?.transform || "";
   const mappingNote = edge.metadata?.note || edge.mapping?.note || "";
+  const linkType = edge.metadata?.linkType || edge.mapping?.linkType || "data";
   const lastEvent = events[0];
   const mapping = {
     ...(edge.mapping || {}),
@@ -7057,6 +7325,7 @@ const renderEdgeInspector = (edge) => {
           ["Source", source?.label || edge.sourceNodeId || "N/D"],
           ["Target", target?.label || edge.targetNodeId || "N/D"],
           ["Channel", edge.channel || "runtime"],
+          ["Link role", linkTypeLabel(linkType)],
           ["Source port", `${sourcePort} · ${sourcePortDef.type || "any"}`],
           ["Target port", `${targetPort} · ${targetPortDef.type || "any"}`],
           ["Type check", typeCompatible ? "compatible" : `${sourcePortDef.type || "any"} -> ${targetPortDef.type || "any"}`],
@@ -7073,6 +7342,7 @@ const renderEdgeInspector = (edge) => {
         ...[
           ["Route", `${source?.label || edge.sourceNodeId || "source"}:${sourcePort} -> ${target?.label || edge.targetNodeId || "target"}:${targetPort}`],
           ["Mode", mappingMode],
+          ["Link role", linkTypeLabel(linkType)],
           ["Status", mappingStatus],
           ["Payload", sourcePort === "all" ? "full payload" : `field ${sourcePort}`],
           ["Payload path", mappingPath || "N/D"],
@@ -7187,6 +7457,7 @@ const renderInspector = () => {
       ),
     },
     { id: "runtime", title: "Runtime", content: renderInspectorRuntime(node, events) },
+    { id: "agent-tools-debug", title: "Agent Tools", content: renderInspectorAgentTools(node) },
     ...(node.type === "storage" || nodeCategory(node) === "storage"
       ? [{ id: "storage-record", title: "Last Stored Record", content: renderInspectorStorageRecord(node) }]
       : []),

@@ -23,6 +23,130 @@ window.TrackerLensAgentRuntime = (() => {
     outputs: Array.isArray(node.outputs) ? node.outputs : node.metadata?.manifest?.outputs || [],
   });
 
+  const nodeConfig = (node = {}) =>
+    node.metadata?.config && typeof node.metadata.config === "object" && !Array.isArray(node.metadata.config)
+      ? node.metadata.config
+      : {};
+
+  const nodeCategory = (node = {}) =>
+    String(node.metadata?.category || node.metadata?.manifest?.category || node.type || "").toLowerCase();
+
+  const parseJsonLoose = (text = "") => {
+    if (!text || typeof text !== "string") return null;
+    const clean = text.trim();
+    const candidates = [
+      clean,
+      clean.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim(),
+      clean.slice(clean.indexOf("{"), clean.lastIndexOf("}") + 1),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        // Try the next candidate.
+      }
+    }
+    return null;
+  };
+
+  const parseToolDeclarationValue = (value = null) => {
+    if (!value) return null;
+    if (typeof value === "object") return value;
+    return parseJsonLoose(value);
+  };
+
+  const toolInputSchema = (properties = {}, required = []) => ({
+    type: "object",
+    properties,
+    required,
+  });
+
+  const readTool = ({ name = "", label = "", purpose = "", inputSchema = {}, outputs = {}, requiresEvidence = false } = {}) => ({
+    name,
+    label: label || name,
+    mode: "read",
+    purpose,
+    inputSchema,
+    outputs,
+    cost: { tokens: "low", latency: "low" },
+    requiresEvidence: Boolean(requiresEvidence),
+  });
+
+  const defaultAgentToolsForNode = (node = {}) => {
+    const subtype = nodeKind(node);
+    const category = nodeCategory(node);
+    if (["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype)) {
+      return [
+        readTool({ name: "getDocumentInfo", label: "Get Document Info", purpose: "Return document ids, title, language, collection and chunk availability for this node scope.", inputSchema: toolInputSchema({ documentId: { type: "string" } }), outputs: { documents: "array", scope: "object" } }),
+        readTool({ name: "getFullDocument", label: "Get Full Document", purpose: "Return full source text when allowed by size and node scope.", inputSchema: toolInputSchema({ documentId: { type: "string" }, maxChars: { type: "number" } }), outputs: { text: "string", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "searchChunks", label: "Search Chunks", purpose: "Find source text passages related to a query.", inputSchema: toolInputSchema({ query: { type: "string" }, limit: { type: "number" } }, ["query"]), outputs: { items: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "getChunkWindow", label: "Get Chunk Window", purpose: "Return source chunks around a chunk id or ordinal.", inputSchema: toolInputSchema({ chunkId: { type: "string" }, ordinal: { type: "number" }, radius: { type: "number" } }), outputs: { chunks: "array", evidence: "array" }, requiresEvidence: true }),
+      ];
+    }
+    if (["knowledge-dictionary-builder", "dictionary-builder"].includes(subtype)) {
+      return [
+        readTool({ name: "defineTerm", label: "Define Term", purpose: "Explain a term, aliases and type candidates in document context.", inputSchema: toolInputSchema({ term: { type: "string" }, documentId: { type: "string" } }, ["term"]), outputs: { entries: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "resolveAmbiguity", label: "Resolve Ambiguity", purpose: "Return possible meanings for an ambiguous word or name.", inputSchema: toolInputSchema({ term: { type: "string" }, query: { type: "string" } }, ["term"]), outputs: { candidates: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "listKeyTerms", label: "List Key Terms", purpose: "Return high-value dictionary terms usable for planning and retrieval.", inputSchema: toolInputSchema({ limit: { type: "number" }, tier: { type: "string" } }), outputs: { terms: "array", scope: "object" } }),
+      ];
+    }
+    if (["knowledge-event-builder", "event-builder"].includes(subtype)) {
+      return [
+        readTool({ name: "getTimeline", label: "Get Timeline", purpose: "Return ordered events related to a query, participant or document.", inputSchema: toolInputSchema({ query: { type: "string" }, participant: { type: "string" }, limit: { type: "number" } }), outputs: { events: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "findEvents", label: "Find Events", purpose: "Search persisted events by participant, event type or text.", inputSchema: toolInputSchema({ query: { type: "string" }, eventType: { type: "string" }, participant: { type: "string" } }), outputs: { events: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "verifyEvent", label: "Verify Event", purpose: "Check whether a proposed event is supported by persisted evidence.", inputSchema: toolInputSchema({ claim: { type: "string" }, eventType: { type: "string" } }, ["claim"]), outputs: { supported: "boolean", evidence: "array", limitations: "array" }, requiresEvidence: true }),
+      ];
+    }
+    if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
+      return [
+        readTool({ name: "findEntities", label: "Find Entities", purpose: "Search graph entities by query, aliases and type.", inputSchema: toolInputSchema({ query: { type: "string" }, entityType: { type: "string" }, limit: { type: "number" } }, ["query"]), outputs: { entities: "array", evidence: "array" } }),
+        readTool({ name: "findRelations", label: "Find Relations", purpose: "Find graph relations for query/entity pairs.", inputSchema: toolInputSchema({ query: { type: "string" }, source: { type: "string" }, target: { type: "string" }, relationType: { type: "string" } }), outputs: { relations: "array", evidence: "array" }, requiresEvidence: true }),
+        readTool({ name: "getGraphEvidence", label: "Get Graph Evidence", purpose: "Return source evidence behind graph facts.", inputSchema: toolInputSchema({ query: { type: "string" }, relationId: { type: "string" }, entityId: { type: "string" } }), outputs: { evidence: "array", limitations: "array" }, requiresEvidence: true }),
+      ];
+    }
+    if (["rag-search", "embedding-generator", "vector-memory"].includes(subtype)) {
+      return [
+        readTool({ name: "searchChunks", label: "Search Chunks", purpose: "Retrieve semantically related chunks from the connected knowledge index.", inputSchema: toolInputSchema({ query: { type: "string" }, limit: { type: "number" } }, ["query"]), outputs: { items: "array", evidence: "array" }, requiresEvidence: true }),
+      ];
+    }
+    if (category === "dev" || node.type === "devPreview") {
+      return [
+        readTool({ name: "showObservation", label: "Show Observation", purpose: "Display tool observations and evidence for QA.", inputSchema: toolInputSchema({ runId: { type: "string" }, observation: { type: "object" } }), outputs: { displayed: "boolean" } }),
+        readTool({ name: "showAnswerTrace", label: "Show Answer Trace", purpose: "Display Agent plan, tool calls, verification result and final answer.", inputSchema: toolInputSchema({ runId: { type: "string" }, trace: { type: "object" } }), outputs: { displayed: "boolean" } }),
+      ];
+    }
+    return [];
+  };
+
+  const normalizeAgentTool = (tool = {}, node = {}) => {
+    const name = String(tool.name || tool.id || "").trim();
+    if (!name) return null;
+    const mode = String(tool.mode || "read").toLowerCase().trim();
+    return {
+      name,
+      label: String(tool.label || name).trim(),
+      mode: ["read", "plan", "verify", "mutate"].includes(mode) ? mode : "read",
+      purpose: String(tool.purpose || tool.description || "").trim(),
+      inputSchema: tool.inputSchema || tool.inputs || {},
+      outputs: tool.outputs || tool.outputSchema || {},
+      cost: tool.cost || { tokens: "low", latency: "low" },
+      requiresEvidence: Boolean(tool.requiresEvidence),
+      mcpName: `tl.node.${node.id || "node"}.${name}`,
+    };
+  };
+
+  const nodeAgentTools = (node = {}) => {
+    const config = nodeConfig(node);
+    const declared = parseToolDeclarationValue(config.agentTools || node.metadata?.agentTools || node.metadata?.manifest?.agentTools);
+    const declaredTools = Array.isArray(declared?.tools)
+      ? declared.tools
+      : Array.isArray(declared)
+        ? declared
+        : [];
+    const source = declaredTools.length ? declaredTools : defaultAgentToolsForNode(node);
+    return source.map((tool) => normalizeAgentTool(tool, node)).filter(Boolean).slice(0, 24);
+  };
+
   const portName = (port = "") =>
     typeof port === "object" ? String(port.name || port.key || port.channel || port.id || "") : String(port || "");
 
@@ -144,6 +268,614 @@ window.TrackerLensAgentRuntime = (() => {
       (step.nodeId && (event.sourceNodeId === step.nodeId || event.targetNodeId === step.nodeId)) ||
       (step.channel && normalizeChannel(event.channel) === normalizeChannel(step.channel))
     ) || null;
+
+  const knowledgeStores = () => window.TrackerLensKnowledgeRuntime?.STORES || {
+    documents: window.tlConfig?.TABLES?.TL_KNOWLEDGE_DOCUMENTS || "tl_knowledge_documents",
+    chunks: window.tlConfig?.TABLES?.TL_KNOWLEDGE_CHUNKS || "tl_knowledge_chunks",
+    dictionary: "tl_knowledge_dictionary",
+    events: "tl_knowledge_events",
+    entities: "tl_knowledge_entities",
+    relations: "tl_knowledge_relations",
+  };
+
+  const readKnowledgeStore = async (name = "") => {
+    if (window.TrackerLensKnowledgeRuntime?.listStore) {
+      return window.TrackerLensKnowledgeRuntime.listStore(name).catch(() => []);
+    }
+    return [];
+  };
+
+  const compactText = (value = "", max = 1200) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length <= max) return text;
+    return `${text.slice(0, Math.max(0, max)).trim()}...`;
+  };
+
+  const normalizeSearchText = (value = "") =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9à-ÿ]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const queryTokens = (query = "") => {
+    const stop = new Set(["the", "and", "that", "this", "with", "from", "come", "cosa", "che", "chi", "per", "con", "del", "della", "una", "uno", "que", "por", "para", "avec", "pour"]);
+    return [...new Set(normalizeSearchText(query).split(/\s+/).filter((token) => token.length >= 2 && !stop.has(token)))].slice(0, 32);
+  };
+
+  const expandedQueryTokens = (query = "") => {
+    const tokens = queryTokens(query);
+    const normalized = normalizeSearchText(query);
+    const expansions = [];
+    const add = (...items) => items.forEach((item) => {
+      const token = normalizeSearchText(item);
+      if (token && token.length >= 2) expansions.push(token);
+    });
+    if (/\b(?:nemic\w*|ennemico|enemy|enem\w*|mostr\w*|monster\w*|troll|threat\w*|minacc\w*|pericol\w*|danger\w*)\b/.test(normalized)) {
+      add("nemico", "ennemico", "enemy", "mostro", "monster", "troll", "minaccia", "pericolo", "attacca", "attacco", "ferisce", "confronta", "affronta");
+    }
+    if (/\b(?:trova\w*|trovato|found|find\w*|discover\w*|incontra\w*|encounter\w*)\b/.test(normalized)) {
+      add("trova", "trovato", "incontra", "incontrano", "encounters", "found");
+    }
+    if (/\b(?:attacc\w*|ferisc\w*|ferit\w*|hurt\w*|attack\w*)\b/.test(normalized)) {
+      add("attacca", "attacco", "ferisce", "ferito", "hurt", "attack", "troll", "mostro");
+    }
+    return [...new Set([...tokens, ...expansions])].slice(0, 48);
+  };
+
+  const scopedDocumentRecords = async ({ workspaceId = "", node = {}, args = {} } = {}) => {
+    const stores = knowledgeStores();
+    const config = nodeConfig(node);
+    const documents = (await readKnowledgeStore(stores.documents))
+      .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
+      .filter((document) => !args.documentId || document.id === args.documentId)
+      .filter((document) => !config.documentId || document.id === config.documentId)
+      .filter((document) => !config.collectionId || document.metadata?.collectionId === config.collectionId)
+      .filter((document) =>
+        document.sourceId === node.id ||
+        document.metadata?.nodeId === node.id ||
+        config.documentId === document.id ||
+        (config.collectionId && document.metadata?.collectionId === config.collectionId)
+      )
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    return documents;
+  };
+
+  const scopedChunkRecords = async ({ workspaceId = "", node = {}, args = {}, documents = [] } = {}) => {
+    const stores = knowledgeStores();
+    const config = nodeConfig(node);
+    const documentIds = new Set(documents.map((document) => document.id).filter(Boolean));
+    const chunks = (await readKnowledgeStore(stores.chunks))
+      .filter((chunk) => (chunk.workspaceId || "workspace_global") === workspaceId)
+      .filter((chunk) => !args.documentId || chunk.documentId === args.documentId)
+      .filter((chunk) => !args.chunkId || chunk.id === args.chunkId)
+      .filter((chunk) => !config.collectionId || chunk.metadata?.collectionId === config.collectionId)
+      .filter((chunk) => documentIds.has(chunk.documentId) || chunk.sourceId === node.id || chunk.metadata?.nodeId === node.id)
+      .sort((a, b) =>
+        String(a.documentId || "").localeCompare(String(b.documentId || "")) ||
+        Number(a.ordinal ?? a.index ?? 0) - Number(b.ordinal ?? b.index ?? 0));
+    return chunks;
+  };
+
+  const evidenceFromChunk = (chunk = {}, text = "") => ({
+    sourceType: "document_chunk",
+    documentId: chunk.documentId || "",
+    chunkId: chunk.id || "",
+    ordinal: Number.isFinite(Number(chunk.ordinal ?? chunk.index)) ? Number(chunk.ordinal ?? chunk.index) : null,
+    text: text || chunk.text || "",
+  });
+
+  const evidenceText = (value = null) => {
+    if (!value) return "";
+    if (typeof value === "string") return compactText(value, 1200);
+    return compactText(value.quote || value.text || value.excerpt || value.sentence || "", 1200);
+  };
+
+  const entryMatchesNodeScope = ({ entry = {}, node = {}, config = {}, documentIds = null } = {}) => {
+    const collectionId = entry.collectionId || entry.metadata?.collectionId || "";
+    const entryNodeId = entry.nodeId || entry.source?.nodeId || entry.metadata?.nodeId || "";
+    if (config.documentId && entry.documentId !== config.documentId) return false;
+    if (config.collectionId && collectionId !== config.collectionId) return false;
+    if (documentIds?.size && entry.documentId && documentIds.has(entry.documentId)) return true;
+    return entryNodeId === node.id ||
+      entry.sourceId === node.id ||
+      Boolean(config.documentId && entry.documentId === config.documentId) ||
+      Boolean(config.collectionId && collectionId === config.collectionId) ||
+      (!entryNodeId && !config.documentId && !config.collectionId);
+  };
+
+  const scopedKnowledgeRecords = async ({ workspaceId = "", node = {}, args = {}, store = "" } = {}) => {
+    const stores = knowledgeStores();
+    const config = nodeConfig(node);
+    const documents = await scopedDocumentRecords({ workspaceId, node, args });
+    const documentIds = new Set(documents.map((document) => document.id).filter(Boolean));
+    return (await readKnowledgeStore(stores[store] || store))
+      .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+      .filter((entry) => !args.documentId || entry.documentId === args.documentId)
+      .filter((entry) => entryMatchesNodeScope({ entry, node, config, documentIds }));
+  };
+
+  const overlapScore = (text = "", tokens = []) => {
+    if (!tokens.length) return 0;
+    const normalized = normalizeSearchText(text);
+    return tokens.reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0);
+  };
+
+  const evidenceFromDictionaryEntry = (entry = {}) => ({
+    sourceType: "dictionary_entry",
+    documentId: entry.documentId || "",
+    chunkId: entry.chunkId || "",
+    ordinal: null,
+    term: entry.term || "",
+    text: evidenceText(entry.evidence) || entry.term || "",
+  });
+
+  const evidenceFromEvent = (event = {}) => ({
+    sourceType: "knowledge_event",
+    documentId: event.documentId || "",
+    chunkId: event.chunkId || "",
+    ordinal: Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null,
+    eventId: event.id || "",
+    text: evidenceText(event.evidence) || [
+      event.subject,
+      event.eventType,
+      ...(Array.isArray(event.objects) ? event.objects : []),
+    ].filter(Boolean).join(" "),
+  });
+
+  const evidenceFromRelation = (relation = {}, chunk = null) => ({
+    sourceType: "knowledge_relation",
+    documentId: relation.documentId || chunk?.documentId || "",
+    chunkId: relation.chunkId || chunk?.id || "",
+    ordinal: Number.isFinite(Number(chunk?.ordinal ?? chunk?.index)) ? Number(chunk?.ordinal ?? chunk?.index) : null,
+    relationId: relation.id || "",
+    text: evidenceText(relation.metadata?.ai?.evidence) || compactText(chunk?.text || [
+      relation.sourceLabel,
+      relation.relationType,
+      relation.targetLabel,
+    ].filter(Boolean).join(" "), 1200),
+  });
+
+  const toolEnvelope = ({ ok = true, tool = "", node = {}, status = "ready", answer = "", items = [], evidence = [], confidence = 0, limitations = [], usage = {} } = {}) => ({
+    ok,
+    tool,
+    nodeId: node.id || "",
+    status,
+    answer,
+    items,
+    evidence,
+    confidence: Math.max(0, Math.min(1, Number(confidence || 0))),
+    limitations,
+    usage,
+  });
+
+  const runDocumentTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
+    const documents = await scopedDocumentRecords({ workspaceId, node, args });
+    const chunks = await scopedChunkRecords({ workspaceId, node, args, documents });
+    if (tool === "getDocumentInfo") {
+      const chunkCountByDocument = chunks.reduce((map, chunk) => map.set(chunk.documentId, (map.get(chunk.documentId) || 0) + 1), new Map());
+      return toolEnvelope({
+        tool,
+        node,
+        items: documents.map((document) => ({
+          id: document.id || "",
+          title: document.title || "",
+          language: document.language || document.metadata?.language || "",
+          sourceType: document.sourceType || "",
+          collectionId: document.metadata?.collectionId || "",
+          status: document.status || "",
+          chunkCount: chunkCountByDocument.get(document.id) || 0,
+          createdAt: document.createdAt || "",
+          updatedAt: document.updatedAt || "",
+        })),
+        confidence: documents.length ? 0.95 : 0,
+        limitations: documents.length ? [] : ["No scoped documents found for this connected node."],
+      });
+    }
+    if (tool === "getFullDocument") {
+      const maxChars = Math.max(1000, Math.min(120000, Number(args.maxChars || 24000)));
+      const document = documents.find((item) => !args.documentId || item.id === args.documentId) || documents[documents.length - 1] || null;
+      if (!document) {
+        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["No scoped document found."], confidence: 0 });
+      }
+      const text = String(document.text || "");
+      const clipped = text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
+      return toolEnvelope({
+        tool,
+        node,
+        answer: clipped,
+        items: [{ documentId: document.id, title: document.title || "", text: clipped }],
+        evidence: [{ sourceType: "document", documentId: document.id || "", chunkId: "", ordinal: null, text: clipped }],
+        confidence: text ? 0.95 : 0.2,
+        limitations: text.length > maxChars ? [`Document truncated to ${maxChars} characters.`] : [],
+      });
+    }
+    if (tool === "searchChunks") {
+      const tokens = expandedQueryTokens(args.query || "");
+      if (!tokens.length) {
+        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing query tokens."], confidence: 0 });
+      }
+      const limit = Math.max(1, Math.min(24, Number(args.limit || 6)));
+      const candidates = chunks.length
+        ? chunks
+        : documents.map((document, index) => ({ id: `document_${document.id}`, documentId: document.id, ordinal: index, text: document.text || "", metadata: { title: document.title || "" } }));
+      const ranked = candidates
+        .map((chunk) => {
+          const normalized = normalizeSearchText(chunk.text || "");
+          const matches = tokens.filter((token) => normalized.includes(token));
+          const exactScore = matches.reduce((score, token) => score + (new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalized) ? 2 : 1), 0);
+          return { chunk, matches, score: exactScore };
+        })
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score || Number(a.chunk.ordinal ?? 0) - Number(b.chunk.ordinal ?? 0))
+        .slice(0, limit);
+      const evidence = ranked.map((item) => evidenceFromChunk(item.chunk, compactText(item.chunk.text || "", Math.max(400, Math.min(2400, Number(args.maxChars || 900))))));
+      return toolEnvelope({
+        tool,
+        node,
+        items: ranked.map((item) => ({
+          chunkId: item.chunk.id || "",
+          documentId: item.chunk.documentId || "",
+          ordinal: item.chunk.ordinal ?? item.chunk.index ?? null,
+          score: item.score,
+          matches: item.matches,
+          text: compactText(item.chunk.text || "", Math.max(400, Math.min(2400, Number(args.maxChars || 900)))),
+        })),
+        evidence,
+        confidence: ranked.length ? Math.min(0.95, 0.45 + ranked[0].score * 0.08) : 0,
+        limitations: ranked.length ? [] : ["No matching chunks found. Agent should try getFullDocument or a broader query if the answer requires source evidence."],
+      });
+    }
+    if (tool === "getChunkWindow") {
+      const radius = Math.max(0, Math.min(8, Number(args.radius ?? 1)));
+      const target = args.chunkId
+        ? chunks.find((chunk) => chunk.id === args.chunkId)
+        : chunks.find((chunk) => Number(chunk.ordinal ?? chunk.index ?? -1) === Number(args.ordinal));
+      if (!target) {
+        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["Target chunk not found in node scope."], confidence: 0 });
+      }
+      const targetOrdinal = Number(target.ordinal ?? target.index ?? 0);
+      const windowChunks = chunks
+        .filter((chunk) => chunk.documentId === target.documentId)
+        .filter((chunk) => Math.abs(Number(chunk.ordinal ?? chunk.index ?? 0) - targetOrdinal) <= radius)
+        .sort((a, b) => Number(a.ordinal ?? a.index ?? 0) - Number(b.ordinal ?? b.index ?? 0));
+      return toolEnvelope({
+        tool,
+        node,
+        items: windowChunks.map((chunk) => ({
+          chunkId: chunk.id || "",
+          documentId: chunk.documentId || "",
+          ordinal: chunk.ordinal ?? chunk.index ?? null,
+          text: chunk.text || "",
+        })),
+        evidence: windowChunks.map((chunk) => evidenceFromChunk(chunk)),
+        confidence: windowChunks.length ? 0.95 : 0,
+      });
+    }
+    return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported document tool: ${tool}`], confidence: 0 });
+  };
+
+  const runDictionaryTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
+    const entries = await scopedKnowledgeRecords({ workspaceId, node, args, store: "dictionary" });
+    const limit = Math.max(1, Math.min(80, Number(args.limit || 12)));
+    const term = String(args.term || args.query || "").trim();
+    const tokens = expandedQueryTokens(term);
+    const ranked = entries
+      .map((entry) => {
+        const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+        const typeText = Array.isArray(entry.typeCandidates) ? entry.typeCandidates.map((item) => item?.type || "").join(" ") : "";
+        const haystack = [entry.term, entry.lemma, entry.normalized, aliases.join(" "), typeText, evidenceText(entry.evidence)].join(" ");
+        const exact = term && normalizeSearchText(entry.term || entry.lemma || "") === normalizeSearchText(term) ? 8 : 0;
+        const aliasExact = term && aliases.some((alias) => normalizeSearchText(alias) === normalizeSearchText(term)) ? 6 : 0;
+        const score = exact + aliasExact + overlapScore(haystack, tokens) + Number(entry.seedScore || 0) + Number(entry.confidence || 0);
+        return { entry, score };
+      })
+      .filter((item) => tool === "listKeyTerms" || item.score > 0)
+      .sort((a, b) =>
+        b.score - a.score ||
+        Number(b.entry.usableAsSeed || 0) - Number(a.entry.usableAsSeed || 0) ||
+        Number(b.entry.seedScore || 0) - Number(a.entry.seedScore || 0) ||
+        String(a.entry.term || "").localeCompare(String(b.entry.term || "")));
+    if (tool === "defineTerm" || tool === "resolveAmbiguity") {
+      if (!tokens.length) {
+        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing term."], confidence: 0 });
+      }
+      const selected = ranked.slice(0, limit);
+      const items = selected.map(({ entry, score }) => ({
+        id: entry.id || "",
+        term: entry.term || "",
+        lemma: entry.lemma || "",
+        aliases: entry.aliases || [],
+        typeCandidates: entry.typeCandidates || [],
+        tier: entry.tier || "",
+        usableAsSeed: Boolean(entry.usableAsSeed),
+        seedScore: entry.seedScore || 0,
+        semanticHints: entry.semanticHints || [],
+        relationCues: entry.relationCues || [],
+        confidence: entry.confidence || 0,
+        evidence: evidenceText(entry.evidence),
+        score,
+      }));
+      return toolEnvelope({
+        tool,
+        node,
+        answer: items.length ? `${items[0].term || term}: ${items[0].typeCandidates?.[0]?.type || items[0].tier || "term"}` : "",
+        items,
+        evidence: selected.map(({ entry }) => evidenceFromDictionaryEntry(entry)).filter((item) => item.text),
+        confidence: items.length ? Math.min(0.95, 0.45 + selected[0].score * 0.06) : 0,
+        limitations: items.length ? [] : ["No dictionary entry matched the requested term."],
+      });
+    }
+    if (tool === "listKeyTerms") {
+      const tier = String(args.tier || "").toLowerCase().trim();
+      const filtered = ranked
+        .filter(({ entry }) => !tier || String(entry.tier || "").toLowerCase() === tier)
+        .slice(0, limit);
+      return toolEnvelope({
+        tool,
+        node,
+        items: filtered.map(({ entry, score }) => ({
+          id: entry.id || "",
+          term: entry.term || "",
+          lemma: entry.lemma || "",
+          type: entry.typeCandidates?.[0]?.type || "",
+          tier: entry.tier || "",
+          usableAsSeed: Boolean(entry.usableAsSeed),
+          seedScore: entry.seedScore || 0,
+          confidence: entry.confidence || 0,
+          score,
+        })),
+        confidence: filtered.length ? 0.9 : 0,
+        limitations: filtered.length ? [] : ["No dictionary terms found in this node scope."],
+      });
+    }
+    return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported dictionary tool: ${tool}`], confidence: 0 });
+  };
+
+  const eventSearchText = (event = {}) => [
+    event.subject,
+    event.eventType,
+    ...(Array.isArray(event.objects) ? event.objects : []),
+    ...(Array.isArray(event.participants) ? event.participants : []),
+    evidenceText(event.evidence),
+    event.metadata?.explanation || "",
+  ].filter(Boolean).join(" ");
+
+  const rankEvents = (events = [], args = {}) => {
+    const query = String(args.query || args.claim || "").trim();
+    const tokens = expandedQueryTokens(query);
+    const participant = normalizeSearchText(args.participant || "");
+    const eventType = normalizeSearchText(args.eventType || "");
+    return events
+      .map((event) => {
+        const text = eventSearchText(event);
+        const normalized = normalizeSearchText(text);
+        const participantHit = participant && normalized.includes(participant) ? 4 : 0;
+        const typeHit = eventType && normalizeSearchText(event.eventType || "").includes(eventType) ? 3 : 0;
+        const score = overlapScore(text, tokens) + participantHit + typeHit + Number(event.confidence || 0);
+        return { event, score };
+      })
+      .filter((item) => {
+        if (participant && !normalizeSearchText(eventSearchText(item.event)).includes(participant)) return false;
+        if (eventType && !normalizeSearchText(item.event.eventType || "").includes(eventType)) return false;
+        return !tokens.length || item.score > Number(item.event.confidence || 0);
+      })
+      .sort((a, b) =>
+        b.score - a.score ||
+        Number(a.event.sequence ?? 0) - Number(b.event.sequence ?? 0));
+  };
+
+  const runEventTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
+    const events = (await scopedKnowledgeRecords({ workspaceId, node, args, store: "events" }))
+      .sort((a, b) => Number(a.sequence ?? 0) - Number(b.sequence ?? 0));
+    const limit = Math.max(1, Math.min(80, Number(args.limit || 18)));
+    if (tool === "getTimeline" || tool === "findEvents") {
+      const hasFilter = Boolean(String(args.query || args.participant || args.eventType || "").trim());
+      const ranked = hasFilter ? rankEvents(events, args) : events.map((event) => ({ event, score: Number(event.confidence || 0) }));
+      const selected = (ranked.length || tool === "findEvents" ? ranked : events.map((event) => ({ event, score: Number(event.confidence || 0) })))
+        .slice(0, limit)
+        .sort((a, b) => Number(a.event.sequence ?? 0) - Number(b.event.sequence ?? 0));
+      return toolEnvelope({
+        tool,
+        node,
+        items: selected.map(({ event, score }) => ({
+          id: event.id || "",
+          sequence: event.sequence ?? null,
+          eventType: event.eventType || "",
+          subject: event.subject || "",
+          objects: event.objects || [],
+          participants: event.participants || [],
+          roles: event.roles || {},
+          polarity: event.polarity || "",
+          modality: event.modality || "",
+          confidence: event.confidence || 0,
+          evidence: evidenceText(event.evidence),
+          score,
+        })),
+        evidence: selected.map(({ event }) => evidenceFromEvent(event)).filter((item) => item.text),
+        confidence: selected.length ? Math.min(0.95, 0.45 + Number(selected[0].score || 0) * 0.08) : 0,
+        limitations: selected.length ? [] : ["No persisted events matched the request in this node scope."],
+      });
+    }
+    if (tool === "verifyEvent") {
+      const claim = String(args.claim || "").trim();
+      if (!claim) {
+        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing claim."], confidence: 0 });
+      }
+      const ranked = rankEvents(events, args).slice(0, limit);
+      const bestScore = Number(ranked[0]?.score || 0);
+      const supported = bestScore >= Math.max(2, Math.min(5, queryTokens(claim).length));
+      return toolEnvelope({
+        tool,
+        node,
+        answer: supported ? "supported" : "not_verified",
+        items: ranked.map(({ event, score }) => ({
+          id: event.id || "",
+          sequence: event.sequence ?? null,
+          eventType: event.eventType || "",
+          subject: event.subject || "",
+          objects: event.objects || [],
+          participants: event.participants || [],
+          confidence: event.confidence || 0,
+          evidence: evidenceText(event.evidence),
+          score,
+        })),
+        evidence: ranked.map(({ event }) => evidenceFromEvent(event)).filter((item) => item.text),
+        confidence: supported ? Math.min(0.95, 0.5 + bestScore * 0.07) : Math.min(0.4, bestScore * 0.08),
+        limitations: supported ? [] : ["The claim was not strongly verified by persisted event evidence. Agent should ask source text tools before finalizing."],
+        usage: { supported },
+      });
+    }
+    return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported event tool: ${tool}`], confidence: 0 });
+  };
+
+  const relationSearchText = (relation = {}, source = null, target = null) => [
+    relation.sourceLabel,
+    relation.relationType,
+    relation.targetLabel,
+    source?.label,
+    target?.label,
+    source?.entityType,
+    target?.entityType,
+    evidenceText(relation.metadata?.ai?.evidence),
+    relation.metadata?.ai?.explanation || "",
+  ].filter(Boolean).join(" ");
+
+  const runGraphTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
+    const stores = knowledgeStores();
+    const [entities, relations, workspaceChunks] = await Promise.all([
+      scopedKnowledgeRecords({ workspaceId, node, args, store: "entities" }),
+      scopedKnowledgeRecords({ workspaceId, node, args, store: "relations" }),
+      readKnowledgeStore(stores.chunks),
+    ]);
+    const relationChunkIds = new Set(relations.map((relation) => relation.chunkId).filter(Boolean));
+    const entityChunkIds = new Set(entities.map((entity) => entity.chunkId).filter(Boolean));
+    const chunks = workspaceChunks
+      .filter((chunk) => (chunk.workspaceId || "workspace_global") === workspaceId)
+      .filter((chunk) => !args.documentId || chunk.documentId === args.documentId)
+      .filter((chunk) => relationChunkIds.has(chunk.id) || entityChunkIds.has(chunk.id));
+    const entityById = new Map(entities.map((entity) => [entity.id, entity]));
+    const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+    const limit = Math.max(1, Math.min(80, Number(args.limit || 18)));
+    if (tool === "findEntities") {
+      const tokens = expandedQueryTokens(args.query || "");
+      const entityType = normalizeSearchText(args.entityType || "");
+      if (!tokens.length && !entityType) {
+        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing entity query or entityType."], confidence: 0 });
+      }
+      const ranked = entities
+        .map((entity) => {
+          const aliases = Array.isArray(entity.metadata?.aliases) ? entity.metadata.aliases : [];
+          const text = [entity.label, entity.normalized, entity.entityType, aliases.join(" "), evidenceText(entity.metadata?.ai?.evidence)].join(" ");
+          const typeHit = entityType && normalizeSearchText(entity.entityType || "").includes(entityType) ? 3 : 0;
+          const exact = tokens.some((token) => normalizeSearchText(entity.label || "") === token) ? 5 : 0;
+          const score = exact + typeHit + overlapScore(text, tokens) + Number(entity.confidence || 0);
+          return { entity, score };
+        })
+        .filter((item) => item.score > Number(item.entity.confidence || 0))
+        .sort((a, b) => b.score - a.score || String(a.entity.label || "").localeCompare(String(b.entity.label || "")))
+        .slice(0, limit);
+      return toolEnvelope({
+        tool,
+        node,
+        items: ranked.map(({ entity, score }) => ({
+          id: entity.id || "",
+          label: entity.label || "",
+          entityType: entity.entityType || "",
+          aliases: entity.metadata?.aliases || [],
+          documentId: entity.documentId || "",
+          chunkId: entity.chunkId || "",
+          confidence: entity.confidence || 0,
+          score,
+        })),
+        evidence: ranked.map(({ entity }) => {
+          const chunk = chunkById.get(entity.chunkId || "");
+          return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || "", 900));
+        }).filter((item) => item.text),
+        confidence: ranked.length ? Math.min(0.95, 0.45 + Number(ranked[0].score || 0) * 0.07) : 0,
+        limitations: ranked.length ? [] : ["No graph entities matched the request in this node scope."],
+      });
+    }
+    if (tool === "findRelations") {
+      const tokens = expandedQueryTokens(args.query || [args.source, args.target].filter(Boolean).join(" "));
+      const sourceNeedle = normalizeSearchText(args.source || "");
+      const targetNeedle = normalizeSearchText(args.target || "");
+      const relationType = normalizeSearchText(args.relationType || "");
+      const ranked = relations
+        .map((relation) => {
+          const source = entityById.get(relation.sourceEntityId || "");
+          const target = entityById.get(relation.targetEntityId || "");
+          const text = relationSearchText(relation, source, target);
+          const normalized = normalizeSearchText(text);
+          const sourceHit = sourceNeedle && normalizeSearchText([relation.sourceLabel, source?.label].filter(Boolean).join(" ")).includes(sourceNeedle) ? 4 : 0;
+          const targetHit = targetNeedle && normalizeSearchText([relation.targetLabel, target?.label].filter(Boolean).join(" ")).includes(targetNeedle) ? 4 : 0;
+          const typeHit = relationType && normalizeSearchText(relation.relationType || "").includes(relationType) ? 3 : 0;
+          const score = overlapScore(normalized, tokens) + sourceHit + targetHit + typeHit + Number(relation.confidence || 0);
+          return { relation, source, target, score };
+        })
+        .filter((item) => {
+          if (sourceNeedle && !normalizeSearchText([item.relation.sourceLabel, item.source?.label].filter(Boolean).join(" ")).includes(sourceNeedle)) return false;
+          if (targetNeedle && !normalizeSearchText([item.relation.targetLabel, item.target?.label].filter(Boolean).join(" ")).includes(targetNeedle)) return false;
+          if (relationType && !normalizeSearchText(item.relation.relationType || "").includes(relationType)) return false;
+          return tokens.length || sourceNeedle || targetNeedle || relationType ? item.score > Number(item.relation.confidence || 0) : true;
+        })
+        .sort((a, b) => b.score - a.score || String(a.relation.relationType || "").localeCompare(String(b.relation.relationType || "")))
+        .slice(0, limit);
+      return toolEnvelope({
+        tool,
+        node,
+        items: ranked.map(({ relation, source, target, score }) => ({
+          id: relation.id || "",
+          relationType: relation.relationType || "",
+          sourceEntityId: relation.sourceEntityId || "",
+          targetEntityId: relation.targetEntityId || "",
+          sourceLabel: relation.sourceLabel || source?.label || "",
+          targetLabel: relation.targetLabel || target?.label || "",
+          documentId: relation.documentId || "",
+          chunkId: relation.chunkId || "",
+          confidence: relation.confidence || 0,
+          score,
+        })),
+        evidence: ranked.map(({ relation }) => evidenceFromRelation(relation, chunkById.get(relation.chunkId || ""))).filter((item) => item.text),
+        confidence: ranked.length ? Math.min(0.95, 0.45 + Number(ranked[0].score || 0) * 0.07) : 0,
+        limitations: ranked.length ? [] : ["No graph relations matched the request in this node scope."],
+      });
+    }
+    if (tool === "getGraphEvidence") {
+      const tokens = expandedQueryTokens(args.query || "");
+      const selectedRelations = relations
+        .filter((relation) => !args.relationId || relation.id === args.relationId)
+        .filter((relation) => {
+          if (args.entityId && relation.sourceEntityId !== args.entityId && relation.targetEntityId !== args.entityId) return false;
+          return !tokens.length || overlapScore(relationSearchText(relation, entityById.get(relation.sourceEntityId || ""), entityById.get(relation.targetEntityId || "")), tokens) > 0;
+        })
+        .slice(0, limit);
+      const selectedEntities = entities
+        .filter((entity) => !args.entityId || entity.id === args.entityId)
+        .filter((entity) => !tokens.length || overlapScore([entity.label, entity.entityType, evidenceText(entity.metadata?.ai?.evidence)].join(" "), tokens) > 0)
+        .slice(0, Math.max(0, limit - selectedRelations.length));
+      const relationEvidence = selectedRelations.map((relation) => evidenceFromRelation(relation, chunkById.get(relation.chunkId || ""))).filter((item) => item.text);
+      const entityEvidence = selectedEntities.map((entity) => {
+        const chunk = chunkById.get(entity.chunkId || "");
+        return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || "", 900));
+      }).filter((item) => item.text);
+      const evidence = [...relationEvidence, ...entityEvidence].slice(0, limit);
+      return toolEnvelope({
+        tool,
+        node,
+        items: [
+          ...selectedRelations.map((relation) => ({ id: relation.id || "", type: "relation", relationType: relation.relationType || "", sourceLabel: relation.sourceLabel || "", targetLabel: relation.targetLabel || "" })),
+          ...selectedEntities.map((entity) => ({ id: entity.id || "", type: "entity", label: entity.label || "", entityType: entity.entityType || "" })),
+        ].slice(0, limit),
+        evidence,
+        confidence: evidence.length ? 0.85 : 0,
+        limitations: evidence.length ? ["Graph evidence is derived; source document chunks remain the highest authority for final answers."] : ["No graph evidence matched the request in this node scope."],
+      });
+    }
+    return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported graph tool: ${tool}`], confidence: 0 });
+  };
 
   const createTraceStep = ({ node = {}, dependency = null, index = 0, status = "pending", message = "", events = [] } = {}) => {
     const ports = nodePorts(node);
@@ -272,12 +1004,199 @@ window.TrackerLensAgentRuntime = (() => {
         type: inspected.node.type || "",
         subtype: nodeKind(inspected.node),
         ports: nodePorts(inspected.node),
+        agentTools: nodeAgentTools(inspected.node),
         status: inspected.node.status || inspected.node.runtime?.status || inspected.node.metadata?.runtimeStatus || "idle",
       } : null,
       dependencies: inspected.dependencies || [],
+      connectedTools: inspected.node ? await inspectConnectedTools({ workspaceId: effectiveWorkspaceId, nodeId }) : null,
       recentEvents: (inspected.events || []).slice(0, 10),
       impact: inspected.impact || null,
     };
+  };
+
+  const toolManifestForNode = (node = {}, relation = "workspace") => {
+    const tools = nodeAgentTools(node);
+    return {
+      nodeId: node.id || "",
+      label: nodeLabel(node),
+      type: node.type || "",
+      category: nodeCategory(node),
+      subtype: nodeKind(node),
+      relation,
+      toolCount: tools.length,
+      tools,
+    };
+  };
+
+  const connectedNodeIds = ({ dependencies = [], nodeId = "" } = {}) => {
+    const relatedIds = new Set();
+    if (!nodeId) return relatedIds;
+    const adjacency = new Map();
+    dependencies
+      .filter((dependency) => dependency.status !== "disabled")
+      .forEach((dependency) => {
+        const source = dependency.sourceNodeId || "";
+        const target = dependency.targetNodeId || "";
+        if (!source || !target) return;
+        if (!adjacency.has(source)) adjacency.set(source, new Set());
+        if (!adjacency.has(target)) adjacency.set(target, new Set());
+        adjacency.get(source).add(target);
+        adjacency.get(target).add(source);
+      });
+    const queue = [nodeId];
+    relatedIds.add(nodeId);
+    while (queue.length) {
+      const current = queue.shift();
+      (adjacency.get(current) || []).forEach((next) => {
+        if (relatedIds.has(next)) return;
+        relatedIds.add(next);
+        queue.push(next);
+      });
+    }
+    return relatedIds;
+  };
+
+  const inspectConnectedTools = async ({ workspaceId = "", nodeId = "", includeWorkspace = false, runtime = null } = {}) => {
+    const effectiveWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const snapshot = runtime
+      ? { runtime, graph: { nodes: runtime.nodes || runtime.runtimeNodes || [], dependencies: runtime.dependencies || runtime.runtimeDependencies || [] } }
+      : await buildSnapshot(effectiveWorkspaceId);
+    const nodes = runtime ? (runtime.nodes || runtime.runtimeNodes || []) : graphNodes(snapshot);
+    const dependencies = runtime ? (runtime.dependencies || runtime.runtimeDependencies || []) : graphDependencies(snapshot);
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    const relatedIds = nodeId ? connectedNodeIds({ dependencies, nodeId }) : new Set();
+    if (!nodeId && includeWorkspace) {
+      nodes.forEach((node) => relatedIds.add(node.id));
+    }
+    const manifests = [...relatedIds]
+      .map((id) => nodesById.get(id))
+      .filter(Boolean)
+      .map((node) => {
+        const relation = node.id === nodeId
+          ? "self"
+          : dependencies.some((dependency) => dependency.sourceNodeId === nodeId && dependency.targetNodeId === node.id)
+            ? "outgoing"
+            : dependencies.some((dependency) => dependency.targetNodeId === nodeId && dependency.sourceNodeId === node.id)
+              ? "incoming"
+              : nodeId && relatedIds.has(node.id)
+                ? "reachable"
+                : "workspace";
+        return toolManifestForNode(node, relation);
+      })
+      .filter((manifest) => manifest.toolCount > 0);
+    return {
+      version: VERSION,
+      inspectedAt: nowIso(),
+      workspaceId: effectiveWorkspaceId,
+      nodeId,
+      scope: nodeId ? "connected" : includeWorkspace ? "workspace" : "empty",
+      manifests,
+      toolCount: manifests.reduce((count, manifest) => count + manifest.toolCount, 0),
+      mcpReady: true,
+    };
+  };
+
+  const parseMcpToolName = (name = "") => {
+    const match = String(name || "").match(/^tl\.node\.([^.]+)\.([A-Za-z0-9_-]+)$/);
+    return match ? { nodeId: match[1], tool: match[2] } : { nodeId: "", tool: String(name || "").trim() };
+  };
+
+  const nodeSupportsTool = (node = {}, toolName = "") =>
+    nodeAgentTools(node).find((tool) => tool.name === toolName || tool.mcpName === toolName) || null;
+
+  const targetAllowedForAgent = ({ dependencies = [], agentNodeId = "", targetNodeId = "" } = {}) => {
+    if (!agentNodeId || agentNodeId === targetNodeId) return true;
+    const adjacency = new Map();
+    dependencies
+      .filter((dependency) => dependency.status !== "disabled")
+      .forEach((dependency) => {
+        const source = dependency.sourceNodeId || "";
+        const target = dependency.targetNodeId || "";
+        if (!source || !target) return;
+        if (!adjacency.has(source)) adjacency.set(source, new Set());
+        if (!adjacency.has(target)) adjacency.set(target, new Set());
+        adjacency.get(source).add(target);
+        adjacency.get(target).add(source);
+      });
+    const seen = new Set([agentNodeId]);
+    const queue = [agentNodeId];
+    while (queue.length) {
+      const current = queue.shift();
+      if (current === targetNodeId) return true;
+      (adjacency.get(current) || []).forEach((next) => {
+        if (seen.has(next)) return;
+        seen.add(next);
+        queue.push(next);
+      });
+    }
+    return false;
+  };
+
+  const callConnectedNodeTool = async ({ workspaceId = "", nodeId = "", tool = "", toolName = "", args = {}, agentNodeId = "", runtime = null } = {}) => {
+    const parsed = parseMcpToolName(tool || toolName);
+    const targetNodeId = nodeId || parsed.nodeId;
+    const targetTool = parsed.tool;
+    const effectiveWorkspaceId = normalizeWorkspaceId(workspaceId);
+    if (!targetNodeId) throw new Error("nodeId is required for connected node tool calls.");
+    if (!targetTool) throw new Error("tool is required for connected node tool calls.");
+    const snapshot = runtime
+      ? { runtime, graph: { nodes: runtime.nodes || runtime.runtimeNodes || [], dependencies: runtime.dependencies || runtime.runtimeDependencies || [] } }
+      : await buildSnapshot(effectiveWorkspaceId);
+    const nodes = runtime ? (runtime.nodes || runtime.runtimeNodes || []) : graphNodes(snapshot);
+    const dependencies = runtime ? (runtime.dependencies || runtime.runtimeDependencies || []) : graphDependencies(snapshot);
+    const target = nodes.find((node) => node.id === targetNodeId);
+    if (!target) throw new Error(`Connected tool target node not found: ${targetNodeId}`);
+    if (!targetAllowedForAgent({ dependencies, agentNodeId, targetNodeId })) {
+      return toolEnvelope({
+        ok: false,
+        tool: targetTool,
+        node: target,
+        status: "blocked",
+        limitations: ["Target node is not connected to the requesting Agent node."],
+      });
+    }
+    const manifestTool = nodeSupportsTool(target, targetTool);
+    if (!manifestTool) {
+      return toolEnvelope({
+        ok: false,
+        tool: targetTool,
+        node: target,
+        status: "unsupported",
+        limitations: ["Tool is not declared by the target node manifest."],
+      });
+    }
+    if (manifestTool.mode !== "read") {
+      return toolEnvelope({
+        ok: false,
+        tool: targetTool,
+        node: target,
+        status: "blocked",
+        limitations: ["Only read tools are executable in Phase 2. Mutating tools must use safe executor/preflight."],
+      });
+    }
+    const subtype = nodeKind(target);
+    if (["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype)) {
+      return runDocumentTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+      if (["knowledge-dictionary-builder", "dictionary-builder"].includes(subtype)) {
+      return runDictionaryTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+      if (["knowledge-event-builder", "event-builder"].includes(subtype)) {
+      return runEventTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+    if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
+      return runGraphTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+    if (["rag-search", "embedding-generator", "vector-memory"].includes(subtype) && targetTool === "searchChunks") {
+      return runDocumentTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+    return toolEnvelope({
+      ok: false,
+      tool: targetTool,
+      node: target,
+      status: "unsupported",
+      limitations: ["No Phase 2 read executor is available for this node subtype yet."],
+    });
   };
 
   const readLogs = async ({ workspaceId = "", nodeId = "", runId = "", limit = 30 } = {}) => {
@@ -675,6 +1594,18 @@ window.TrackerLensAgentRuntime = (() => {
       mutates: false,
       run: inspectNode,
     },
+    inspectConnectedTools: {
+      name: "inspectConnectedTools",
+      description: "Inspect MCP-ready read-tool manifests exposed by a node and its connected runtime neighbors.",
+      mutates: false,
+      run: inspectConnectedTools,
+    },
+    callConnectedNodeTool: {
+      name: "callConnectedNodeTool",
+      description: "Execute a Phase 2 read-only connected node tool for Document, Dictionary, Event and Graph-style nodes.",
+      mutates: false,
+      run: callConnectedNodeTool,
+    },
     readLogs: {
       name: "readLogs",
       description: "Read recent runtime events and flow logs for a workspace, node or run.",
@@ -707,6 +1638,8 @@ window.TrackerLensAgentRuntime = (() => {
     callTool,
     inspectFlow,
     inspectNode,
+    inspectConnectedTools,
+    callConnectedNodeTool,
     readLogs,
     runFlow,
     suggestFixes,

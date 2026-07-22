@@ -48,6 +48,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
   const nodeInputs = (node = {}, dependencies = []) => {
     const incoming = dependencies
       .filter((dependency) => dependency.targetNodeId === node.id)
+      .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
       .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
       .filter(Boolean);
     return unique([...(node.inputs || []), ...(node.channels || []), ...incoming]);
@@ -166,8 +167,218 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       ? value.map((item) => String(item || "").trim()).filter(Boolean)
       : String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 
+  const parseToolDeclarationValue = (value = null) => {
+    if (!value) return null;
+    if (typeof value === "object") return value;
+    return parseJsonLoose(value);
+  };
+
+  const toolInputSchema = (properties = {}, required = []) => ({
+    type: "object",
+    properties,
+    required,
+  });
+
+  const makeReadTool = ({ name = "", label = "", purpose = "", inputSchema = {}, outputs = {}, requiresEvidence = false } = {}) => ({
+    name,
+    label: label || name,
+    mode: "read",
+    purpose,
+    inputSchema,
+    outputs,
+    cost: { tokens: "low", latency: "low" },
+    requiresEvidence: Boolean(requiresEvidence),
+  });
+
+  const defaultAgentToolsForNode = (node = {}) => {
+    const subtype = nodeSubtype(node);
+    const category = nodeCategory(node);
+    if (["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype)) {
+      return [
+        makeReadTool({
+          name: "getDocumentInfo",
+          label: "Get Document Info",
+          purpose: "Return document ids, title, language, collection and chunk availability for this node scope.",
+          inputSchema: toolInputSchema({ documentId: { type: "string" } }),
+          outputs: { documents: "array", scope: "object" },
+        }),
+        makeReadTool({
+          name: "getFullDocument",
+          label: "Get Full Document",
+          purpose: "Return full source text when allowed by size and node scope.",
+          inputSchema: toolInputSchema({ documentId: { type: "string" }, maxChars: { type: "number" } }),
+          outputs: { text: "string", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "searchChunks",
+          label: "Search Chunks",
+          purpose: "Find source text passages related to a query.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, limit: { type: "number" } }, ["query"]),
+          outputs: { items: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "getChunkWindow",
+          label: "Get Chunk Window",
+          purpose: "Return source chunks around a chunk id or ordinal.",
+          inputSchema: toolInputSchema({ chunkId: { type: "string" }, ordinal: { type: "number" }, radius: { type: "number" } }),
+          outputs: { chunks: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+      ];
+    }
+    if (["knowledge-dictionary-builder", "dictionary-builder"].includes(subtype)) {
+      return [
+        makeReadTool({
+          name: "defineTerm",
+          label: "Define Term",
+          purpose: "Explain a term, aliases and type candidates in document context.",
+          inputSchema: toolInputSchema({ term: { type: "string" }, documentId: { type: "string" } }, ["term"]),
+          outputs: { entries: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "resolveAmbiguity",
+          label: "Resolve Ambiguity",
+          purpose: "Return possible meanings for an ambiguous word or name.",
+          inputSchema: toolInputSchema({ term: { type: "string" }, query: { type: "string" } }, ["term"]),
+          outputs: { candidates: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "listKeyTerms",
+          label: "List Key Terms",
+          purpose: "Return high-value dictionary terms usable for planning and retrieval.",
+          inputSchema: toolInputSchema({ limit: { type: "number" }, tier: { type: "string" } }),
+          outputs: { terms: "array", scope: "object" },
+        }),
+      ];
+    }
+    if (["knowledge-event-builder", "event-builder"].includes(subtype)) {
+      return [
+        makeReadTool({
+          name: "getTimeline",
+          label: "Get Timeline",
+          purpose: "Return ordered events related to a query, participant or document.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, participant: { type: "string" }, limit: { type: "number" } }),
+          outputs: { events: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "findEvents",
+          label: "Find Events",
+          purpose: "Search persisted events by participant, event type or text.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, eventType: { type: "string" }, participant: { type: "string" } }),
+          outputs: { events: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "verifyEvent",
+          label: "Verify Event",
+          purpose: "Check whether a proposed event is supported by persisted evidence.",
+          inputSchema: toolInputSchema({ claim: { type: "string" }, eventType: { type: "string" } }, ["claim"]),
+          outputs: { supported: "boolean", evidence: "array", limitations: "array" },
+          requiresEvidence: true,
+        }),
+      ];
+    }
+    if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
+      return [
+        makeReadTool({
+          name: "findEntities",
+          label: "Find Entities",
+          purpose: "Search graph entities by query, aliases and type.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, entityType: { type: "string" }, limit: { type: "number" } }, ["query"]),
+          outputs: { entities: "array", evidence: "array" },
+        }),
+        makeReadTool({
+          name: "findRelations",
+          label: "Find Relations",
+          purpose: "Find graph relations for query/entity pairs.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, source: { type: "string" }, target: { type: "string" }, relationType: { type: "string" } }),
+          outputs: { relations: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+        makeReadTool({
+          name: "getGraphEvidence",
+          label: "Get Graph Evidence",
+          purpose: "Return source evidence behind graph facts.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, relationId: { type: "string" }, entityId: { type: "string" } }),
+          outputs: { evidence: "array", limitations: "array" },
+          requiresEvidence: true,
+        }),
+      ];
+    }
+    if (subtype === "rag-search" || subtype === "embedding-generator" || subtype === "vector-memory") {
+      return [
+        makeReadTool({
+          name: "searchChunks",
+          label: "Search Chunks",
+          purpose: "Retrieve semantically related chunks from the connected knowledge index.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, limit: { type: "number" } }, ["query"]),
+          outputs: { items: "array", evidence: "array" },
+          requiresEvidence: true,
+        }),
+      ];
+    }
+    if (category === "dev" || node.type === "devPreview") {
+      return [
+        makeReadTool({
+          name: "showObservation",
+          label: "Show Observation",
+          purpose: "Display tool observations and evidence for QA.",
+          inputSchema: toolInputSchema({ runId: { type: "string" }, observation: { type: "object" } }),
+          outputs: { displayed: "boolean" },
+        }),
+        makeReadTool({
+          name: "showAnswerTrace",
+          label: "Show Answer Trace",
+          purpose: "Display Agent plan, tool calls, verification result and final answer.",
+          inputSchema: toolInputSchema({ runId: { type: "string" }, trace: { type: "object" } }),
+          outputs: { displayed: "boolean" },
+        }),
+      ];
+    }
+    return [];
+  };
+
+  const normalizeAgentTool = (tool = {}, node = {}) => {
+    const name = String(tool.name || tool.id || "").trim();
+    if (!name) return null;
+    const mode = String(tool.mode || "read").toLowerCase().trim();
+    const safeMode = ["read", "plan", "verify", "mutate"].includes(mode) ? mode : "read";
+    return {
+      name,
+      label: String(tool.label || name).trim(),
+      mode: safeMode,
+      purpose: String(tool.purpose || tool.description || "").trim(),
+      inputSchema: tool.inputSchema || tool.inputs || {},
+      outputs: tool.outputs || tool.outputSchema || {},
+      cost: tool.cost || { tokens: "low", latency: "low" },
+      requiresEvidence: Boolean(tool.requiresEvidence),
+      mcpName: `tl.node.${node.id || "node"}.${name}`,
+    };
+  };
+
+  const nodeAgentTools = (node = {}) => {
+    const config = nodeConfig(node);
+    const declared = parseToolDeclarationValue(config.agentTools || node.metadata?.agentTools || node.metadata?.manifest?.agentTools);
+    const declaredTools = Array.isArray(declared?.tools)
+      ? declared.tools
+      : Array.isArray(declared)
+        ? declared
+        : [];
+    const source = declaredTools.length ? declaredTools : defaultAgentToolsForNode(node);
+    return source
+      .map((tool) => normalizeAgentTool(tool, node))
+      .filter(Boolean)
+      .slice(0, 24);
+  };
+
   const nodeCapability = (node = {}) => {
     const config = nodeConfig(node);
+    const agentTools = nodeAgentTools(node);
     return {
       visible: String(config.agentVisible ?? config.agent_visible ?? "true") !== "false",
       purpose: String(config.agentPurpose || config.purpose || node.description || node.metadata?.description || "").trim(),
@@ -176,6 +387,8 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       consumes: splitList(config.agentConsumes || config.consumes),
       outputSchema: String(config.agentOutputSchema || config.outputSchema || "").trim(),
       sampleOutput: String(config.agentSampleOutput || config.sampleOutput || config.testPayload || "").trim(),
+      agentTools,
+      toolCount: agentTools.length,
     };
   };
 
@@ -202,6 +415,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
   const outgoingDependencies = ({ node, runtime }) =>
     (runtime.dependencies || [])
       .filter((dependency) => dependency.sourceNodeId === node.id && !dependency.metadata?.virtual)
+      .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
       .map((dependency) => ({
         ...dependency,
         targetNode: (runtime.nodes || []).find((item) => item.id === dependency.targetNodeId) || null,
@@ -376,12 +590,16 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       "Return ONLY valid JSON, no markdown.",
       "Available actions:",
       "- run_node: activate a source/runtime node and observe its result.",
+      "- call_tool: call a read-only connected node tool and observe its evidence before deciding the next step.",
       "- send_result: send the last observed result to a target node. You may include transform as a JSON object mapping output keys to source paths.",
       "- finish: mark the task complete.",
       "Schema:",
-      "{\"canExecute\":true,\"reason\":\"\",\"steps\":[{\"action\":\"run_node\",\"nodeId\":\"...\",\"outputChannel\":\"raw\"},{\"action\":\"send_result\",\"nodeId\":\"...\",\"inputChannel\":\"done\",\"from\":\"lastResult\",\"transform\":{\"price\":\"number:data.c\"}},{\"action\":\"finish\"}]}",
+      "{\"canExecute\":true,\"reason\":\"\",\"steps\":[{\"action\":\"call_tool\",\"nodeId\":\"...\",\"tool\":\"searchChunks\",\"args\":{\"query\":\"...\",\"limit\":6}},{\"action\":\"run_node\",\"nodeId\":\"...\",\"outputChannel\":\"raw\"},{\"action\":\"send_result\",\"nodeId\":\"...\",\"inputChannel\":\"done\",\"from\":\"lastResult\",\"transform\":{\"price\":\"number:data.c\"}},{\"action\":\"finish\"}]}",
       "Rules:",
       "- Choose source nodes by matching the task intent against node capability, purpose, keywords, produces, schema, label, and endpoint.",
+      "- For document QA or knowledge questions, prefer call_tool on connected Document/Dictionary/Event/Graph tools before run_node. Use source-bearing evidence tools such as searchChunks/getFullDocument/getTimeline/getGraphEvidence to verify the answer.",
+      "- call_tool can use only read tools declared in graph node capability.agentTools. Use nodeId plus tool name, or the MCP-style tool name.",
+      "- If a tool result is empty or low-confidence, call a broader source tool before finishing.",
       "- If the task asks for multiple distinct items and multiple matching source nodes exist, run each matching source and send each transformed result to the requested targets.",
       "- Never choose the Task Node as run_node; the Task Node is only the instruction source.",
       "- Do not send the task itself to Preview unless no data source exists.",
@@ -795,15 +1013,21 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     };
   };
 
-  const normalizePlannerStep = (step = {}) => ({
-    action: String(step.action || step.type || "").trim().toLowerCase(),
-    nodeId: String(step.nodeId || step.targetNodeId || step.node || "").trim(),
-    outputChannel: String(step.outputChannel || step.channel || step.sourcePort || "").trim(),
-    inputChannel: String(step.inputChannel || step.channel || step.targetPort || "").trim(),
-    from: String(step.from || step.source || "").trim(),
-    reason: String(step.reason || "").trim(),
-    transform: step.transform && typeof step.transform === "object" && !Array.isArray(step.transform) ? step.transform : null,
-  });
+  const normalizePlannerStep = (step = {}) => {
+    const rawTool = String(step.tool || step.toolName || step.mcpName || "").trim();
+    const mcpTool = rawTool.match(/^tl\.node\.([^.]+)\.([A-Za-z0-9_-]+)$/);
+    return {
+      action: String(step.action || step.type || "").trim().toLowerCase(),
+      nodeId: String(step.nodeId || step.targetNodeId || step.node || mcpTool?.[1] || "").trim(),
+      tool: mcpTool?.[2] || rawTool,
+      args: step.args && typeof step.args === "object" && !Array.isArray(step.args) ? step.args : {},
+      outputChannel: String(step.outputChannel || step.channel || step.sourcePort || "").trim(),
+      inputChannel: String(step.inputChannel || step.channel || step.targetPort || "").trim(),
+      from: String(step.from || step.source || "").trim(),
+      reason: String(step.reason || "").trim(),
+      transform: step.transform && typeof step.transform === "object" && !Array.isArray(step.transform) ? step.transform : null,
+    };
+  };
 
   const valueAtPath = (source, path = "") => {
     const parts = String(path || "").trim().split(".").filter(Boolean);
@@ -1155,6 +1379,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
           config: nodeConfig(node),
           incomingMappings: (runtime.dependencies || [])
             .filter((dependency) => dependency.targetNodeId === node.id)
+            .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
             .map((dependency) => ({ id: dependency.id, channel: dependency.channel, metadata: dependency.metadata || {} })),
           outgoing: outgoingDependencies({ node, runtime }).map((dependency) => ({
             id: dependency.id,
@@ -1304,7 +1529,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
           ...fallback,
           ...aiPlan,
           runId,
-          decision: steps.some((step) => step.action === "run_node" || step.action === "send_result")
+          decision: steps.some((step) => step.action === "run_node" || step.action === "call_tool" || step.action === "send_result")
             ? String(nodeConfig(node).decisionName || "execute_downstream")
             : "blocked",
           steps,
@@ -1436,6 +1661,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
       const emitted = [];
       const skipped = [];
       let lastResult = null;
+      let toolCallCount = 0;
       const nodesById = new Map((runtime.nodes || []).map((item) => [item.id, item]));
       const resolveStepTarget = (step = {}) =>
         nodesById.get(step.nodeId) ||
@@ -1454,6 +1680,136 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
         }
         if (!isTargetAllowed({ target, config: nodeConfig(node) })) {
           skipped.push({ ...step, label: target.label || target.id, reason: "target-not-allowed" });
+          continue;
+        }
+        if (step.action === "call_tool") {
+          toolCallCount += 1;
+          if (toolCallCount > 8) {
+            skipped.push({ ...step, label: target.label || target.id, reason: "tool-call-limit" });
+            continue;
+          }
+          if (!window.TrackerLensAgentRuntime?.callConnectedNodeTool) {
+            skipped.push({ ...step, label: target.label || target.id, reason: "agent-tool-runtime-unavailable" });
+            continue;
+          }
+          try {
+            await this.bus?.emit?.("orchestrator.status", {
+              phase: "tool_call",
+              runId: decision.runId,
+              nodeId: node.id,
+              targetNodeId: target.id,
+              targetLabel: target.label || target.id,
+              action: "call_tool",
+              tool: step.tool,
+              startedAt: new Date().toISOString(),
+            }, {
+              workspaceId: this.workspaceId,
+              eventType: "orchestrator_tool_calling",
+              sourceNodeId: node.id,
+              targetNodeId: target.id,
+              status: "busy",
+              meta: {
+                orchestratorRuntime: node.id,
+                targetNodeId: target.id,
+                runId: decision.runId,
+                plannerStep: "call_tool",
+                tool: step.tool,
+              },
+            });
+            const startedToolAt = performance.now();
+            const toolResult = await window.TrackerLensAgentRuntime.callConnectedNodeTool({
+              workspaceId: this.workspaceId,
+              nodeId: target.id,
+              tool: step.tool,
+              args: step.args || {},
+              agentNodeId: node.id,
+              runtime,
+            });
+            const latencyMs = Math.max(1, Math.round(performance.now() - startedToolAt));
+            const result = {
+              nodeId: target.id,
+              label: target.label || target.id,
+              channels: ["agent.tool.observation"],
+              payload: toolResult,
+              latencyMs,
+              status: toolResult?.ok === false ? "warning" : "ok",
+            };
+            lastResult = result;
+            observations.push({
+              ...step,
+              label: target.label || target.id,
+              tool: step.tool,
+              args: clonePayload(step.args || {}),
+              payload: clonePayload(toolResult),
+              latencyMs,
+            });
+            await this.bus?.emit?.("agent.tool.observation", {
+              runId: decision.runId,
+              orchestratorNodeId: node.id,
+              targetNodeId: target.id,
+              targetLabel: target.label || target.id,
+              tool: step.tool,
+              args: clonePayload(step.args || {}),
+              result: clonePayload(toolResult),
+              latencyMs,
+              observedAt: new Date().toISOString(),
+            }, {
+              workspaceId: this.workspaceId,
+              eventType: "orchestrator_tool_observation",
+              sourceNodeId: node.id,
+              targetNodeId: target.id,
+              latencyMs,
+              status: toolResult?.ok === false ? "warning" : "ok",
+              meta: {
+                orchestratorRuntime: node.id,
+                runId: decision.runId,
+                plannerStep: "call_tool",
+                tool: step.tool,
+              },
+            });
+            const stopObservationHeartbeat = this.startStatusHeartbeat({
+              node,
+              runId: decision.runId,
+              event,
+              phase: "waiting",
+              label: "Waiting after tool observation",
+              targetLabel: "AI planner",
+            });
+            let nextDecision;
+            try {
+              nextDecision = await this.buildPlannerDecision({
+                node,
+                payload,
+                event,
+                runtime,
+                phase: "observe",
+                observation: {
+                  executedStep: step,
+                  result,
+                  previousPlan: decision.steps || [],
+                },
+              });
+            } finally {
+              stopObservationHeartbeat();
+            }
+            const nextSteps = (nextDecision.steps || [])
+              .map(normalizePlannerStep)
+              .filter((item) => item.action && item.action !== "run_node");
+            if (nextSteps.length) {
+              const pending = stepQueue.map(normalizePlannerStep);
+              const seenTargets = new Set(nextSteps
+                .filter((item) => item.action === "send_result")
+                .map((item) => `${item.action}:${item.nodeId}:${item.inputChannel}`));
+              const preservedPending = pending.filter((item) => {
+                if (item.action !== "send_result") return item.action !== "finish";
+                const key = `${item.action}:${item.nodeId}:${item.inputChannel}`;
+                return !seenTargets.has(key);
+              });
+              stepQueue.splice(0, stepQueue.length, ...nextSteps, ...preservedPending);
+            }
+          } catch (error) {
+            skipped.push({ ...step, label: target.label || target.id, reason: "call-tool-error", error: error.message || String(error) });
+          }
           continue;
         }
         if (step.action === "run_node") {

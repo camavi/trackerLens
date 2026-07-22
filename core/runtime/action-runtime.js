@@ -17,6 +17,9 @@ window.TrackerLensActionRuntime = (() => {
   const unique = (values = []) =>
     [...new Set(values.filter(Boolean).map(String))];
 
+  const isToolAccessDependency = (dependency = {}) =>
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || "") === "tool-access";
+
   const nodeSubtype = (node = {}) =>
     String(node.metadata?.subtype || node.metadata?.manifest?.subtype || node.metadata?.actionType || node.type || "").toLowerCase();
 
@@ -36,7 +39,7 @@ window.TrackerLensActionRuntime = (() => {
 
   const actionInputs = (node = {}, dependencies = []) => {
     const incoming = dependencies
-      .filter((dependency) => dependency.targetNodeId === node.id)
+      .filter((dependency) => dependency.targetNodeId === node.id && !isToolAccessDependency(dependency))
       .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
       .filter(Boolean);
     return unique([...(node.inputs || []), ...incoming]);

@@ -119,6 +119,7 @@ window.TrackerLensAiAgentRuntime = (() => {
   const agentInputs = (node = {}, dependencies = []) => {
     const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
     const incoming = incomingDependencies
+      .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
       .map((dependency) => dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort)
       .filter(Boolean);
     if (incoming.length) return unique(incoming);
@@ -132,6 +133,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     const eventChannel = String(event?.channel || "");
     const sourceNodeId = String(event?.sourceNodeId || "");
     return incomingDependencies.some((dependency) =>
+      String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access" &&
       String(dependency.sourceNodeId || "") === sourceNodeId &&
       String(dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "") === eventChannel
     );
@@ -343,7 +345,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       relationLines ? `Structured relations:\n${relationLines}` : "",
       eventLines ? `Structured events:\n${eventLines}` : "",
       evidenceLines ? `Evidence:\n${evidenceLines}` : "",
-      "If a Reasoning Plan is present, answer primarily from Primary evidence text when it is available. Treat Reasoning required facts as a navigation and verification layer over that text, and Reasoning boundaries as factual limits. Use graph relations/events only to clarify the focused evidence, not to override it. Use direct semantic relations and ordered Structured events as primary evidence when no Primary evidence text is available. For how/why questions, include the concrete ordered event chain when evidence provides one; do not answer only with a broad summary relation such as healed_by/causes if the events explain the mechanism. Use broad relations only when they directly clarify the same mechanism. If focused evidence is present, answer from it instead of saying evidence is missing. Prefer explicit evidence over generic assumptions. Do not relocate actions, containers, tools or places while paraphrasing: if evidence says an object is put in a cup, answer with the cup; do not move it to a nearby source/location unless a quote explicitly says so. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
+      "If a Reasoning Plan is present, answer primarily from Primary evidence text when it is available. Treat Reasoning required facts as a navigation and verification layer over that text, and Reasoning boundaries as factual limits. Use graph relations/events only to clarify the focused evidence, not to override it. Use direct semantic relations and ordered Structured events as primary evidence when no Primary evidence text is available. For how/why questions, include the concrete ordered event chain when evidence provides one; do not answer only with a broad summary relation such as healed_by/causes if the events explain the mechanism. Use broad relations only when they directly clarify the same mechanism. If focused evidence is present, answer from it instead of saying evidence is missing. Prefer explicit evidence over generic assumptions. Do not relocate actions, containers, tools or places while paraphrasing: if evidence says an object is put in a cup, answer with the cup; do not move it to a nearby source/location unless a quote explicitly says so. Do not merge separate source details into a new label: if evidence names a source/place/object one way and separately describes it with a property, preserve that wording instead of inventing a compact label such as 'magical source' unless that exact label appears in evidence. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
     ].filter(Boolean).join("\n\n");
   };
 
@@ -493,11 +495,215 @@ window.TrackerLensAiAgentRuntime = (() => {
       return typeof value === "string" ? value : compactJson(value, 3600);
     });
 
+  const toolObservationQuery = ({ payload = {}, event = {} } = {}) =>
+    String(
+      payload.query ||
+      payload.question ||
+      payload.objective ||
+      payload.task ||
+      payload.prompt ||
+      payload.message ||
+      payload.text ||
+      payload.context ||
+      ""
+    ).trim();
+
+  const connectedToolManifestsForAgent = async ({ node = {}, workspaceId = "", runtime = null } = {}) => {
+    if (!node?.id || !window.TrackerLensAgentRuntime?.inspectConnectedTools) return null;
+    return window.TrackerLensAgentRuntime.inspectConnectedTools({
+      workspaceId,
+      nodeId: node.id,
+      runtime,
+    }).catch(() => null);
+  };
+
+  const chooseAgentToolCalls = ({ manifests = [], query = "", ragContext = null, graphContext = null, config = {} } = {}) => {
+    if (!query || ["off", "none", "disabled"].includes(String(config.connectedToolMode || config.agentToolMode || "").toLowerCase())) return [];
+    const calls = [];
+    const pushTool = (toolNames = [], args = {}) => {
+      const manifest = manifests.find((item) => (item.tools || []).some((tool) => toolNames.includes(tool.name)));
+      const tool = manifest?.tools?.find((item) => toolNames.includes(item.name));
+      if (!manifest || !tool || tool.mode !== "read") return false;
+      if (calls.some((call) => call.nodeId === manifest.nodeId && call.tool === tool.name)) return false;
+      calls.push({ nodeId: manifest.nodeId, nodeLabel: manifest.label || manifest.nodeId, relation: manifest.relation || "", tool: tool.name, args });
+      return true;
+    };
+    const normalizedQuery = String(query || "").toLowerCase();
+    const focusTerm = /\b(?:nemic\w*|ennemico|enemy|mostr\w*|monster|troll|pericol\w*|minacc\w*)\b/i.test(normalizedQuery)
+      ? "nemico"
+      : query;
+    const limit = Math.max(1, Math.min(8, Number(config.connectedToolLimit || 6)));
+    if (!ragContext && !graphContext) pushTool(["searchChunks"], { query, limit: 6 });
+    pushTool(["getTimeline", "findEvents"], { query, limit: 10 });
+    pushTool(["defineTerm"], { term: focusTerm, query, limit: 8 });
+    pushTool(["findRelations", "findEntities"], { query, limit: 10 });
+    pushTool(["getGraphEvidence"], { query, limit: 8 });
+    if (!calls.some((call) => call.tool === "searchChunks")) pushTool(["searchChunks"], { query, limit: 6 });
+    return calls.slice(0, limit);
+  };
+
+  const callProviderText = async ({ provider = null, model = "", prompt = "", maxTokens = 800 } = {}) => {
+    const type = String(provider?.provider || provider?.providerType || "").toLowerCase();
+    if (type.includes("ollama")) return callOllama({ provider, model, prompt, maxTokens });
+    if (type.includes("lm-studio") || type.includes("lmstudio") || type.includes("openai")) {
+      return callLmStudio({ provider, model, prompt, maxTokens });
+    }
+    return callLmStudio({ provider: provider || {}, model, prompt, maxTokens });
+  };
+
+  const toolManifestSummary = (manifests = []) =>
+    (manifests || []).map((manifest) => ({
+      nodeId: manifest.nodeId,
+      label: manifest.label || manifest.nodeId,
+      subtype: manifest.subtype || "",
+      relation: manifest.relation || "",
+      tools: (manifest.tools || [])
+        .filter((tool) => tool.mode === "read")
+        .map((tool) => ({ name: tool.name, purpose: tool.purpose || "", requiresEvidence: Boolean(tool.requiresEvidence) })),
+    })).filter((manifest) => manifest.tools.length);
+
+  const validatePlannedToolCalls = ({ plan = {}, manifests = [], query = "", config = {} } = {}) => {
+    const manifestByNode = new Map((manifests || []).map((manifest) => [manifest.nodeId, manifest]));
+    const limit = Math.max(1, Math.min(8, Number(config.connectedToolLimit || config.plannerToolLimit || 6)));
+    const steps = Array.isArray(plan?.steps) ? plan.steps : Array.isArray(plan?.toolCalls) ? plan.toolCalls : [];
+    const calls = [];
+    for (const step of steps) {
+      const nodeId = String(step.nodeId || step.targetNodeId || "").trim();
+      const toolName = String(step.tool || step.toolName || "").trim();
+      const manifest = manifestByNode.get(nodeId);
+      const tool = manifest?.tools?.find((item) => item.name === toolName && item.mode === "read");
+      if (!manifest || !tool) continue;
+      const args = step.args && typeof step.args === "object" && !Array.isArray(step.args) ? step.args : {};
+      calls.push({
+        nodeId,
+        nodeLabel: manifest.label || nodeId,
+        relation: manifest.relation || "",
+        tool: tool.name,
+        args: {
+          query,
+          ...args,
+        },
+        plannedReason: String(step.reason || step.purpose || "").slice(0, 240),
+      });
+      if (calls.length >= limit) break;
+    }
+    return calls;
+  };
+
+  const planConnectedToolCalls = async ({ manifests = [], query = "", payload = {}, event = {}, provider = null, model = "", config = {} } = {}) => {
+    const mode = String(config.connectedToolPlanner || config.agentToolPlanner || "llm").toLowerCase();
+    if (!query || ["off", "none", "disabled", "heuristic"].includes(mode)) return { calls: [], plan: null, error: "" };
+    const availableTools = toolManifestSummary(manifests);
+    if (!availableTools.length) return { calls: [], plan: null, error: "no-tools" };
+    const prompt = [
+      "You are a Trackers Lens tool planner.",
+      "Plan read-only tool calls for the connected nodes. Return ONLY one JSON object, no markdown.",
+      "Use the cheapest specific tools first. If source evidence may be needed, include searchChunks/getFullDocument/getGraphEvidence as appropriate.",
+      "For enemy/threat questions, search chunks/relations/events with the user query and related concrete threat terms if needed.",
+      "Do not answer the user. Only plan tool calls.",
+      "Schema: {\"intent\":\"\",\"steps\":[{\"nodeId\":\"\",\"tool\":\"\",\"args\":{},\"reason\":\"\"}],\"verification\":\"\"}",
+      JSON.stringify({
+        question: query,
+        payload: {
+          question: payload.question || payload.query || "",
+          documentId: payload.documentId || "",
+          collectionId: payload.collectionId || "",
+          purpose: payload.purpose || "",
+        },
+        inputChannel: event?.channel || "",
+        availableTools,
+        maxSteps: Math.max(1, Math.min(8, Number(config.connectedToolLimit || config.plannerToolLimit || 6))),
+      }),
+    ].join("\n\n");
+    try {
+      const ai = await callProviderText({ provider, model, prompt, maxTokens: Math.max(180, Math.min(700, Number(config.plannerMaxTokens || 420))) });
+      const plan = parseAiText(ai.text || "");
+      const calls = validatePlannedToolCalls({ plan, manifests, query, config });
+      return { calls, plan, usage: ai.usage || {}, error: calls.length ? "" : "empty-plan" };
+    } catch (error) {
+      return { calls: [], plan: null, error: error?.message || String(error) };
+    }
+  };
+
+  const collectConnectedToolObservations = async ({ node = {}, payload = {}, event = {}, workspaceId = "", runtime = {}, config = {}, ragContext = null, graphContext = null } = {}) => {
+    if (!window.TrackerLensAgentRuntime?.callConnectedNodeTool) return { manifest: null, calls: [], observations: [], error: "" };
+    const manifest = await connectedToolManifestsForAgent({ node, workspaceId, runtime });
+    const query = toolObservationQuery({ payload, event });
+    const provider = await pickProvider(config);
+    const model = String(config.model || provider?.model || "local-model");
+    const planned = await planConnectedToolCalls({ manifests: manifest?.manifests || [], query, payload, event, provider, model, config });
+    const calls = planned.calls.length
+      ? planned.calls
+      : chooseAgentToolCalls({ manifests: manifest?.manifests || [], query, ragContext, graphContext, config });
+    const observations = [];
+    for (const call of calls) {
+      const startedAt = performance.now();
+      try {
+        const result = await window.TrackerLensAgentRuntime.callConnectedNodeTool({
+          workspaceId,
+          nodeId: call.nodeId,
+          tool: call.tool,
+          args: call.args,
+          agentNodeId: node.id,
+          runtime,
+        });
+        observations.push({
+          ...call,
+          ok: result?.ok !== false,
+          status: result?.status || "",
+          confidence: result?.confidence ?? null,
+          limitations: result?.limitations || [],
+          itemCount: Array.isArray(result?.items) ? result.items.length : 0,
+          evidence: (result?.evidence || []).slice(0, 6),
+          items: (result?.items || []).slice(0, 8),
+          answer: result?.answer || "",
+          latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+        });
+      } catch (error) {
+        observations.push({
+          ...call,
+          ok: false,
+          status: "error",
+          error: error?.message || String(error),
+          latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+        });
+      }
+    }
+    return { manifest, plan: planned.plan, plannerError: planned.error || "", calls, observations, error: "" };
+  };
+
+  const renderToolObservationBlock = (toolContext = null) => {
+    const observations = toolContext?.observations || [];
+    if (!observations.length) return "";
+    const planText = toolContext?.plan
+      ? `Planner intent: ${String(toolContext.plan.intent || "").slice(0, 160)}\nPlanner verification: ${String(toolContext.plan.verification || "").slice(0, 240)}`
+      : toolContext?.plannerError
+        ? `Planner fallback: ${toolContext.plannerError}`
+        : "";
+    const lines = observations.map((observation, index) => {
+      const evidence = (observation.evidence || [])
+        .slice(0, 4)
+        .map((item, evidenceIndex) => `  [E${index + 1}.${evidenceIndex + 1}] ${item.sourceType || "evidence"} doc=${item.documentId || ""} chunk=${item.chunkId || ""}\n  ${String(item.text || "").slice(0, 900)}`)
+        .join("\n");
+      const limitations = observation.limitations?.length ? `\n  limitations: ${observation.limitations.join("; ")}` : "";
+      const answer = observation.answer ? `\n  answer: ${String(observation.answer).slice(0, 500)}` : "";
+      return `[T${index + 1}] ${observation.nodeLabel || observation.nodeId}.${observation.tool} status=${observation.status || "ready"} confidence=${Number.isFinite(Number(observation.confidence)) ? Number(observation.confidence).toFixed(2) : "N/D"} items=${observation.itemCount ?? 0}${answer}${limitations}${evidence ? `\n${evidence}` : ""}`;
+    }).join("\n\n");
+    return [
+      "Connected tool observations:",
+      planText,
+      lines,
+      "Use these observations as runtime evidence. Source-bearing evidence text has higher authority than derived graph/dictionary/event facts. If observations are empty or limited, say what is missing instead of inventing facts.",
+      "When the question asks for an enemy/threat and observations contain labels or evidence such as troll, mostro, monster, attack or opposes, answer with that concrete enemy label and cite the supporting observation.",
+    ].join("\n\n");
+  };
+
   const buildPrompt = ({ node, payload, event, memory = "", config = nodeConfig(node) }) => {
     const subtype = nodeSubtype(node);
     const ragContext = config.ragContext || normalizeRagContext({ payload, event });
     const graphContext = config.graphContext || normalizeGraphContext({ payload, event });
     const ragPromptBlock = renderRagPromptBlock(ragContext);
+    const toolPromptBlock = renderToolObservationBlock(config.toolContext || null);
     const hasCustomPromptTemplate = Boolean(String(config.promptTemplate || config.prompt || config.instruction || "").trim());
     const graphPromptBlock = renderGraphPromptBlock(graphContext);
     const systemPrompt = String(config.systemPrompt || "").trim() ||
@@ -525,6 +731,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       inputDataContext: config.inputDataContext || null,
       ragContext,
       graphContext,
+      toolContext: config.toolContext || null,
     };
     return [
       systemPrompt,
@@ -533,6 +740,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       config.inputDataContext ? `Input data context:\n${compactJson(config.inputDataContext)}` : "",
       ragPromptBlock ? `\n${ragPromptBlock}` : "",
       graphPromptBlock ? `\n${graphPromptBlock}` : "",
+      toolPromptBlock ? `\n${toolPromptBlock}` : "",
       `\nTask:\n${renderPromptTemplate(template, context)}`,
       `\nOutput instructions:\n${outputInstructions}`,
     ].filter(Boolean).join("\n");
@@ -544,6 +752,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     const historyLimit = Math.max(1, Math.min(50, Number(config.inputHistoryLimit || 5)));
     const dependencyInputs = (runtime.dependencies || [])
       .filter((dependency) => dependency.targetNodeId === node.id)
+      .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
       .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
       .filter(Boolean);
     const inputChannels = unique([...(node.inputs || []), ...(node.channels || []), ...dependencyInputs])
@@ -641,12 +850,12 @@ window.TrackerLensAiAgentRuntime = (() => {
       || null;
   };
 
-  const callOllama = async ({ provider, model, prompt }) => {
+  const callOllama = async ({ provider, model, prompt, maxTokens = 800 }) => {
     const endpoint = String(provider.endpoint || "http://127.0.0.1:11434").replace(/\/+$/g, "");
     const response = await postAiJson({
       url: `${endpoint}/api/generate`,
       headers: { "Content-Type": "application/json" },
-      body: { model, prompt, stream: false },
+      body: { model, prompt, stream: false, options: { num_predict: maxTokens } },
     });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
     const data = await response.json();
@@ -684,7 +893,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     }
   };
 
-  const callLmStudio = async ({ provider, model, prompt }) => {
+  const callLmStudio = async ({ provider, model, prompt, maxTokens = 800 }) => {
     const endpoint = withLmStudioApiBase(provider.endpoint);
     const resolvedModel = await resolveLmStudioModel({ provider, model });
     const response = await postAiJson({
@@ -694,6 +903,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         model: resolvedModel,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.2,
+        max_tokens: maxTokens,
       },
     });
     if (!response.ok) {
@@ -982,11 +1192,43 @@ window.TrackerLensAiAgentRuntime = (() => {
       const inputDataContext = await collectInputDataContext({ node, event, workspaceId: this.workspaceId, config, runtime: this.runtime });
       const ragContext = normalizeRagContext({ payload, event });
       const graphContext = normalizeGraphContext({ payload, event });
+      const toolContext = await collectConnectedToolObservations({
+        node,
+        payload,
+        event,
+        workspaceId: this.workspaceId,
+        runtime: this.runtime,
+        config,
+        ragContext,
+        graphContext,
+      });
+      if (toolContext?.observations?.length) {
+        await this.bus?.emit?.("agent.tool.observation", {
+          runId: event.meta?.runId || payload?.runId || "",
+          aiAgentNodeId: node.id,
+          agentLabel: node.label || node.id,
+          query: toolObservationQuery({ payload, event }),
+          observations: clonePayload(toolContext.observations),
+          observedAt: new Date().toISOString(),
+        }, {
+          workspaceId: this.workspaceId,
+          eventType: "ai_agent_tool_observation",
+          sourceNodeId: node.id,
+          status: toolContext.observations.some((item) => item.ok) ? "ok" : "warning",
+          meta: {
+            aiAgentRuntime: node.id,
+            inputEventId: event.id || "",
+            inputChannel: event.channel || "",
+            runId: event.meta?.runId || payload?.runId || "",
+          },
+        });
+      }
       const promptConfig = {
         ...config,
         ...(inputDataContext ? { inputDataContext } : {}),
         ...(ragContext ? { ragContext } : {}),
         ...(graphContext ? { graphContext } : {}),
+        ...(toolContext?.observations?.length ? { toolContext } : {}),
       };
       const provider = await pickProvider(config);
       const model = String(config.model || provider?.model || "local-model");
@@ -1012,6 +1254,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         inputDataContext,
         ragContext,
         graphContext,
+        toolContext,
         status: "running",
         provider: provider?.name || provider?.provider || "fallback",
         model,
@@ -1045,6 +1288,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           inputDataContext,
           ragContext,
           graphContext,
+          toolContext,
         };
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
@@ -1064,6 +1308,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           inputDataContext,
           ragContext,
           graphContext,
+          toolContext,
           result,
           updatedAt: new Date().toISOString(),
         });
@@ -1071,7 +1316,10 @@ window.TrackerLensAiAgentRuntime = (() => {
         return result;
       } catch (error) {
         const latencyMs = Math.round(performance.now() - startedAt);
-        const result = fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext, graphContext });
+        const result = {
+          ...fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext, graphContext }),
+          toolContext,
+        };
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -1090,6 +1338,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           inputDataContext,
           ragContext,
           graphContext,
+          toolContext,
           result,
           error: error?.message || String(error),
           updatedAt: new Date().toISOString(),

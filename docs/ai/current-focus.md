@@ -3,11 +3,27 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-07-19.
+Last updated: 2026-07-22.
 
 ## Active Area
 
-Knowledge Dictionary Runtime foundation.
+Connected Agent Node Tool Protocol foundation.
+
+## Current Work
+
+- Connected Node Tool Protocol v1 is being defined so Agent/LLM nodes can inspect connected nodes, plan tool calls, request full or partial document evidence, ask Dictionary/Event/Graph/Memory nodes for focused observations, verify answers from source-bearing evidence and only then respond or emit validated actions.
+- The protocol is being kept MCP-ready: TL node tools should map cleanly to MCP tools/resources, while TL remains the local runtime owner and all mutation still goes through safe executor/preflight.
+- Phase 1 manifest work has started: Agent Runtime can inspect MCP-ready connected tool manifests, and Orchestrator graph neighborhoods now expose `agentTools` in node capabilities without executing tool calls.
+- Phase 2 read-only executor now covers Document/Text/Memory plus Dictionary/Event/Graph-style nodes through `callConnectedNodeTool`.
+- Inspector UI/debug now includes an `Agent Tools` panel for selected nodes, with connected tool manifests, read-only probe calls and the latest result envelope.
+- Phase 3 planner base has started: Orchestrator AI planning can emit `call_tool` steps, execute read-only connected tools, observe `agent.tool.observation`, and feed those observations back into the next planning pass.
+- AI Agent direct-answer base now gathers connected tool observations before the LLM prompt, so normal AI Agent answers can be grounded by connected Document/Dictionary/Event/Graph evidence without relying only on upstream fixed context.
+- Agent tool reachability now follows the connected runtime chain/component instead of only direct neighbors, while disconnected workspace nodes remain blocked. The new `tool-access` link role gives Agents permission to interrogate connected nodes without turning that edge into normal event/data execution.
+- Flow Map has an `Agent Tools Test` sample that creates a short data-preparation path (`Document Store -> Chunk Processor -> Dictionary/Event/Entity`) plus `tool-access` edges from one AI Agent to the readable Knowledge nodes, so the new architecture can be tested without rebuilding the old long fixed pipeline.
+- AI model selection for Knowledge/Agent configuration now preserves the selected provider model instead of falling back to the `local-model` placeholder; the Agent Tools sample resolves the real local provider model before creating AI-backed nodes.
+- Flow Map runtime execution now enforces a single owner: starting page runtimes stops the background worker for that workspace, and starting the worker stops page runtime subscriptions. This prevents duplicate Knowledge/AI provider calls from page+worker processing the same event.
+- LM Studio Knowledge AI calls no longer send OpenAI `response_format: json_object` by default. JSON is still enforced by prompt/validation, but this avoids the automatic two-POST fallback when LM Studio rejects JSON mode.
+- Knowledge Mechanism Cue Agent is being added as a first-class Knowledge LLM node: it exposes system prompt, prompt template and output instructions for mechanism/evidence cue generation, emits `knowledge.mechanism.cues`, and lets Graph Query consume validated external cues instead of relying only on its hidden fallback prompt.
 
 ## Completed Sequence
 
@@ -510,7 +526,7 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Entity Extractor hybrid accepted-output fallback: `hybrid` now decides whether the LLM was usable from accepted/persisted entities and relations after grounding/dedup validation, not only from raw provider proposal counts. If the provider proposes enough candidates but TL accepts too few, a second rules pass fills the graph and reports `fallbackReason=sparse-accepted-entity-output`.
 - Semantic Relation Enricher hybrid sparse fallback: `hybrid` now also treats too few accepted AI semantic relations as sparse instead of blocking rules just because the provider returned one or two valid labels. Sparse AI semantic output is preserved and supplemented by rule/supplemental relations with debug metadata.
 - Hybrid fast fallback: Dictionary Builder, Entity Extractor and Event Builder no longer run exhaustive per-chunk LLM retries in `hybrid` mode. `hybrid` tries the provider with bounded full/compact/micro prompts, then falls back to local rules when the accepted output is sparse; per-chunk LLM retries remain reserved for pure `llm` mode where no rule fallback is allowed.
-- Knowledge LLM debug logging: Knowledge runtime now emits console diagnostics for every Knowledge node input and every LLM request (`[TL Knowledge LLM #n]`). Logs include node/subtype/channel/run id, provider/model, mode, promptMode, chunk/candidate counts, prompt size and a prompt preview so repeated triggers or oversized prompts can be diagnosed from the browser console.
+- Knowledge LLM debug cleanup: temporary console diagnostics for Knowledge node input and LLM requests were disabled after loop debugging, so normal runs no longer print `[TL Knowledge LLM #n]` messages in the browser console.
 - Direct healing semantic rule: supplemental `healed_by` relations now require direct patient/mechanism action evidence such as drinking, taking, receiving, preparing or using the cure in the same local context. General aftermath/property statements such as anyone having the same possibility or water later possessing healing power no longer create `person -healed_by-> water/source` relations.
 - Mechanism evidence priority: Graph Query now seeds mechanism/healing evidence terms even when Event Builder is absent or pure LLM extraction returns no events. Healing/process queries protect chunks with concrete operational cues such as cup/tea/flower/water/spring/drink/boil/transform/red/lava/speech, and mechanism evidence keeps protected chunks ahead of generic ranked intro evidence unless full document order is explicitly requested.
 - LLM mechanism evidence cues: Graph Query can ask the configured LLM for document-grounded retrieval cues for process/cause/healing questions. The cue output is locally validated against supplied chunks/events/relations, used only for evidence ranking/debug, and never becomes final-answer wording or a semantic boundary.
@@ -518,6 +534,13 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Grounded mechanism terms: Graph Query no longer treats story-specific mechanism objects such as flowers/water/cups as fixed global memory. Mechanism terms are filtered against the current document chunks/events/relations before they can affect evidence ranking, and Composer suppresses background travel/revelation relations when operational source evidence is already available.
 - LLM-only mechanism mode: in pure `llm` mode, Graph Query no longer adds rule mechanism expansions. The LLM mechanism-cue call now retries with a JSON repair pass, validated cue terms can pull matching chunks into the evidence candidate pool, and TL only validates grounding instead of substituting fixed mechanism objects.
 - LLM cue failure broad evidence: if the mechanism cue LLM still returns non-JSON, TL salvages grounded terms from the raw LLM text when possible. If no cue survives validation, Graph Query marks `mechanismCueFailed`, broadens evidence instead of narrowing it by generic score, and Reasoning Composer receives a mechanical beginning/middle/end evidence sample.
+- Danger typo/relevance fix: Graph Query now treats the common Italian typo `ennemico` as danger/enemy intent and event ranking no longer promotes unrelated events only from confidence. This prevents questions like “che ennemico?” from sending tea/healing evidence to the answer LLM when the requested enemy/threat evidence should be retrieved instead.
+- Runtime LLM loop guard: Flow Map keeps page runtimes as the single execution owner while a test run is active, so silent refreshes do not restart the background worker into the same run. Knowledge Runtime now deduplicates input executions by node/run/input event id, matching the existing AI Agent and Orchestrator guard and preventing repeated LM Studio POSTs for the same Dictionary/Event/Entity input.
+- Agent Tools Test bounded Knowledge modes: the generated Agent Tools sample now sets Dictionary/Event/Entity builders to `hybrid` explicitly. Pure `llm` Knowledge nodes can legitimately run global and per-chunk attempts; the sample uses bounded hybrid extraction so LM Studio logs do not look like a loop during debug.
+- Hybrid one-call LLM policy: Knowledge Dictionary/Event/Entity and Reasoning Composer now run only one provider attempt in `hybrid` mode and skip LLM repair/retry chains before falling back to rules. Existing Agent Tools sample nodes are detected by metadata and treated as bounded hybrid even if they were generated before explicit mode fields were added.
+- LM Studio context budget: Knowledge LLM calls now apply a conservative local-provider context budget for LM Studio/Gemma-style models, defaulting to a 4096-token context unless configured otherwise. Dictionary/Event/Entity prompts cap chunk count, chunk chars, repair input and completion tokens so TL does not send prompt + generation budgets that exceed the local model context.
+- Agent tool query expansion: connected read-only tools now expand danger/enemy questions lexically before searching chunks, events, dictionary and graph facts, so prompts such as “che nemico hanno trovato?” can retrieve evidence containing `troll`, `mostro`, `attacca` or related conflict terms. Agent tool collection defaults to more observations and uses a focused term for dictionary lookup instead of passing the whole question as a term.
+- AI Agent LLM planner: AI Agent now asks the configured LLM for a short JSON read-only tool plan before executing connected node tools. TL validates the planned node/tool pairs against the connected manifest, executes only read tools on reachable nodes, records planner intent/verification in the tool context, and falls back to the existing heuristic collector if the plan is empty or invalid.
 
 ## Next Logical Step
 

@@ -33,9 +33,12 @@ window.TrackerLensProcessorRuntime = (() => {
   const unique = (values = []) =>
     [...new Set(values.filter(Boolean).map(String))];
 
+  const isToolAccessDependency = (dependency = {}) =>
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || "") === "tool-access";
+
   const nodeInputs = (node = {}, dependencies = []) => {
     const incoming = dependencies
-      .filter((dependency) => dependency.targetNodeId === node.id)
+      .filter((dependency) => dependency.targetNodeId === node.id && !isToolAccessDependency(dependency))
       .map((dependency) => dependency.channel || dependency.metadata?.targetPort)
       .filter(Boolean);
     const declared = unique([...(node.inputs || []), ...incoming]);

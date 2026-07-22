@@ -14,8 +14,18 @@ window.TrackerLensAiAgentEditor = (() => {
     const raw = rawAgent(agent);
     return raw?.[key] && typeof raw[key] === "object" ? raw[key] : agent?.[key] && typeof agent[key] === "object" ? agent[key] : {};
   };
-  const agentFormValue = (form, name) =>
-    form?.querySelector?.(`[name="${name}"]`)?.value?.trim?.() || "";
+  const agentFormValue = (form, name) => {
+    if (!form) return "";
+    if (name === "model") {
+      const modelFields = Array.from(form.querySelectorAll("[data-ai-model-value='true'], [name='model']"));
+      const selected = modelFields
+        .map((field) => field?.value?.trim?.() || "")
+        .filter(Boolean)
+        .at(-1);
+      if (selected) return selected;
+    }
+    return form.querySelector?.(`[name="${name}"]`)?.value?.trim?.() || "";
+  };
   const boolValue = (form, name, fallback = false) => {
     const value = agentFormValue(form, name);
     if (!value) return fallback;
@@ -450,7 +460,7 @@ window.TrackerLensAiAgentEditor = (() => {
       const label = modelState.loading ? "Model (loading...)" : modelState.error ? "Model (fallback)" : "Model";
       return _.div(
         { class: "tl-ai-agent-field tl-ai-agent-model-field", "data-ai-model-field-host": "true" },
-        _.input({ type: "hidden", name: "model", value: currentValue }),
+        _.input({ type: "hidden", name: "model", "data-ai-model-value": "true", value: currentValue }),
         _.Select({
           label,
           value: currentValue,
@@ -462,8 +472,9 @@ window.TrackerLensAiAgentEditor = (() => {
           onChange: (nextValue) => {
             const value = selectValueOf(nextValue);
             modelState.value = value;
-            const input = document.querySelector(`#${formId} input[name='model']`);
-            if (input) input.value = value;
+            document.querySelectorAll(`#${formId} input[name='model'], #${formId} [data-ai-model-value='true']`).forEach((input) => {
+              input.value = value;
+            });
           },
         }),
         _.small(
