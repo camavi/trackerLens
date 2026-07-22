@@ -403,14 +403,34 @@ window.TrackerLensAgentRuntime = (() => {
     return tokens.reduce((score, token) => score + (normalized.includes(token) ? 1 : 0), 0);
   };
 
-  const evidenceFromDictionaryEntry = (entry = {}) => ({
-    sourceType: "dictionary_entry",
-    documentId: entry.documentId || "",
-    chunkId: entry.chunkId || "",
-    ordinal: null,
-    term: entry.term || "",
-    text: evidenceText(entry.evidence) || entry.term || "",
-  });
+  const evidenceFromDictionaryEntry = (entry = {}) => {
+    const pack = Array.isArray(entry.evidencePack) ? entry.evidencePack : [];
+    if (pack.length) {
+      return pack
+        .map((item) => ({
+          sourceType: "dictionary_entry",
+          documentId: entry.documentId || "",
+          chunkId: item.chunkId || entry.chunkId || "",
+          ordinal: item.ordinal ?? null,
+          term: entry.term || "",
+          quote: item.quote || "",
+          text: item.text || item.quote || "",
+          start: item.start ?? null,
+          end: item.end ?? null,
+        }))
+        .sort((left, right) =>
+          Number(left.ordinal ?? 0) - Number(right.ordinal ?? 0) ||
+          Number(left.start ?? 0) - Number(right.start ?? 0));
+    }
+    return [{
+      sourceType: "dictionary_entry",
+      documentId: entry.documentId || "",
+      chunkId: entry.chunkId || "",
+      ordinal: null,
+      term: entry.term || "",
+      text: evidenceText(entry.evidence) || entry.term || "",
+    }];
+  };
 
   const evidenceFromEvent = (event = {}) => ({
     sourceType: "knowledge_event",
@@ -596,14 +616,22 @@ window.TrackerLensAgentRuntime = (() => {
         relationCues: entry.relationCues || [],
         confidence: entry.confidence || 0,
         evidence: evidenceText(entry.evidence),
+        evidencePack: (entry.evidencePack || []).slice(0, 8),
+        evidenceCount: Array.isArray(entry.evidencePack) ? entry.evidencePack.length : 0,
         score,
       }));
+      const evidence = selected
+        .flatMap(({ entry }) => evidenceFromDictionaryEntry(entry))
+        .filter((item) => item.text)
+        .sort((left, right) =>
+          Number(left.ordinal ?? 0) - Number(right.ordinal ?? 0) ||
+          Number(left.start ?? 0) - Number(right.start ?? 0));
       return toolEnvelope({
         tool,
         node,
         answer: items.length ? `${items[0].term || term}: ${items[0].typeCandidates?.[0]?.type || items[0].tier || "term"}` : "",
         items,
-        evidence: selected.map(({ entry }) => evidenceFromDictionaryEntry(entry)).filter((item) => item.text),
+        evidence,
         confidence: items.length ? Math.min(0.95, 0.45 + selected[0].score * 0.06) : 0,
         limitations: items.length ? [] : ["No dictionary entry matched the requested term."],
       });

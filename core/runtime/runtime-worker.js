@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.235-agent-llm-planner-1";
+const RUNTIME_WORKER_VERSION = "0.1.245-dictionary-llm-pure-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -37,8 +37,8 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js?v=agent-tool-links-1",
     "action-runtime.js?v=agent-tool-links-1",
     "storage-runtime.js?v=agent-tool-links-1",
-    "knowledge-runtime.js?v=lmstudio-context-budget-1",
-    "agent-runtime.js?v=agent-tool-query-expansion-1",
+    "knowledge-runtime.js?v=dictionary-llm-pure-1",
+    "agent-runtime.js?v=dictionary-evidence-pack-1",
     "ai-agent-runtime.js?v=agent-llm-planner-1",
     "orchestrator-agent-runtime.js?v=agent-tool-links-1"
   );

@@ -541,16 +541,123 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const keywordTail = `(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,2}`;
   const keywordConnectorTail = `(?:\\s+(?:de|del|de la|de los|of|the|di|della|du|des|la|las|los)\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,1})?`;
 
-  const splitText = (text = "", { chunkSize = 900, overlap = 120 } = {}) => {
+  const splitText = (text = "", { chunkSize = 900, overlap = 120, strategy = "fixed" } = {}) => {
     const clean = String(text || "").replace(/\r\n/g, "\n").trim();
     if (!clean) return [];
     const size = Math.max(160, Number(chunkSize) || 900);
-    const step = Math.max(80, size - Math.max(0, Number(overlap) || 0));
+    const mode = String(strategy || "fixed").toLowerCase().trim();
+    const safeOverlap = Math.max(0, Math.min(Math.floor(size * 0.45), Number(overlap) || 0));
+    const isWordChar = (char = "") => /[\p{L}\p{N}_]/u.test(char);
+    const trimRange = (start = 0, end = clean.length) => {
+      let nextStart = Math.max(0, Math.min(clean.length, start));
+      let nextEnd = Math.max(nextStart, Math.min(clean.length, end));
+      while (nextStart < nextEnd && /\s/.test(clean[nextStart])) nextStart += 1;
+      while (nextEnd > nextStart && /\s/.test(clean[nextEnd - 1])) nextEnd -= 1;
+      return { start: nextStart, end: nextEnd };
+    };
+    const wordStartAt = (index = 0) => {
+      let next = Math.max(0, Math.min(clean.length, index));
+      while (next > 0 && isWordChar(clean[next]) && isWordChar(clean[next - 1])) next -= 1;
+      while (next < clean.length && /\s/.test(clean[next])) next += 1;
+      return next;
+    };
+    const wordEndAt = (index = 0, maxEnd = clean.length) => {
+      let next = Math.max(0, Math.min(clean.length, index));
+      const cap = Math.max(next, Math.min(clean.length, maxEnd));
+      while (next < cap && isWordChar(clean[next - 1] || "") && isWordChar(clean[next] || "")) next += 1;
+      return next;
+    };
+    const bestEndBoundary = (start = 0) => {
+      const target = Math.min(clean.length, start + size);
+      if (target >= clean.length) return clean.length;
+      const minEnd = Math.min(clean.length, start + Math.floor(size * 0.55));
+      const search = clean.slice(minEnd, target);
+      const paragraph = [...search.matchAll(/\n\s*\n/g)].pop();
+      if (paragraph) return minEnd + (paragraph.index || 0);
+      const sentence = [...search.matchAll(/[.!?;:»”"')\]]\s+/g)].pop();
+      if (sentence) return minEnd + (sentence.index || 0) + sentence[0].length;
+      const whitespace = [...search.matchAll(/\s+/g)].pop();
+      if (whitespace) return minEnd + (whitespace.index || 0);
+      return wordEndAt(target, Math.min(clean.length, target + 60));
+    };
+    const pushFixedChunks = (source = "", baseOffset = 0, chunks = []) => {
+      const local = String(source || "").trim();
+      if (!local) return chunks;
+      let start = 0;
+      while (start < local.length) {
+        const remaining = local.slice(start);
+        const absoluteStart = baseOffset + start;
+        const end = remaining.length <= size ? local.length : (() => {
+          const target = Math.min(local.length, start + size);
+          const minEnd = Math.min(local.length, start + Math.floor(size * 0.55));
+          const search = local.slice(minEnd, target);
+          const sentence = [...search.matchAll(/[.!?;:»”"')\]]\s+/g)].pop();
+          if (sentence) return minEnd + (sentence.index || 0) + sentence[0].length;
+          const whitespace = [...search.matchAll(/\s+/g)].pop();
+          if (whitespace) return minEnd + (whitespace.index || 0);
+          let next = target;
+          while (next < Math.min(local.length, target + 60) && isWordChar(local[next - 1] || "") && isWordChar(local[next] || "")) next += 1;
+          return next;
+        })();
+        const range = trimRange(baseOffset + start, baseOffset + end);
+        const value = clean.slice(range.start, range.end);
+        if (value) chunks.push({ text: value, start: range.start, end: range.end });
+        if (end >= local.length) break;
+        const nextStartAbsolute = wordStartAt(Math.max(absoluteStart + (end - start) - safeOverlap, absoluteStart + 1));
+        start = nextStartAbsolute > absoluteStart ? nextStartAbsolute - baseOffset : end;
+      }
+      return chunks;
+    };
+    if (["paragraph", "markdown"].includes(mode)) {
+      const blocks = [];
+      const regex = /\S[\s\S]*?(?=\n\s*\n|$)/g;
+      for (const match of clean.matchAll(regex)) {
+        const range = trimRange(match.index || 0, (match.index || 0) + match[0].length);
+        const value = clean.slice(range.start, range.end);
+        if (value) blocks.push({ text: value, start: range.start, end: range.end });
+      }
+      const chunks = [];
+      let currentText = "";
+      let currentStart = null;
+      let currentEnd = null;
+      const flush = () => {
+        if (!currentText.trim() || currentStart === null || currentEnd === null) return;
+        chunks.push({ text: currentText.trim(), start: currentStart, end: currentEnd });
+        currentText = "";
+        currentStart = null;
+        currentEnd = null;
+      };
+      blocks.forEach((block) => {
+        if (block.text.length > size) {
+          flush();
+          pushFixedChunks(block.text, block.start, chunks);
+          return;
+        }
+        const candidate = currentText ? `${currentText}\n\n${block.text}` : block.text;
+        if (candidate.length <= size || !currentText) {
+          currentText = candidate;
+          currentStart = currentStart ?? block.start;
+          currentEnd = block.end;
+          return;
+        }
+        flush();
+        currentText = block.text;
+        currentStart = block.start;
+        currentEnd = block.end;
+      });
+      flush();
+      return chunks;
+    }
     const chunks = [];
-    for (let start = 0; start < clean.length; start += step) {
-      const value = clean.slice(start, start + size).trim();
-      if (value) chunks.push({ text: value, start, end: start + value.length });
-      if (start + size >= clean.length) break;
+    let start = 0;
+    while (start < clean.length) {
+      const end = bestEndBoundary(start);
+      const range = trimRange(start, end);
+      const value = clean.slice(range.start, range.end);
+      if (value) chunks.push({ text: value, start: range.start, end: range.end });
+      if (end >= clean.length) break;
+      const nextStart = wordStartAt(Math.max(range.end - safeOverlap, range.start + 1));
+      start = nextStart > range.start ? nextStart : wordStartAt(range.end);
     }
     return chunks;
   };
@@ -2001,6 +2108,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const chunks = splitText(sourceText, {
       chunkSize: config.chunkSize || config.maxChunkChars || 900,
       overlap: config.chunkOverlap || config.overlap || 120,
+      strategy: config.strategy || "fixed",
     });
     const now = nowIso();
     const records = [];
@@ -2117,6 +2225,60 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
+  const orderedKnowledgeChunks = (chunks = []) =>
+    [...chunks]
+      .filter(Boolean)
+      .sort((left, right) =>
+        Number(left.ordinal ?? left.index ?? 0) - Number(right.ordinal ?? right.index ?? 0) ||
+        Number(left.start ?? 0) - Number(right.start ?? 0) ||
+        String(left.id || "").localeCompare(String(right.id || "")));
+
+  const dictionaryEvidencePackFor = ({ term = "", aliases = [], chunks = [], maxItems = 8, snippetRadius = 180 } = {}) => {
+    const labels = unique([term, ...(Array.isArray(aliases) ? aliases : [])]
+      .map((label) => String(label || "").trim())
+      .filter((label) => label.length >= 2)
+      .map((label) => ({ label, key: normalizeEntityToken(label) }))
+      .filter((item, index, list) => item.key && list.findIndex((candidate) => candidate.key === item.key) === index)
+      .map((item) => item.label))
+      .sort((left, right) => right.length - left.length);
+    if (!labels.length) return [];
+    const evidence = [];
+    const seenEvidence = new Set();
+    for (const chunk of orderedKnowledgeChunks(chunks)) {
+      const text = String(chunk?.text || "");
+      if (!text) continue;
+      const matches = [];
+      for (const label of labels) {
+        for (const position of entityLabelPositions(text, label)) {
+          matches.push({ label, position });
+        }
+      }
+      matches
+        .sort((left, right) => left.position - right.position || right.label.length - left.label.length)
+        .forEach((match) => {
+          if (evidence.length >= maxItems) return;
+          const absoluteStart = Number(chunk.start ?? 0) + match.position;
+          const absoluteEnd = absoluteStart + match.label.length;
+          const evidenceKey = `${chunk.id || ""}:${absoluteStart}:${absoluteEnd}:${normalizeEntityToken(match.label)}`;
+          if (seenEvidence.has(evidenceKey)) return;
+          seenEvidence.add(evidenceKey);
+          const start = Math.max(0, text.lastIndexOf(".", match.position - 1) + 1, match.position - snippetRadius);
+          const nextPeriod = text.indexOf(".", match.position + match.label.length);
+          const end = Math.min(text.length, nextPeriod >= 0 ? nextPeriod + 1 : match.position + match.label.length + snippetRadius);
+          evidence.push({
+            chunkId: chunk.id || "",
+            ordinal: chunk.ordinal ?? chunk.index ?? null,
+            start: absoluteStart,
+            end: absoluteEnd,
+            quote: text.slice(match.position, match.position + match.label.length),
+            text: text.slice(start, end).trim(),
+          });
+        });
+      if (evidence.length >= maxItems) break;
+    }
+    return evidence;
+  };
+
   const dictionaryLemma = (term = "", language = "") => {
     const normalized = normalizeEntityToken(term)
       .replace(/^(?:l|il|lo|la|i|gli|le|un|uno|una|the|a|an)\s+/, "")
@@ -2144,11 +2306,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
     "feu", "fleur", "livre", "pierre", "pierres", "roche", "roches", "tasse",
   ]);
 
+  const dictionaryCreatureTokens = new Set([
+    "creatura", "mostro", "troll",
+    "creature", "monster",
+    "criatura", "monstruo",
+    "creature", "monstre",
+    "kreatur", "monster",
+  ]);
+
   const dictionaryConceptTokens = new Set([
-    "amicizia", "compassione", "coraggio", "cura", "desiderio", "immaginazione", "intelligenza", "parola", "silenzio", "voce",
-    "courage", "cure", "friendship", "imagination", "silence", "voice",
-    "amistad", "cura", "imaginacion", "imaginación", "silencio", "voz",
-    "amitie", "amitié", "courage", "guerison", "guérison", "silence", "voix",
+    "amicizia", "compassione", "coraggio", "cura", "desiderio", "immaginazione", "intelligenza", "nemico", "parola", "paura", "pericolo", "pericoli", "scoraggiamento", "silenzio", "voce",
+    "courage", "cure", "danger", "discouragement", "enemy", "fear", "friendship", "imagination", "silence", "threat", "voice",
+    "amistad", "cura", "imaginacion", "imaginación", "miedo", "peligro", "silencio", "voz",
+    "amitie", "amitié", "courage", "danger", "guerison", "guérison", "peur", "silence", "voix",
   ]);
 
   const dictionaryRoleTokens = new Set([
@@ -2163,11 +2333,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? "location"
       : dictionaryObjectTokens.has(head)
         ? "object"
-        : dictionaryConceptTokens.has(normalized) || dictionaryConceptTokens.has(head)
-          ? "concept"
-          : dictionaryRoleTokens.has(normalized) || dictionaryRoleTokens.has(head)
-            ? "role"
-            : "";
+        : dictionaryCreatureTokens.has(normalized) || dictionaryCreatureTokens.has(head)
+          ? "creature"
+          : dictionaryConceptTokens.has(normalized) || dictionaryConceptTokens.has(head)
+            ? "concept"
+            : dictionaryRoleTokens.has(normalized) || dictionaryRoleTokens.has(head)
+              ? "role"
+              : "";
     const inferred = lexicalType || inferContextualEntityType(term, inferEntityType(term), text);
     const candidates = [{ type: inferred || "term", confidence: inferred === "proper-noun" ? 0.78 : 0.62, source: "local-context" }];
     if (sourceEntityCuePattern.test(normalizeEntityToken(text)) && normalized.length > 2) {
@@ -2208,6 +2380,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!normalized) return true;
     const words = normalized.split(/\s+/).filter(Boolean);
     if (!words.length) return true;
+    if (/(?:^|\s)(?:d|l|dell|della|dello|delle|degli|dei|del|di|de|du|des|of|the)$/.test(normalized)) return true;
     if (dictionaryAnaphoricTokens.has(normalized)) return true;
     if (words.every((word) => dictionaryAnaphoricTokens.has(word) || dictionaryCommonModifierTokens.has(word))) return true;
     return false;
@@ -2282,6 +2455,49 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .slice(0, maxTerms);
   };
 
+  const extractSourceDictionaryAnchors = (chunks = [], { language = "", maxTerms = 120 } = {}) => {
+    const candidates = new Map();
+    const tokens = unique([
+      ...dictionaryCreatureTokens,
+      ...dictionaryConceptTokens,
+      ...dictionaryLocationTokens,
+      ...dictionaryObjectTokens,
+      ...dictionaryRoleTokens,
+    ]).sort((left, right) => right.length - left.length);
+    const addAnchor = ({ term = "", chunk = {}, count = 2 } = {}) => {
+      const cleanTerm = String(term || "").replace(/\s+/g, " ").trim();
+      const normalized = dictionaryLemma(cleanTerm, language);
+      if (!normalized || normalized.length < 3 || normalized.length > 80) return;
+      if (dictionaryWeakLexicalEntry(cleanTerm, normalized)) return;
+      const key = normalized;
+      const current = candidates.get(key) || {
+        term: cleanTerm,
+        normalized,
+        count: 0,
+        source: "source-anchor-dictionary",
+        chunkIds: new Set(),
+        evidenceChunk: chunk,
+      };
+      current.count += count;
+      current.chunkIds.add(chunk.id || "");
+      if (!current.evidenceChunk?.text && chunk?.text) current.evidenceChunk = chunk;
+      candidates.set(key, current);
+    };
+    chunks.forEach((chunk) => {
+      const text = String(chunk?.text || "");
+      tokens.forEach((token) => {
+        const positions = entityLabelPositions(text, token);
+        positions.forEach((position) => {
+          const quote = text.slice(position, position + String(token).length);
+          addAnchor({ term: quote || token, chunk, count: 2 });
+        });
+      });
+    });
+    return [...candidates.values()]
+      .sort((left, right) => (right.count - left.count) || String(left.term || "").localeCompare(String(right.term || "")))
+      .slice(0, maxTerms);
+  };
+
   const dictionaryBuildMode = (config = {}) => {
     const mode = String(config.dictionaryMode || config.extractionMode || config.enrichmentMode || "llm").toLowerCase().trim();
     if (mode === "ai") return "llm";
@@ -2306,11 +2522,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const quote = String(item.evidence?.quote || item.quote || item.evidenceQuote || "").replace(/\s+/g, " ").trim();
     const quoteChunk = dictionaryQuoteSupported(quote, chunks);
     const termChunk = quoteChunk || chunks.find((chunk) =>
-      entityLabelPositions(String(chunk?.text || ""), term).length ||
-      normalizeEntityToken(chunk?.text || "").includes(normalizeEntityToken(term))
+      entityLabelPositions(String(chunk?.text || ""), term).length
     );
     if (!termChunk) return null;
     const lemma = dictionaryLemma(term, language);
+    const exactPositions = entityLabelPositions(String(termChunk.text || ""), term);
+    const firstExactPosition = exactPositions[0] ?? -1;
+    const knownTypedLemma = dictionaryCreatureTokens.has(lemma) ||
+      dictionaryConceptTokens.has(lemma) ||
+      dictionaryLocationTokens.has(lemma) ||
+      dictionaryObjectTokens.has(lemma) ||
+      dictionaryRoleTokens.has(lemma);
+    if (
+      firstExactPosition >= 0 &&
+      firstExactPosition <= 2 &&
+      Number(termChunk.start || 0) > 0 &&
+      /^[a-zà-ÿ]/.test(term) &&
+      !knownTypedLemma
+    ) {
+      return null;
+    }
     const profile = languageProfiles[language] || {};
     const stopWords = new Set([
       ...entityStopWords,
@@ -2380,6 +2611,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
     const configuredMaxChunkChars = promptBudget.maxChunkChars;
+    const localProvider = isLmStudioProvider(providerType, provider) || providerType === "ollama";
+    const chunkPassLimit = Math.max(
+      configuredChunkLimit,
+      Math.min(
+        chunks.length,
+        Math.max(1, Math.min(40, Number(
+          config.maxChunkPasses ||
+          config.llmChunkPasses ||
+          config.chunkPassLimit ||
+          config.maxLlmChunks ||
+          (localProvider ? Math.max(8, Math.min(24, chunks.length)) : chunks.length)
+        )))
+      )
+    );
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
       "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence."
@@ -2463,6 +2708,49 @@ window.TrackerLensKnowledgeRuntime = (() => {
           .map((item) => normalizeAiDictionaryCandidate(item, sourceChunks, language))
           .filter(Boolean)
           .slice(0, maxTerms);
+      const salvageDictionaryCandidatesFromText = ({ text = "", sourceChunks = chunks } = {}) => {
+        const rawText = String(text || "");
+        if (!rawText.trim()) return [];
+        const termMap = new Map();
+        const addTerm = (term = "", type = "") => {
+          const cleanTerm = String(term || "")
+            .replace(/^[\s"'“”‘’`*_:-]+|[\s"'“”‘’`*_.,;:-]+$/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          const normalized = dictionaryLemma(cleanTerm, language);
+          if (!normalized || normalized.length < 3 || normalized.length > 80) return;
+          const words = normalized.split(/\s+/).filter(Boolean);
+          if (words.some((word) => word.length < 2)) return;
+          if (/[\s](?:d|l|un|una|il|la|lo|the)$/i.test(normalized)) return;
+          if (termMap.has(normalized)) return;
+          termMap.set(normalized, { term: cleanTerm, type });
+        };
+        for (const match of rawText.matchAll(/["']?term["']?\s*[:=]\s*["'“”]?([^"',}\]\n\r]{2,80})/gi)) {
+          addTerm(match[1]);
+        }
+        for (const match of rawText.matchAll(/(?:^|\n)\s*(?:[-*]|\d+[.)])\s*(?:\*\*)?([A-ZÀ-Ýa-zà-ÿ][A-Za-zÀ-ÿ'’ -]{2,80})(?:\*\*)?\s*(?:[:\-–]|$)/g)) {
+          addTerm(match[1]);
+        }
+        for (const token of [...dictionaryCreatureTokens, ...dictionaryConceptTokens, ...dictionaryRoleTokens, ...dictionaryLocationTokens, ...dictionaryObjectTokens]) {
+          const escaped = String(token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          if (new RegExp(`\\b${escaped}\\b`, "i").test(rawText)) addTerm(token);
+        }
+        const sourceText = sourceChunks.map((chunk) => chunk?.text || "").join("\n");
+        return [...termMap.values()]
+          .map((item) => normalizeAiDictionaryCandidate({
+            term: item.term,
+            type: item.type || dictionaryTypeCandidates(item.term, sourceText)?.[0]?.type || "term",
+            aliases: [item.term],
+            confidence: 0.66,
+            explanation: "Recovered from non-JSON LLM dictionary output and validated against source chunks.",
+          }, sourceChunks, language))
+          .filter(Boolean)
+          .filter((candidate) => [...(candidate.chunkIds || [])].some((chunkId) => {
+            const chunk = sourceChunks.find((item) => item?.id === chunkId);
+            return entityLabelPositions(chunk?.text || "", candidate.term).length > 0;
+          }))
+          .slice(0, maxTerms);
+      };
       const repairDictionaryJson = async ({ text = "", promptMode = "", sourceChunks = chunks } = {}) => {
         const rawText = String(text || "").trim();
         if (!rawText) return null;
@@ -2560,6 +2848,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
+          const salvaged = salvageDictionaryCandidatesFromText({ text, sourceChunks });
+          if (salvaged.length) {
+            return { candidates: salvaged, error: "", retryable: false, promptMode: `${promptMode}-salvaged` };
+          }
           if (mode === "hybrid") return { candidates: [], error: lastError, retryable: false, promptMode };
           const repaired = await repairDictionaryJson({ text, promptMode, sourceChunks });
           if (repaired) return { candidates: repaired.candidates, error: "", promptMode: repaired.promptMode };
@@ -2603,7 +2895,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }
       const chunkCandidates = [];
       const chunkPromptModes = [];
-      for (const chunk of chunks.slice(0, configuredChunkLimit)) {
+      for (const chunk of chunks.slice(0, chunkPassLimit)) {
         attemptedChunkIds.add(chunk.id || "");
         const attempt = await runDictionaryPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (attempt.candidates.length) {
@@ -2611,7 +2903,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkPromptModes.push(attempt.promptMode || "chunk");
           productiveChunkIds.add(chunk.id || "");
         }
-        if (chunkCandidates.length >= maxTerms) break;
       }
       if (chunkCandidates.length) {
         const mergedCandidates = mergeDictionaryCandidates([], chunkCandidates, maxTerms);
@@ -2668,11 +2959,32 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (candidate.source === "proper-noun" && existing.source !== "proper-noun") existing.source = candidate.source;
     };
     [...ruleCandidates, ...aiCandidates].forEach(add);
+    const candidateRank = (candidate = {}) => {
+      const normalized = candidate.normalized || dictionaryLemma(candidate.term || "");
+      const type = String(candidate.ai?.typeCandidates?.[0]?.type || dictionaryTypeCandidates(candidate.term || "", candidate.evidenceChunk?.text || "")?.[0]?.type || "term").toLowerCase();
+      const typed = ["proper-noun", "source", "symbol", "location", "object", "concept", "role", "technology", "creature"].includes(type) ? 8 : 0;
+      const knownAnchor = dictionaryCreatureTokens.has(normalized) ||
+        dictionaryConceptTokens.has(normalized) ||
+        dictionaryLocationTokens.has(normalized) ||
+        dictionaryObjectTokens.has(normalized) ||
+        dictionaryRoleTokens.has(normalized)
+        ? 6
+        : 0;
+      const sourceScore = candidate.source === "source-anchor-dictionary"
+        ? 5
+        : candidate.ai
+          ? 4
+          : candidate.source === "proper-noun"
+            ? 3
+            : 0;
+      const countScore = Math.min(6, Number(candidate.count || 0) / 2);
+      return typed + knownAnchor + sourceScore + countScore + Number(candidate.ai?.confidence || 0);
+    };
     return [...merged.values()]
       .sort((left, right) => {
-        const leftAi = left.ai ? 1 : 0;
-        const rightAi = right.ai ? 1 : 0;
-        return rightAi - leftAi || Number(right.count || 0) - Number(left.count || 0) || String(left.term || "").localeCompare(String(right.term || ""));
+        return candidateRank(right) - candidateRank(left) ||
+          Number(right.count || 0) - Number(left.count || 0) ||
+          String(left.term || "").localeCompare(String(right.term || ""));
       })
       .slice(0, maxTerms);
   };
@@ -2704,6 +3016,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       symbol: 0.1,
       location: 0.08,
       object: 0.08,
+      creature: 0.09,
       concept: 0.07,
       role: 0.04,
       term: 0,
@@ -2748,24 +3061,34 @@ window.TrackerLensKnowledgeRuntime = (() => {
     });
     const useRuleFallback = mode === "rules" ||
       (mode === "hybrid" && !aiDictionaryUsable);
+    const sourceAnchorCandidates = mode === "llm" || mode === "rules" || effectiveConfig.useSourceAnchors === false
+      ? []
+      : extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms });
     const ruleCandidates = useRuleFallback
       ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency })
       : [];
     const finalCandidates = mode === "llm"
       ? (aiResult.candidates || []).slice(0, maxTerms)
       : useRuleFallback
-        ? mergeDictionaryCandidates(ruleCandidates, [], maxTerms)
-        : (aiResult.candidates || []).slice(0, maxTerms);
+        ? mergeDictionaryCandidates(ruleCandidates, aiResult.candidates || [], maxTerms)
+        : mergeDictionaryCandidates(sourceAnchorCandidates, aiResult.candidates || [], maxTerms);
     const records = [];
     for (const candidate of finalCandidates) {
       const chunk = candidate.evidenceChunk || scopedChunks[0] || {};
       const evidence = candidate.ai?.evidence || dictionaryEvidenceFor(chunk.text || "", candidate.term);
       const lemma = dictionaryLemma(candidate.term, language);
+      const candidateAliases = candidate.ai?.aliases?.length ? candidate.ai.aliases : [candidate.term].filter(Boolean);
+      const evidencePack = dictionaryEvidencePackFor({
+        term: candidate.term,
+        aliases: candidateAliases,
+        chunks: scopedChunks,
+        maxItems: Math.max(1, Math.min(24, Number(effectiveConfig.evidencePackLimit || 8))),
+      });
       const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "");
       const aiTypeCandidates = candidate.ai?.typeCandidates || [];
       const localPrimaryType = String(localTypeCandidates[0]?.type || "").toLowerCase();
       const aiPrimaryType = String(aiTypeCandidates[0]?.type || "").toLowerCase();
-      const localTypeIsStrong = ["proper-noun", "source", "location", "object", "concept", "role", "technology"].includes(localPrimaryType);
+      const localTypeIsStrong = ["proper-noun", "source", "location", "object", "concept", "role", "creature", "technology"].includes(localPrimaryType);
       const preferLocalType = localTypeIsStrong && aiPrimaryType && aiPrimaryType !== localPrimaryType;
       const typeCandidates = (candidate.ai?.typeCandidates?.length
         ? (preferLocalType ? [...localTypeCandidates, ...aiTypeCandidates] : [...aiTypeCandidates, ...localTypeCandidates])
@@ -2790,7 +3113,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         term: candidate.term,
         lemma,
         normalized: candidate.normalized,
-        aliases: candidate.ai?.aliases?.length ? candidate.ai.aliases : [candidate.term].filter(Boolean),
+        aliases: candidateAliases,
         typeCandidates,
         tier,
         usableAsSeed: tier === "core" || tier === "typed",
@@ -2799,6 +3122,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         relationCues: candidate.ai?.relationCues || [],
         confidence,
         evidence,
+        evidencePack,
         source: {
           method: candidate.source || (mode === "llm" ? "ai-dictionary" : "rule-dictionary"),
           nodeId: node?.id || "",
@@ -2835,6 +3159,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       seedScore: entry.seedScore,
       confidence: entry.confidence,
       evidence: entry.evidence,
+      evidencePack: (entry.evidencePack || []).slice(0, 4),
+      evidenceCount: Array.isArray(entry.evidencePack) ? entry.evidencePack.length : 0,
       source: {
         method: entry.source?.method || "",
         occurrenceCount: entry.source?.occurrenceCount || 0,
@@ -5927,16 +6253,54 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
   };
 
-  const parseAiJsonObject = (text = "") => {
+  const extractBalancedJsonObjectText = (text = "") => {
     const clean = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
     const start = clean.indexOf("{");
-    const end = clean.lastIndexOf("}");
-    if (start < 0 || end <= start) return null;
-    try {
-      return JSON.parse(clean.slice(start, end + 1));
-    } catch {
-      return null;
+    if (start < 0) return "";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let index = start; index < clean.length; index += 1) {
+      const char = clean[index];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === "\\") {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) return clean.slice(start, index + 1);
+      }
     }
+    const end = clean.lastIndexOf("}");
+    return end > start ? clean.slice(start, end + 1) : "";
+  };
+
+  const parseAiJsonObject = (text = "") => {
+    const jsonText = extractBalancedJsonObjectText(text);
+    if (!jsonText) return null;
+    const attempts = [
+      jsonText,
+      jsonText
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/,\s*([}\]])/g, "$1"),
+    ];
+    for (const attempt of unique(attempts)) {
+      try {
+        return JSON.parse(attempt);
+      } catch {}
+    }
+    return null;
   };
 
   const callSemanticAi = async ({ candidates = [], config = {} } = {}) => {
