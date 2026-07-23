@@ -1013,9 +1013,9 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
   }
   if (subtype === "entity-extractor") {
     return {
-      systemPrompt: "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.",
+      systemPrompt: "You are a Knowledge Entity Extractor.\nExtract only evidence-backed entities and explicit relations from the supplied chunks.\nUse only relationType values from allowedRelationTypes exactly as written.\nDo not invent relationType names.\nIf no allowed relationType fits the evidence, omit the relation.\nEvery entity and relation must include an exact evidence.quote copied from a supplied chunk.\nReturn only strict JSON.",
       promptTemplate: "Use supplied chunks and dictionary terms to propose precise entities and directly supported relations. Keep entities stable, avoid weak fragments, and do not collapse later consequences into earlier causes.",
-      outputInstructions: "Return strict JSON with entities and relations. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.",
+      outputInstructions: "Return strict JSON with entities and relations.\nrelationType must be one of allowedRelationTypes exactly.\nDo not invent relationType names.\nIf no allowed relationType fits the evidence, omit the relation.\nEvery accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk.\nOmit unsupported candidates.",
     };
   }
   if (subtype === "semantic-relation-enricher") {

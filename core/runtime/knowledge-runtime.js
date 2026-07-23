@@ -408,7 +408,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
   ]);
 
   const semanticObjectEntityTokens = new Set([
-    "agnello", "arca", "calice", "croce", "pane", "sangue", "tempio"
+    "agnello", "arca", "bastone", "calice", "croce", "cup", "fiore", "flower", "pane", "sangue", "stick",
+    "tazza", "tempio", "torch", "torcia"
   ]);
 
   const semanticRoleEntityTokens = new Set([
@@ -972,7 +973,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ...config,
       dictionaryMode: config.dictionaryMode || "hybrid",
       eventMode: config.eventMode || "llm",
-      entityMode: config.entityMode || "hybrid",
+      entityMode: config.entityMode || "llm",
       compositionMode: config.compositionMode || "hybrid",
     };
   };
@@ -4600,6 +4601,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return sourceFor("proper-noun", targetType);
     }
     if (["contains", "context_for"].includes(relationType)) {
+      if (relationType === "contains") {
+        const container = [left, right].find((entity) =>
+          /\b(?:tazza|cup|calice|bicchiere|vaso|ciotola|contenitore|container|bowl|glass|chalice)\b/i.test(String(entity.label || ""))
+        );
+        const contained = container ? [left, right].find((entity) => entity.id !== container.id) : null;
+        if (container && contained) return { source: container, target: contained };
+      }
       const targetType = relationType === "context_for"
         ? "concept"
         : (withType("creature") ? "creature" : "object");
@@ -4751,26 +4759,43 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (/(?:instruct|instruction|instructed|instructs|istru|indicat|indica|indicated|advice|advise|consigl)/.test(raw)) return "teaches";
     if (/(?:reveal|revealed|reveals|rivela|rivel|secret|segreto|told_secret|tell_secret|indicat|warn|avvert|spieg|explain)/.test(raw)) return "reveals";
     if (/(?:ask|asks|asked|request|requested|preg|chied|domand|question|information_from)/.test(raw)) return "asks_for";
-    if (/(?:tell|told|says|said|dice|disse|raccont|communicat|comunic)/.test(raw)) return "says";
+    if (/(?:tell|told|says|said|speak|speaks|spoke|spoke_to|dice|disse|raccont|communicat|comunic|parl)/.test(raw)) return "says";
     if (/(?:teach|teaches|taught|insegna|apprend)/.test(raw)) return "teaches";
     if (/(?:receiving_care|care_from|cared_for|bend|bandag|ferite|wound_care)/.test(raw)) return "helps";
     if (/(?:help|helps|helped|aiut|assist)/.test(raw)) return "helps";
+    if (/(?:interact|interacted|interaction|interacted_with|interag)/.test(raw)) return "interacts_with";
+    if (/(?:action_on|performed_action_on)/.test(raw)) return "interacts_with";
     if (/(?:protect|protects|protected|salva|difend|defend)/.test(raw)) return "protects";
     if (/(?:oppose|opposes|opposed|against|contro|nemic|enemy)/.test(raw)) return "opposes";
     if (/(?:attack|attacks|attacked|attacc|hurt|hurts|ferisc|ferit|threat|threatens|minacc)/.test(raw)) return "confronts";
-    if (/(?:^|_)(?:heal|heals|healed|healing|cure|cures|cured|curare|curato|guarire|guarito|guarisce)(?:_|$)/.test(raw)) return "healed_by";
+    if (/(?:cerca_cura|seek_cure|seeks_cure|search_cure|look_for_cure|looking_for_cure)/.test(raw)) return "tries_to_help";
+    if (/(?:^|_)(?:heal|heals|healed|healing|cure|cures|cured|curare|cura|curato|guarire|guarito|guarisce)(?:_|$)/.test(raw)) return "healed_by";
     if (/(?:guard|guarda|guardò|look|looks|looked|watch|watches|watched|observe|observes|observed)/.test(raw)) return "co_occurs";
     if (/(?:give|gives|gave|donat|consegn)/.test(raw)) return "gives_to";
     if (/(?:receive|receives|received|ricev)/.test(raw)) return "receives_from";
+    if (/(?:performed_action_with|action_with|used_in_action)/.test(raw)) return "uses";
     if (/(?:use|uses|used|utilizz|usa)/.test(raw)) return "uses";
-    if (/(?:lead|leads|led|guide|guides|path|route|road|strada|sentiero|porta)/.test(raw)) return "leads_to";
+    if (/(?:host|hosts|hosted|hosts_object|containerized|containerized_in|immersed_in|immerse|immersed|immergere|sumerg)/.test(raw)) return "contains";
+    if (/(?:transform|transforms|transformed|transforms_into|became|turned_into|diventa|divenne|trasform)/.test(raw)) return "transforms";
+    if (/(?:emanate|emanates|emanates_feature|emits|emana|diffonde)/.test(raw)) return "has_property";
+    if (/(?:similar|similar_to|like|simile)/.test(raw)) return "associated_with";
+    if (/(?:has_knowledge_of|knowledge_of|knows_of|aware_of|recall|recalls|remember|remembers|ricorda|ricord)/.test(raw)) return "references";
+    if (/(?:^|_)(?:lead|leads|led|guide|guides|path|route|road|strada|sentiero|porta)(?:_|$)/.test(raw)) return "leads_to";
     if (/(?:live|lives|lived|abit|vive)/.test(raw)) return "lives_in";
-    if (/(?:location|located|where|place|luogo|posto)/.test(raw)) return "appears_in";
+    if (/(?:location|located|where|place|luogo|posto|found_at|is_found_at)/.test(raw)) return "appears_in";
     if (/(?:discover|discovers|discovered|scopr)/.test(raw)) return "discovers";
     if (/(?:friend|amico|amica)/.test(raw)) return "friend_of";
     if (/(?:attribute|property|name|has_name|has_attribute)/.test(raw)) return "has_property";
     return raw;
   };
+
+  const entityAiRelationVocabulary = [
+    "appears_in", "associated_with", "asks_for", "causes", "co_occurs", "confronts", "contains",
+    "discovers", "expresses", "friend_of", "gives_to", "has_property", "healed_by", "helps",
+    "interacts_with", "leads_to", "lives_in", "mentions", "opposes", "protects", "receives_from",
+    "references", "represents", "says", "teaches", "transforms", "travels_to", "tries_to_help",
+    "uses",
+  ];
 
   const normalizeAiRelationCandidate = (item = {}, chunks = []) => {
     const sourceLabel = String(item.source || item.sourceLabel || item.from || "").replace(/\s+/g, " ").trim();
@@ -4785,6 +4810,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!termChunk) return null;
     const rawRelationType = String(item.relationType || item.type || "related_to").toLowerCase().trim().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || "related_to";
     const relationType = normalizeAiRelationType(rawRelationType);
+    if (!entityAiRelationVocabulary.includes(relationType)) return null;
     return {
       sourceLabel,
       targetLabel,
@@ -4819,9 +4845,27 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
     const configuredMaxChunkChars = promptBudget.maxChunkChars;
+    const localProvider = isLmStudioProvider(providerType, provider) || providerType === "ollama";
+    const chunkPassLimit = Math.max(
+      configuredChunkLimit,
+      Math.min(
+        chunks.length,
+        Math.max(1, Math.min(40, Number(
+          config.maxChunkPasses ||
+          config.llmChunkPasses ||
+          config.chunkPassLimit ||
+          config.maxLlmChunks ||
+          config.maxChunks ||
+          (localProvider ? Math.max(8, Math.min(24, chunks.length)) : chunks.length)
+        )))
+      )
+    );
     const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.");
     const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use supplied chunks and dictionary terms to propose precise entities and directly supported relations. Keep entities stable, avoid weak fragments, and do not collapse later consequences into earlier causes.");
-    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return strict JSON with entities and relations. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.");
+    const outputInstructions = knowledgeAiTextConfig(
+      config.outputInstructions,
+      `Return strict JSON with entities and relations. relationType must be one of allowedRelationTypes exactly; do not invent relation names. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit unsupported candidates.`
+    );
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
       const url = providerType === "ollama"
@@ -4855,6 +4899,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             schema,
             maxEntities: promptMaxEntities,
             maxRelations: promptMaxRelations,
+            allowedRelationTypes: entityAiRelationVocabulary,
             dictionaryTerms: dictionaryEntries.slice(0, micro ? 20 : chunkPass ? 30 : 60).map((entry) => ({ term: entry.term, type: entry.typeCandidates?.[0]?.type || "", aliases: entry.aliases || [] })),
             chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({ id: chunk.id || `chunk_${index + 1}`, ordinal: chunk.ordinal ?? chunk.index ?? index, text: String(chunk.text || "").slice(0, maxChunkChars) })),
           }),
@@ -4881,6 +4926,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Convert the following model output into one strict JSON object for entity extraction.",
           "Return ONLY JSON. No markdown, no prose.",
           "Schema: {\"entities\":[{\"label\":\"\",\"entityType\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term\",\"aliases\":[],\"confidence\":0.0,\"evidence\":{\"quote\":\"\"},\"explanation\":\"\"}],\"relations\":[{\"source\":\"\",\"relationType\":\"\",\"target\":\"\",\"confidence\":0.0,\"evidence\":{\"quote\":\"\"},\"explanation\":\"\"}]}",
+          `Allowed relationType values: ${entityAiRelationVocabulary.join(", ")}.`,
+          "If a relation does not fit one allowed relationType, omit it.",
           "Keep only items already present in the model output. Do not invent new labels, quotes or relations.",
           "Input:",
           rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
@@ -4915,7 +4962,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const prompt = promptFor({ promptMode, sourceChunks });
         const entityPromptChunkLimit = promptMode === "chunk" ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : promptMode === "compact" ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 192, max: 1600 });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 640, max: 1800 });
         const body = providerType === "ollama"
           ? { model, prompt, stream: false, format: "json", options: { temperature: knowledgeAiNumberConfig(config.temperature, 0.05), top_p: knowledgeAiNumberConfig(config.topP, 0.9), num_predict: completionMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: prompt }], temperature: knowledgeAiNumberConfig(config.temperature, 0.05), max_tokens: completionMaxTokens, top_p: knowledgeAiNumberConfig(config.topP, 0.9) }, providerType, config);
@@ -4952,7 +4999,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
-          if (mode === "hybrid") return { entities: [], relations: [], error: lastError, retryable: false };
           const repaired = await repairEntityJson({ text, promptMode });
           if (repaired) {
             return { entities: repaired.entities, relations: repaired.relations, error: "", promptMode: repaired.promptMode };
@@ -4982,21 +5028,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (attempt.entities.length || attempt.relations.length) fallbackResult = attempt;
         if (attempt.error && !attempt.retryable) break;
       }
-      if (mode === "hybrid") {
-        return {
-          entities: fallbackResult?.entities || [],
-          relations: fallbackResult?.relations || [],
-          provider: provider.id || providerType || "provider",
-          model: lastModel,
-          usage: totalUsage,
-          error: fallbackResult ? "" : (lastError || "sparse-ai-entity-output"),
-          promptMode: fallbackResult?.promptMode || "",
-        };
-      }
       const chunkEntities = [];
       const chunkRelations = [];
       const chunkPromptModes = [];
-      for (const chunk of chunks.slice(0, configuredChunkLimit)) {
+      const globalEntities = fallbackResult?.entities || [];
+      const globalRelations = fallbackResult?.relations || [];
+      const shouldRunChunkPass = mode === "llm";
+      for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
         const attempt = await runPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (attempt.entities.length || attempt.relations.length) {
           chunkEntities.push(...attempt.entities);
@@ -5004,15 +5042,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkPromptModes.push(attempt.promptMode || "chunk");
         }
       }
-      if (chunkEntities.length || chunkRelations.length) {
+      const combinedEntities = [...globalEntities, ...chunkEntities];
+      const combinedRelations = [...globalRelations, ...chunkRelations];
+      if (combinedEntities.length || combinedRelations.length) {
         return {
-          entities: chunkEntities.slice(0, maxEntities),
-          relations: chunkRelations.slice(0, maxRelations),
+          entities: combinedEntities.slice(0, maxEntities),
+          relations: combinedRelations.slice(0, maxRelations),
           provider: provider.id || providerType || "provider",
           model: lastModel,
           usage: totalUsage,
           error: "",
-          promptMode: unique(chunkPromptModes).join("+") || "chunk",
+          promptMode: unique([fallbackResult?.promptMode || "", ...chunkPromptModes]).join("+") || fallbackResult?.promptMode || "chunk",
         };
       }
       if (fallbackResult) {
@@ -5277,6 +5317,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const entityOutputIndexById = new Map();
     for (let extractionPass = 0; extractionPass < 2; extractionPass += 1) {
       if (extractionPass === 1) {
+        if (mode !== "hybrid") break;
         const acceptedAiOutputUsable = mode === "hybrid" && hybridAiCountUsable({
           count: entities.length,
           min: minHybridAiEntities,
@@ -5522,8 +5563,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
         minHybridEntities: minHybridAiEntities,
         minHybridRelations: minHybridAiRelations,
         hybridFallback: useRuleFallback,
+        hybridMerged: mode === "hybrid",
+        ruleCompletionCount: mode === "hybrid" || mode === "rules" ? { entities: entities.length - (aiResult.entities?.length || 0), relations: relations.length - (aiResult.relations?.length || 0) } : { entities: 0, relations: 0 },
         fallbackReason,
       },
+      status: mode === "hybrid" && ((aiResult.entities?.length || 0) > 0 || (aiResult.relations?.length || 0) > 0) && useRuleFallback
+        ? "partial-ai-merged"
+        : useRuleFallback
+          ? "fallback"
+          : "ready",
     };
   };
 

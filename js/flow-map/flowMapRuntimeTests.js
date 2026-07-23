@@ -4173,7 +4173,7 @@ const runKnowledgeAgentToolsSampleTest = async () => {
     subtype: "entity-extractor",
     category: "knowledge",
     paletteLabel: "Entity Extractor",
-    config: { ...sampleAiConfig, entityMode: "hybrid", extractionMode: "balanced", seedTerms: "Juliette,Liber,troll,foresta,fiore,acqua,te,bastone", collectionId, outputChannel: "knowledge.entity.created" },
+    config: { ...sampleAiConfig, entityMode: "llm", extractionMode: "balanced", seedTerms: "Juliette,Liber,troll,foresta,fiore,acqua,te,bastone", collectionId, outputChannel: "knowledge.entity.created" },
   });
   const querySource = nodeBase({
     name: "query_source",

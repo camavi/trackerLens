@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-22.
+Last updated: 2026-07-23.
 
 ## Active
 
@@ -347,6 +347,14 @@ Main files:
 - Knowledge hybrid status naming: Dictionary/Event hybrid output now distinguishes partial AI merge from full fallback with `status=partial-ai-merged` whenever accepted AI records are preserved and local completions are merged.
 - Knowledge Dictionary Builder hybrid chunk merge: Dictionary hybrid now keeps sparse global AI candidates, runs bounded chunk-level LLM extraction when below threshold, and merges the accumulated AI terms with local rule/anchor completions. Dictionary LLM completion minimum was raised so Gemma JSON is less likely to be cut at `finish_reason=length`.
 - Knowledge completion budget fix: local LM Studio Knowledge calls now respect user/provider completion-token settings instead of always shrinking to a low hardcoded context ratio. This fixes Dictionary calls that showed `maxTokens=2048` in UI but sent `max_tokens=640`.
+- Entity Extractor hybrid JSON/merge alignment: Entity Extractor hybrid mode now repairs invalid AI JSON, runs bounded chunk LLM passes when global output is sparse, preserves accepted AI entities/relations and merges local completions instead of dropping AI contribution.
+- Agent Tools Entity LLM mode alignment: Agent Tools sample Entity Extractor nodes now use `entityMode=llm`, and old sample nodes without explicit mode also resolve to LLM for the current pure Entity QA path.
+- Entity Extractor LLM purity: `entityMode=llm` now stops after the provider-backed validation pass and never starts the sparse accepted-output local fallback. Rule/seed completion remains available only in `hybrid` and `rules`.
+- Entity Extractor AI relation normalization: provider relation labels from LLM mode are canonicalized into TL relation types before persistence, and container/content `contains` pairs are oriented generically for labels such as `tazza`/`cup`.
+- Entity Extractor AI relation normalization follow-up: `action_on`/`performed_action_with` are normalized, `has_knowledge_of` becomes `references`, and the `leads_to` matcher is token-bounded to avoid false matches inside words such as `knowledge`.
+- Entity Extractor LLM relation contract: the Entity LLM prompt/repair prompt now exposes `allowedRelationTypes` and schema validation drops out-of-vocabulary relation names. Pure `llm` remains provider-owned; TL only enforces the output contract and evidence grounding.
+- Entity Extractor UI prompt defaults: the Flow Map node editor now pre-fills new Entity Extractor nodes with the allowed-relation LLM contract in System Prompt and Output Instructions.
+- Entity Extractor hybrid loop fix: `entityMode=hybrid` no longer enters per-chunk LLM retries when global AI output is sparse; it falls through to local merge completion instead, preventing repeated provider POST loops.
 - Knowledge Event Builder prompt-budget fix: Event Builder AI extraction now initializes the shared prompt budget before prompt construction. This fixes `promptBudget is not defined`, where `hybrid` mode could skip the provider attempt and emit a rules-only fallback despite a valid LM Studio model.
 - Knowledge AI editor config persistence fix: saving Knowledge nodes through the shared AI editor now preserves custom tab config fields such as `eventMode`, so runtime payloads no longer report stale `hybrid` when the visible Event Builder mode is `llm`.
 - Knowledge Event Builder LLM zero-accepted retry: pure LLM Event extraction now continues to compact/micro/chunk provider prompts when the first provider response yields only rejected candidates after grounding/type validation, instead of returning `eventCount: 0` with `status=ready`.
