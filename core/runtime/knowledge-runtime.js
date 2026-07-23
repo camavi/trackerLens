@@ -1366,6 +1366,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return [];
   }).map((item) => String(item || "").trim()).filter(Boolean));
 
+  const customRuleRegexes = (values = []) =>
+    customRuleValues(values)
+      .map((value) => String(value || "").trim())
+      .filter((value) => value.length >= 2 && value.length <= 160)
+      .map((value) => {
+        try {
+          return new RegExp(value, "iu");
+        } catch (_) {
+          return new RegExp(escapedRegExp(value), "iu");
+        }
+      });
+
+  const customRulesReplace = (rules = {}, key = "") =>
+    customRulesMode(rules) === "replace" && Boolean(rules[key]);
+
   const customRuleTokens = (values = [], { stopWords = new Set(), queryTokens = [] } = {}) =>
     graphQueryExpansionTokensFromValues(values, { stopWords, queryTokens: Array.isArray(queryTokens) ? queryTokens : [] });
 
@@ -2333,18 +2348,29 @@ window.TrackerLensKnowledgeRuntime = (() => {
     "child", "elder", "girl", "man", "old man", "old woman", "wizard", "woman",
   ]);
 
-  const dictionaryTypeCandidates = (term = "", text = "") => {
+  const dictionaryCustomTypeTokens = (config = {}, type = "") => {
+    const rules = customKnowledgeRules(config);
+    const groups = rules.dictionaryTypes || rules.typeTerms || rules.termsByType || {};
+    return new Set(customRuleValues(groups[type] || rules[`${type}Terms`]).map(dictionaryLemma).filter(Boolean));
+  };
+
+  const dictionaryTypeCandidates = (term = "", text = "", config = {}) => {
     const normalized = dictionaryLemma(term, detectLanguage(text));
     const head = normalized.split(/\s+/).filter(Boolean)[0] || normalized;
-    const lexicalType = dictionaryLocationTokens.has(head)
+    const customLocations = dictionaryCustomTypeTokens(config, "location");
+    const customObjects = dictionaryCustomTypeTokens(config, "object");
+    const customCreatures = dictionaryCustomTypeTokens(config, "creature");
+    const customConcepts = dictionaryCustomTypeTokens(config, "concept");
+    const customRoles = dictionaryCustomTypeTokens(config, "role");
+    const lexicalType = dictionaryLocationTokens.has(head) || customLocations.has(normalized) || customLocations.has(head)
       ? "location"
-      : dictionaryObjectTokens.has(head)
+      : dictionaryObjectTokens.has(head) || customObjects.has(normalized) || customObjects.has(head)
         ? "object"
-        : dictionaryCreatureTokens.has(normalized) || dictionaryCreatureTokens.has(head)
+        : dictionaryCreatureTokens.has(normalized) || dictionaryCreatureTokens.has(head) || customCreatures.has(normalized) || customCreatures.has(head)
           ? "creature"
-          : dictionaryConceptTokens.has(normalized) || dictionaryConceptTokens.has(head)
+          : dictionaryConceptTokens.has(normalized) || dictionaryConceptTokens.has(head) || customConcepts.has(normalized) || customConcepts.has(head)
             ? "concept"
-            : dictionaryRoleTokens.has(normalized) || dictionaryRoleTokens.has(head)
+            : dictionaryRoleTokens.has(normalized) || dictionaryRoleTokens.has(head) || customRoles.has(normalized) || customRoles.has(head)
               ? "role"
               : "";
     const inferred = lexicalType || inferContextualEntityType(term, inferEntityType(term), text);
@@ -2414,13 +2440,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return false;
   };
 
-  const extractDictionaryCandidates = (chunks = [], { language = "", maxTerms = 120, minFrequency = 1 } = {}) => {
+  const extractDictionaryCandidates = (chunks = [], { language = "", maxTerms = 120, minFrequency = 1, config = {} } = {}) => {
     const profile = languageProfiles[language] || {};
+    const rules = customKnowledgeRules(config);
     const stopWords = new Set([
       ...entityStopWords,
       ...(profile.stopWords || []).map(normalizeEntityToken),
       ...(profile.weakStarts || []).map(normalizeEntityToken),
       ...dictionaryFunctionTokens,
+      ...customRuleValues(rules.stopWords, rules.blockTerms, rules.dictionaryStopWords).map(normalizeEntityToken),
     ]);
     const candidates = new Map();
     const addCandidate = ({ term = "", chunk = {}, source = "token", weight = 1, index = -1 } = {}) => {
@@ -2462,14 +2490,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .slice(0, maxTerms);
   };
 
-  const extractSourceDictionaryAnchors = (chunks = [], { language = "", maxTerms = 120 } = {}) => {
+  const extractSourceDictionaryAnchors = (chunks = [], { language = "", maxTerms = 120, config = {} } = {}) => {
+    const rules = customKnowledgeRules(config);
+    const groups = rules.dictionaryTypes || rules.typeTerms || rules.termsByType || {};
     const candidates = new Map();
     const tokens = unique([
-      ...dictionaryCreatureTokens,
-      ...dictionaryConceptTokens,
-      ...dictionaryLocationTokens,
-      ...dictionaryObjectTokens,
-      ...dictionaryRoleTokens,
+      ...(customRulesReplace(rules, "dictionaryTypes") || customRulesReplace(rules, "typeTerms") || customRulesReplace(rules, "termsByType") ? [] : [
+        ...dictionaryCreatureTokens,
+        ...dictionaryConceptTokens,
+        ...dictionaryLocationTokens,
+        ...dictionaryObjectTokens,
+        ...dictionaryRoleTokens,
+      ]),
+      ...customRuleValues(groups.creature, groups.concept, groups.location, groups.object, groups.role, rules.creatureTerms, rules.conceptTerms, rules.locationTerms, rules.objectTerms, rules.roleTerms),
     ]).sort((left, right) => right.length - left.length);
     const addAnchor = ({ term = "", chunk = {}, count = 2 } = {}) => {
       const cleanTerm = String(term || "").replace(/\s+/g, " ").trim();
@@ -3062,9 +3095,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const useHybridCompletion = mode === "hybrid";
     const sourceAnchorCandidates = mode === "llm" || mode === "rules" || effectiveConfig.useSourceAnchors === false
       ? []
-      : extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms });
+      : extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms, config: effectiveConfig });
     const ruleCandidates = useRuleFallback || useHybridCompletion
-      ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency })
+      ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency, config: effectiveConfig })
       : [];
     const finalCandidates = mode === "llm"
       ? (aiResult.candidates || []).slice(0, maxTerms)
@@ -3083,7 +3116,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         chunks: scopedChunks,
         maxItems: Math.max(1, Math.min(24, Number(effectiveConfig.evidencePackLimit || 8))),
       });
-      const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "");
+      const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "", effectiveConfig);
       const aiTypeCandidates = candidate.ai?.typeCandidates || [];
       const localPrimaryType = String(localTypeCandidates[0]?.type || "").toLowerCase();
       const aiPrimaryType = String(aiTypeCandidates[0]?.type || "").toLowerCase();
@@ -3244,11 +3277,31 @@ window.TrackerLensKnowledgeRuntime = (() => {
     "bastone", "stick", "voce", "voice", "parola", "speech", "troll", "mostro", "monster",
   ];
 
-  const inferNarrativeEventType = (sentence = "") => {
+  const narrativeEventLexiconFor = (config = {}) => {
+    const rules = customKnowledgeRules(config);
+    const customEntries = (Array.isArray(rules.eventRules) ? rules.eventRules : [])
+      .map((entry) => ({
+        type: normalizeKnowledgeEventType(entry.eventType || entry.type),
+        patterns: customRuleRegexes(entry.cuePatterns || entry.patterns || entry.terms),
+        negativePatterns: customRuleRegexes(entry.negativePatterns || entry.blockedPatterns),
+        confidence: Number(entry.confidence || 0) || 0,
+      }))
+      .filter((entry) => entry.type && entry.patterns.length);
+    if (customRulesMode(rules) === "replace" && customEntries.length) return customEntries;
+    return [...narrativeActionLexicon, ...customEntries];
+  };
+
+  const inferNarrativeEventType = (sentence = "", config = {}) => {
     const normalized = normalizeEntityToken(sentence);
+    const rules = customKnowledgeRules(config);
+    const blocked = customRuleRegexes(rules.blockedEventTerms || rules.eventStopTerms || rules.blockedTerms);
+    if (blocked.some((pattern) => pattern.test(normalized))) return "";
     if (/^[a-zà-ÿ]{1,3}\s/.test(String(sentence || "").trim())) return "";
     if (!/[.!?;:»”"]$/.test(String(sentence || "").trim()) && normalized.split(/\s+/).length <= 8) return "";
-    const match = narrativeActionLexicon.find((entry) => entry.patterns.some((pattern) => pattern.test(normalized)));
+    const match = narrativeEventLexiconFor(config).find((entry) =>
+      entry.patterns.some((pattern) => pattern.test(normalized)) &&
+      !(entry.negativePatterns || []).some((pattern) => pattern.test(normalized))
+    );
     if (match?.type === "fills" && (
       /\b(?:musica|risate|speranza|gioia|paura|silenzio|sound|music|laughter|hope)\b/.test(normalized) ||
       !/\b(?:tazza|cup|bicchiere|bottle|bottiglia|contenitore|acqua|water|tea|t[eé]|liquido|liquid)\b/.test(normalized)
@@ -3258,11 +3311,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return match?.type || "";
   };
 
-  const narrativeActionCueIndex = (sentence = "", eventType = "") => {
+  const narrativeActionCueIndex = (sentence = "", eventType = "", config = {}) => {
     const normalized = normalizeEntityToken(sentence);
     const entries = eventType
-      ? narrativeActionLexicon.filter((entry) => entry.type === eventType)
-      : narrativeActionLexicon;
+      ? narrativeEventLexiconFor(config).filter((entry) => entry.type === eventType)
+      : narrativeEventLexiconFor(config);
     const positions = entries.flatMap((entry) =>
       entry.patterns.map((pattern) => {
         const match = normalized.match(pattern);
@@ -3272,7 +3325,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return positions.length ? Math.min(...positions) : -1;
   };
 
-  const sentenceHasNarrativeAction = (sentence = "", eventType = "") => narrativeActionCueIndex(sentence, eventType) >= 0;
+  const sentenceHasNarrativeAction = (sentence = "", eventType = "", config = {}) => narrativeActionCueIndex(sentence, eventType, config) >= 0;
 
   const knowledgePronounPattern = /^(?:i|me|you|he|she|it|we|they|him|her|them|lui|lei|egli|ella|esso|essa|noi|voi|loro|essi|esse|lo|la|li|le|gli|elles|ils|elle|eux|ellos|ellas|el|ella)$/i;
 
@@ -3355,14 +3408,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const isNarrativeLiquidOrContainer = (term = "") =>
     /\b(?:acqua|water|agua|eau|t[eé]|tea|tazza|cup|bicchiere|glass|bottle|bottiglia|contenitore|container|sorgente|source|spring)\b/.test(normalizeEntityToken(term));
 
-  const narrowNarrativeEventObjects = (sentence = "", eventType = "", objects = []) => {
+  const narrowNarrativeEventObjects = (sentence = "", eventType = "", objects = [], config = {}) => {
     const sorted = [...objects].sort((left, right) => narrativeObjectPosition(sentence, left) - narrativeObjectPosition(sentence, right));
     if (eventType === "fills") {
       const selected = sorted.filter(isNarrativeLiquidOrContainer);
       return selected.length ? selected : sorted;
     }
     if (eventType === "immerses") {
-      const actionIndex = narrativeActionCueIndex(sentence, "immerses");
+      const actionIndex = narrativeActionCueIndex(sentence, "immerses", config);
       const afterAction = sorted.filter((term) => {
         const position = narrativeObjectPosition(sentence, term);
         return position < 0 || actionIndex < 0 || position >= actionIndex;
@@ -3373,20 +3426,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return sorted;
   };
 
-  const buildNarrativeEventSpecs = (sentence = "", eventType = "", objects = []) => {
-    if (eventType === "fills" && sentenceHasNarrativeAction(sentence, "immerses")) {
+  const buildNarrativeEventSpecs = (sentence = "", eventType = "", objects = [], config = {}) => {
+    if (eventType === "fills" && sentenceHasNarrativeAction(sentence, "immerses", config)) {
       return [
-        { eventType: "fills", objects: narrowNarrativeEventObjects(sentence, "fills", objects) },
-        { eventType: "immerses", objects: narrowNarrativeEventObjects(sentence, "immerses", objects) },
+        { eventType: "fills", objects: narrowNarrativeEventObjects(sentence, "fills", objects, config) },
+        { eventType: "immerses", objects: narrowNarrativeEventObjects(sentence, "immerses", objects, config) },
       ].filter((spec) => spec.objects.length || spec.eventType === eventType);
     }
-    return [{ eventType, objects: narrowNarrativeEventObjects(sentence, eventType, objects) }];
+    return [{ eventType, objects: narrowNarrativeEventObjects(sentence, eventType, objects, config) }];
   };
 
-  const inferNarrativeEventSubjectResolution = (sentence = "", dictionaryEntries = [], eventType = "", previous = {}) => {
+  const inferNarrativeEventSubjectResolution = (sentence = "", dictionaryEntries = [], eventType = "", previous = {}, config = {}) => {
     const properEntries = narrativeSubjectDictionaryEntries(dictionaryEntries);
     const normalizedSentence = normalizeEntityToken(sentence);
-    const actionIndex = narrativeActionCueIndex(sentence, eventType);
+    const actionIndex = narrativeActionCueIndex(sentence, eventType, config);
     const mentionedParticipants = narrativeMentionedParticipants(sentence, dictionaryEntries);
     const recentParticipants = recentNarrativeParticipants(previous, sentence, dictionaryEntries);
     const found = properEntries.find((term) => {
@@ -3467,16 +3520,22 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
-  const inferNarrativeEventSubject = (sentence = "", dictionaryEntries = [], eventType = "", previousSubject = "") =>
-    inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, eventType, { subject: previousSubject }).subject;
+  const inferNarrativeEventSubject = (sentence = "", dictionaryEntries = [], eventType = "", previousSubject = "", config = {}) =>
+    inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, eventType, { subject: previousSubject }, config).subject;
 
-  const inferNarrativeEventObjects = (sentence = "", dictionaryEntries = []) => {
+  const inferNarrativeEventObjects = (sentence = "", dictionaryEntries = [], config = {}) => {
     const normalizedSentence = normalizeEntityToken(sentence);
+    const rules = customKnowledgeRules(config);
+    const customHints = customRuleValues(
+      rules.objectHints,
+      rules.eventObjectHints,
+      ...(Array.isArray(rules.eventRules) ? rules.eventRules.map((entry) => entry.objectHints || entry.objects) : [])
+    );
     const dictionaryObjects = dictionaryEntries
       .filter((entry) => ["object", "concept", "location", "creature"].includes(String(entry.typeCandidates?.[0]?.type || "").toLowerCase()))
       .map((entry) => entry.term || entry.lemma || "")
       .filter(Boolean);
-    return unique([...dictionaryObjects, ...narrativeObjectHints]
+    return unique([...dictionaryObjects, ...narrativeObjectHints, ...customHints]
       .filter((term) => {
         const key = normalizeEntityToken(term);
         return key && new RegExp(`\\b${escapedRegExp(key)}\\b`).test(normalizedSentence);
@@ -3485,8 +3544,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .slice(0, 8);
   };
 
-  const narrativeEventImportance = (eventType = "", objects = [], sentence = "") => {
+  const narrativeEventImportance = (eventType = "", objects = [], sentence = "", config = {}) => {
     const normalized = normalizeEntityToken(`${sentence} ${objects.join(" ")}`);
+    const rules = customKnowledgeRules(config);
+    const customRule = (Array.isArray(rules.eventRules) ? rules.eventRules : [])
+      .find((entry) => normalizeKnowledgeEventType(entry.eventType || entry.type) === eventType && Number(entry.confidence || 0) > 0);
     let score = {
       drinks: 0.92,
       transforms: 0.88,
@@ -3501,7 +3563,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       takes: 0.7,
       moves: 0.42,
       signals: 0.4,
-    }[eventType] || 0.55;
+    }[eventType] || Number(customRule?.confidence || 0) || 0.55;
+    if (customRule?.confidence) score = Number(customRule.confidence);
     if (/\b(?:tazza|cup|t[eé]|tea|acqua|water|fiore|flower|sorgente|source|voce|voice|guar|heal|cure)\b/.test(normalized)) score += 0.08;
     return Math.min(0.98, score);
   };
@@ -4088,15 +4151,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const sentences = narrativeSentenceSplit(chunk.text || "");
         for (let sentenceIndex = 0; sentenceIndex < sentences.length && ruleCandidates.length < maxEvents; sentenceIndex += 1) {
           const sentence = sentences[sentenceIndex];
-          const eventType = inferNarrativeEventType(sentence);
+          const eventType = inferNarrativeEventType(sentence, effectiveConfig);
           if (!eventType) continue;
-          const objects = inferNarrativeEventObjects(sentence, dictionaryEntries);
-          const eventSpecs = buildNarrativeEventSpecs(sentence, eventType, objects);
+          const objects = inferNarrativeEventObjects(sentence, dictionaryEntries, effectiveConfig);
+          const eventSpecs = buildNarrativeEventSpecs(sentence, eventType, objects, effectiveConfig);
           for (const spec of eventSpecs) {
             if (ruleCandidates.length >= maxEvents) break;
-            const subjectInfo = inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, spec.eventType, previousContext);
+            const subjectInfo = inferNarrativeEventSubjectResolution(sentence, dictionaryEntries, spec.eventType, previousContext, effectiveConfig);
             const subject = subjectInfo.subject || "";
-            const confidence = narrativeEventImportance(spec.eventType, spec.objects, sentence);
+            const confidence = narrativeEventImportance(spec.eventType, spec.objects, sentence, effectiveConfig);
             if (confidence < minConfidence) continue;
             const offsets = knowledgeEventQuoteOffsets(chunk, sentence);
             const modality = knowledgeEventModalityForEvidence(sentence);
@@ -5105,11 +5168,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const entityCandidatesFromText = (text = "", config = {}) => {
     const clean = String(text || "");
     const languageConfig = { ...config, text: clean, language: detectLanguage(clean, config.language || "") };
+    const rules = customKnowledgeRules(config);
+    const entityTermGroups = rules.entityTerms || rules.termsByType || {};
+    const extraStopWords = new Set(customRuleValues(rules.stopWords, rules.blockTerms, rules.entityStopWords).map(normalizeEntityToken));
     const candidates = [];
     const push = (value = "", source = "pattern", confidence = 0.72, entityType = "") => {
       const rawLabel = String(value || "").replace(/\s+/g, " ").trim();
       const label = ["seed", "dictionary-seed"].includes(source) ? rawLabel : cleanEntityPhrase(rawLabel, languageConfig);
       if (label.length < 2 || label.length > 96) return;
+      if (extraStopWords.has(normalizeEntityToken(label))) return;
       if (isWeakEntityLabelForLanguage(label, source, languageConfig, clean)) return;
       if (!["seed", "dictionary-seed"].includes(source) && isEntityStopWord(label, languageConfig)) return;
       const inferredType = entityType || inferEntityType(label, source);
@@ -5155,9 +5222,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
         pattern: /\b(autocontrol|self-control|selbstbeherrschung|resiliencia|resilience|widerstandsfähigkeit|widerstandsfaehigkeit|disciplina|discipline|disziplin|optimismo|optimism|optimismus|determinación|determinacion|determination|entschlossenheit|miedo|fear|paura|angst|esperanza|hope|espoir|hoffnung|amistad|friendship|amitié|freundschaft|coraje|courage|mut|compasión|compasion|compassion|mitgefühl|mitgefuehl)\b/giu,
       },
     ].forEach(pushKeywordMatches);
+    const pushCustomEntityTerms = (terms = [], entityType = "term") => {
+      customRuleValues(terms).forEach((term) => {
+        const cleanTerm = String(term || "").trim();
+        if (!cleanTerm || !entityLabelPositions(clean, cleanTerm).length) return;
+        push(cleanTerm, `custom-${entityType}`, Math.max(0.5, Math.min(0.98, Number(rules.confidence || 0.78))), entityType);
+      });
+    };
+    pushCustomEntityTerms(entityTermGroups.location || rules.locationTerms, "location");
+    pushCustomEntityTerms(entityTermGroups.object || rules.objectTerms, "object");
+    pushCustomEntityTerms(entityTermGroups.creature || rules.creatureTerms, "creature");
+    pushCustomEntityTerms(entityTermGroups.concept || rules.conceptTerms, "concept");
+    pushCustomEntityTerms(entityTermGroups.role || rules.roleTerms, "role");
+    pushCustomEntityTerms(entityTermGroups.source || rules.sourceTerms, "source");
+    pushCustomEntityTerms(entityTermGroups.symbol || rules.symbolTerms, "symbol");
+    pushCustomEntityTerms(entityTermGroups.technology || rules.technologyTerms, "technology");
     (clean.match(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}\b/g) || [])
       .forEach((value) => push(value, "proper-noun", value.includes(" ") ? 0.82 : 0.64));
-    splitConfigList(config.seedTerms || config.terms).forEach((value) => {
+    customRuleValues(config.seedTerms || config.terms, rules.seedTerms, rules.seeds).forEach((value) => {
       if (value && clean.toLowerCase().includes(value.toLowerCase())) push(value, "seed", 0.9);
     });
     (config.dictionarySeedEntries || []).forEach((entry) => {
@@ -5167,7 +5249,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const confidence = Math.max(0.72, Math.min(0.96, Number(entry.seedScore || entry.confidence || 0.78)));
       push(label, "dictionary-seed", confidence, type);
     });
-    const allowedTypes = splitConfigList(config.entityTypes).map((value) => value.toLowerCase());
+    const allowedTypes = customRuleValues(config.entityTypes, rules.entityTypes, rules.allowedEntityTypes).map((value) => value.toLowerCase());
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.6)));
     const seen = new Map();
     candidates

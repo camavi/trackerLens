@@ -1105,6 +1105,49 @@ const knowledgeCustomRulesDefaults = (subtype = "") => {
     downrank: [],
     terms: ["cura", "guarire", "guarito", "heal", "healed", "processo", "metodo", "cause", "outcome"],
   };
+  const dictionaryTypes = {
+    location: [
+      "albero", "alberi", "bosco", "casa", "castello", "caverna", "foresta", "giardino", "luogo", "montagna", "regno", "sentiero", "sorgente", "strada", "villaggio",
+      "cave", "castle", "forest", "garden", "kingdom", "mountain", "path", "road", "tree", "trees", "village", "wood", "woods",
+      "bosque", "castillo", "cueva", "montaña", "pueblo", "reino",
+      "bois", "chateau", "château", "foret", "forêt", "montagne", "royaume", "village",
+    ],
+    object: [
+      "acqua", "bastone", "fiore", "fuoco", "libro", "pietra", "pietre", "roccia", "rocce", "spada", "tazza", "te", "tè",
+      "book", "cup", "fire", "flower", "rock", "rocks", "stone", "stones", "sword",
+      "flor", "fuego", "libro", "piedra", "roca", "taza",
+      "feu", "fleur", "livre", "pierre", "roche", "tasse",
+    ],
+    creature: ["creatura", "mostro", "troll", "creature", "monster", "criatura", "monstruo", "monstre", "kreatur"],
+    concept: [
+      "amicizia", "compassione", "coraggio", "cura", "desiderio", "immaginazione", "intelligenza", "nemico", "parola", "paura", "pericolo", "scoraggiamento", "silenzio", "voce",
+      "courage", "cure", "danger", "discouragement", "enemy", "fear", "friendship", "imagination", "silence", "threat", "voice",
+      "amistad", "imaginación", "miedo", "peligro", "silencio", "voz",
+      "amitié", "guerison", "guérison", "peur", "voix",
+    ],
+    role: ["anziana", "anziano", "bambina", "bambino", "giovane", "mago", "ragazza", "ragazzo", "uomo", "vecchia", "vecchio", "child", "elder", "girl", "man", "old man", "old woman", "wizard", "woman"],
+  };
+  const entityTerms = {
+    ...dictionaryTypes,
+    source: [],
+    symbol: [],
+    technology: ["api", "runtime", "indexeddb", "ollama", "studio", "openai", "rag", "json", "php", "javascript"],
+  };
+  const eventRules = [
+    { eventType: "cannot_speak", cuePatterns: ["non\\\\s+(?:pu[oò]|poteva|riesce|riusciva|riusc[iì])\\\\s+(?:a\\\\s+)?parlare", "non\\\\s+parlava", "cannot\\\\s+speak", "could\\\\s+not\\\\s+speak", "unable\\\\s+to\\\\s+speak"], negativePatterns: [], objectHints: ["voce", "voice", "parola", "speech"], confidence: 0.78 },
+    { eventType: "finds", cuePatterns: ["trovarono", "trov[oò]", "scopr[iì]", "found", "finds", "discovered", "discover"], negativePatterns: [], objectHints: [], confidence: 0.68 },
+    { eventType: "seeks", cuePatterns: ["cercando", "cerca", "cercava", "cercare", "seeks", "searches", "looking for"], negativePatterns: [], objectHints: ["cura", "cure", "soluzione", "solution"], confidence: 0.72 },
+    { eventType: "fills", cuePatterns: ["riempirono", "riemp[iì]", "riempire", "filled", "fills"], negativePatterns: ["musica|risate|speranza|gioia|paura|silenzio"], objectHints: ["tazza", "cup", "acqua", "water"], confidence: 0.82 },
+    { eventType: "immerses", cuePatterns: ["immersero", "immerse", "immerso", "immersa", "immergere", "dipped", "immersed"], negativePatterns: [], objectHints: ["fiore", "flower", "tazza", "cup", "acqua", "water"], confidence: 0.86 },
+    { eventType: "transforms", cuePatterns: ["trasformandosi", "trasform[oò]", "trasforma", "became", "becomes", "turned into", "transform"], negativePatterns: [], objectHints: ["tè", "tea", "lava"], confidence: 0.88 },
+    { eventType: "takes", cuePatterns: ["prese", "prende", "presero", "took", "takes"], negativePatterns: [], objectHints: [], confidence: 0.7 },
+    { eventType: "drinks", cuePatterns: ["bevve", "beve", "bevuto", "bere", "drank", "drinks", "drink"], negativePatterns: [], objectHints: ["tè", "tea", "acqua", "water"], confidence: 0.92 },
+    { eventType: "has_property", cuePatterns: ["possiede", "possedeva", "possiedono", "possesses", "possessed", "potere", "poteri", "propriet[aà]", "capacit[aà]", "power", "property", "ability"], negativePatterns: [], objectHints: [], confidence: 0.76 },
+    { eventType: "heals", cuePatterns: ["guar[iì]", "guarito", "guarire", "guarisce", "cur[oò]", "curare", "healed", "heals", "cured", "cure"], negativePatterns: [], objectHints: ["cura", "cure", "voce", "voice"], confidence: 0.9 },
+    { eventType: "speaks", cuePatterns: ["parl[oò]", "parla", "pronunciava", "pronunci[oò]", "disse", "dice", "grid[oò]", "speak", "spoke", "said", "shouted"], negativePatterns: ["far|fare|modo\\\\s+per|desideri|possa|potesse|riusc[iì]|riuscire"], objectHints: ["voce", "voice", "parola", "speech"], confidence: 0.82 },
+    { eventType: "moves", cuePatterns: ["corsero", "and[oò]", "andarono", "scese", "scesero", "went", "ran", "walked"], negativePatterns: [], objectHints: [], confidence: 0.42 },
+    { eventType: "signals", cuePatterns: ["sorrise", "annu[iì]", "guard[oò]", "smiled", "nodded", "looked"], negativePatterns: [], objectHints: [], confidence: 0.4 },
+  ];
   if (subtype === "graph-query") {
     return {
       ...base,
@@ -1210,6 +1253,40 @@ const knowledgeCustomRulesDefaults = (subtype = "") => {
       ],
     };
   }
+  if (subtype === "entity-extractor") {
+    return {
+      ...base,
+      notes: "Declarative Entity rules used in Rules/Hybrid mode. Executable code is ignored.",
+      stopWords: [],
+      seedTerms: [],
+      entityTypes: [],
+      entityTerms,
+    };
+  }
+  if (subtype === "knowledge-dictionary-builder") {
+    return {
+      ...base,
+      notes: "Declarative Dictionary rules used in Rules/Hybrid mode. Executable code is ignored.",
+      stopWords: [],
+      blockTerms: [],
+      dictionaryTypes,
+    };
+  }
+  if (subtype === "knowledge-event-builder") {
+    return {
+      ...base,
+      notes: "Declarative Event rules used in Rules/Hybrid mode. eventType must be a supported Knowledge event type. Executable code is ignored.",
+      blockedEventTerms: [],
+      objectHints: ["tazza", "tè", "tea", "acqua", "water", "sorgente", "source", "spring", "fiore", "flower", "bastone", "stick", "voce", "voice", "parola", "speech", "troll", "mostro", "monster"],
+      eventRules,
+    };
+  }
+  if (subtype === "knowledge-reasoning-composer") {
+    return {
+      ...base,
+      notes: "Reasoning Composer rules are configured by its structured fields and graph/reasoning context. This JSON is declarative metadata; executable code is ignored.",
+    };
+  }
   return {
     ...base,
     notes: "Custom declarative rules for this Knowledge node. The runtime ignores executable code.",
@@ -1230,10 +1307,18 @@ const parseKnowledgeCustomRules = (value = "") => {
 
 const knowledgeCustomRulesText = (node = {}, subtype = "") => {
   const current = nodeConfigObject(node).customRules;
+  const isLegacyPlaceholder = (value = {}) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const keys = Object.keys(value).sort();
+    return keys.every((key) => ["mode", "modeHelp", "notes", "version"].includes(key)) &&
+      /runtime ignores executable code/i.test(String(value.notes || ""));
+  };
   if (typeof current === "string" && current.trim()) {
     const parsed = parseKnowledgeCustomRules(current);
+    if (isLegacyPlaceholder(parsed)) return JSON.stringify(knowledgeCustomRulesDefaults(subtype), null, 2);
     return parsed ? JSON.stringify(parsed, null, 2) : current;
   }
+  if (isLegacyPlaceholder(current)) return JSON.stringify(knowledgeCustomRulesDefaults(subtype), null, 2);
   if (current && typeof current === "object" && !Array.isArray(current)) return JSON.stringify(current, null, 2);
   return JSON.stringify(knowledgeCustomRulesDefaults(subtype), null, 2);
 };
