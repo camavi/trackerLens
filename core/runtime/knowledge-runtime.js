@@ -408,8 +408,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   ]);
 
   const semanticObjectEntityTokens = new Set([
-    "agnello", "arca", "bastone", "calice", "croce", "cup", "fiore", "flower", "pane", "sangue", "stick",
-    "tazza", "tempio", "torch", "torcia"
+    "agnello", "arca", "calice", "croce", "pane", "sangue", "tempio", "torch", "torcia"
   ]);
 
   const semanticRoleEntityTokens = new Set([
@@ -1296,11 +1295,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
     let score = 0;
     if (/\b(?:pericol\w*|danger\w*|peligro\w*|dangereux|gefahr\w*|gefährlich\w*|risque\w*|risk\w*|risch\w*)\b/.test(normalized)) score += 8;
     if (/\b(?:ostacol\w*|obstacle\w*|obst[aá]cul\w*|hindernis\w*|cammino difficile|percorso difficile|difficult path|difficile)\b/.test(normalized)) score += 6;
-    if (/\b(?:minacc\w*|threat\w*|menace\w*|bedrohung\w*|nemic\w*|ennemic\w*|enem\w*|monstr\w*|mostr\w*|monster\w*|troll)\b/.test(normalized)) score += 8;
+    if (/\b(?:minacc\w*|threat\w*|menace\w*|bedrohung\w*|nemic\w*|ennemic\w*|enem\w*|monstr\w*|mostr\w*|monster\w*)\b/.test(normalized)) score += 8;
     if (/\b(?:attacc\w*|attacco|colp\w*|ferit\w*|ferisc\w*|ferend\w*|ferir\w*|violent\w*|hurt\w*|injur\w*|wound\w*|attack\w*|ataque|ataca\w*|herid\w*|bless\w*|verletz\w*)\b/.test(normalized)) score += 10;
     if (/\b(?:affront\w*|face|faced|facing|confront\w*|enfrent\w*|affronter|begegnet)\b/.test(normalized)) score += 5;
     if (/\b(?:oscura|oscuro|dark|darkness|sombre|foresta|forest|bosque|wald)\b/.test(normalized) &&
-      /\b(?:pericol\w*|danger\w*|mostr\w*|monster\w*|troll|minacc\w*|threat\w*|attacc\w*|attack\w*|ostacol\w*|obstacle\w*)\b/.test(normalized)) score += 4;
+      /\b(?:pericol\w*|danger\w*|mostr\w*|monster\w*|minacc\w*|threat\w*|attacc\w*|attack\w*|ostacol\w*|obstacle\w*)\b/.test(normalized)) score += 4;
     return score;
   };
 
@@ -1946,9 +1945,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const normalized = normalizeEntityToken(text);
     if (!normalized) return 0;
     let score = 0;
-    if (/\b(?:fiore|flower|fleur|flor|acqua|agua|water|eau|sorgente|source|spring|fonte|tazza|cup|t[eé]|tea|infusione|tisana)\b/.test(normalized)) score += 8;
-    if (/\b(?:riemp|fill|filled|immerse|immerso|immersa|sumerg|mette|messo|messa|prepara|prepar|bollire|bolle|bolliva|boil|boiled|trasforma|trasformandosi|beve|bevve|bevuto|bere|drink|drank|drinks)\b/.test(normalized)) score += 10;
-    if (/\b(?:liber|voce|parlare|parla|parlò|speak|voice|voz|hablar|parler|guar|cura|heal|cure|potere|poteri)\b/.test(normalized)) score += 5;
+    if (/\b(?:prepara|prepar\w*|prepare\w*|usa|usato|use\w*|riemp\w*|fill\w*|immerg\w*|immerse\w*|trasform\w*|transform\w*|boll\w*|boil\w*|beve|beva|bevve|bevuto|bere|drink|drank|drinks)\b/.test(normalized)) score += 10;
+    if (/\b(?:guar\w*|cura\w*|heal\w*|cure\w*|potere|poteri|power|ability|capacit\w*)\b/.test(normalized)) score += 5;
     return score;
   };
 
@@ -2315,21 +2313,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const dictionaryLocationTokens = new Set([
-    "albero", "alberi", "bosco", "casa", "castello", "caverna", "foresta", "giardino", "luogo", "montagna", "regno", "sentiero", "sorgente", "strada", "villaggio",
+    "albero", "alberi", "bosco", "casa", "castello", "caverna", "foresta", "giardino", "luogo", "montagna", "regno", "sentiero", "strada", "villaggio",
     "cave", "castle", "forest", "garden", "kingdom", "mountain", "path", "road", "tree", "trees", "village", "wood", "woods",
     "arbol", "arboles", "árbol", "árboles", "bosque", "castillo", "cueva", "montana", "montaña", "pueblo", "reino",
     "arbre", "arbres", "bois", "chateau", "château", "foret", "forêt", "montagne", "royaume", "village",
   ]);
 
   const dictionaryObjectTokens = new Set([
-    "acqua", "bastone", "fiore", "fuoco", "libro", "pietra", "pietre", "roccia", "rocce", "spada", "tazza", "te", "tè",
-    "book", "cup", "fire", "flower", "rock", "rocks", "stone", "stones", "sword",
-    "flor", "fuego", "libro", "piedra", "piedras", "roca", "rocas", "taza",
-    "feu", "fleur", "livre", "pierre", "pierres", "roche", "roches", "tasse",
+    "fuoco", "libro", "pietra", "pietre", "roccia", "rocce", "spada",
+    "book", "fire", "rock", "rocks", "stone", "stones", "sword",
+    "fuego", "libro", "piedra", "piedras", "roca", "rocas",
+    "feu", "livre", "pierre", "pierres", "roche", "roches",
   ]);
 
   const dictionaryCreatureTokens = new Set([
-    "creatura", "mostro", "troll",
+    "creatura", "mostro",
     "creature", "monster",
     "criatura", "monstruo",
     "creature", "monstre",
@@ -3272,10 +3270,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     { type: "signals", patterns: [/\b(?:sorrise|annu[iì]|guard[oò]|smiled|nodded|looked|sonri[oó]|regarda)\b/] },
   ];
 
-  const narrativeObjectHints = [
-    "tazza", "tè", "tea", "acqua", "water", "sorgente", "source", "spring", "fiore", "flower", "fleur", "flor",
-    "bastone", "stick", "voce", "voice", "parola", "speech", "troll", "mostro", "monster",
-  ];
+  const narrativeObjectHints = [];
 
   const narrativeEventLexiconFor = (config = {}) => {
     const rules = customKnowledgeRules(config);
@@ -3302,10 +3297,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       entry.patterns.some((pattern) => pattern.test(normalized)) &&
       !(entry.negativePatterns || []).some((pattern) => pattern.test(normalized))
     );
-    if (match?.type === "fills" && (
-      /\b(?:musica|risate|speranza|gioia|paura|silenzio|sound|music|laughter|hope)\b/.test(normalized) ||
-      !/\b(?:tazza|cup|bicchiere|bottle|bottiglia|contenitore|acqua|water|tea|t[eé]|liquido|liquid)\b/.test(normalized)
-    )) return "";
+    if (match?.type === "fills" && /\b(?:musica|risate|speranza|gioia|paura|silenzio|sound|music|laughter|hope)\b/.test(normalized)) return "";
     if (match?.type === "heals" && /\b(?:potra|potrà|potrebbe|dovra|dovrà|pu[oò]|puo|can|could|will|would|pourra|pourrait)\b.{0,60}\b(?:guarire|guarito|heal|healed|cure|cured)\b/.test(normalized)) return "";
     if (match?.type === "speaks" && /\b(?:far|fare|modo\s+per|desideri|possa|potesse|riusc[iì]|riuscire)\b.{0,80}\b(?:parlare|speak|talk)\b/.test(normalized)) return "";
     return match?.type || "";
@@ -3406,7 +3398,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const isNarrativeLiquidOrContainer = (term = "") =>
-    /\b(?:acqua|water|agua|eau|t[eé]|tea|tazza|cup|bicchiere|glass|bottle|bottiglia|contenitore|container|sorgente|source|spring)\b/.test(normalizeEntityToken(term));
+    /\b(?:liquido|liquid|contenitore|container|recipient|vessel)\b/.test(normalizeEntityToken(term));
 
   const narrowNarrativeEventObjects = (sentence = "", eventType = "", objects = [], config = {}) => {
     const sorted = [...objects].sort((left, right) => narrativeObjectPosition(sentence, left) - narrativeObjectPosition(sentence, right));
@@ -3565,7 +3557,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       signals: 0.4,
     }[eventType] || Number(customRule?.confidence || 0) || 0.55;
     if (customRule?.confidence) score = Number(customRule.confidence);
-    if (/\b(?:tazza|cup|t[eé]|tea|acqua|water|fiore|flower|sorgente|source|voce|voice|guar|heal|cure)\b/.test(normalized)) score += 0.08;
+    if (/\b(?:guar\w*|heal\w*|cure\w*|successo|result|outcome|esito)\b/.test(normalized)) score += 0.08;
     return Math.min(0.98, score);
   };
 
@@ -4666,7 +4658,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (["contains", "context_for"].includes(relationType)) {
       if (relationType === "contains") {
         const container = [left, right].find((entity) =>
-          /\b(?:tazza|cup|calice|bicchiere|vaso|ciotola|contenitore|container|bowl|glass|chalice)\b/i.test(String(entity.label || ""))
+          /\b(?:contenitore|container|vessel|recipient)\b/i.test(String(entity.label || ""))
         );
         const contained = container ? [left, right].find((entity) => entity.id !== container.id) : null;
         if (container && contained) return { source: container, target: contained };
@@ -5209,12 +5201,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       {
         entityType: "object",
         source: "keyword-object",
-        pattern: new RegExp(`\\b((?:flor|flower|fiore|fleur|blume|fuente|source|spring|fontana|manantial|quelle|agua|water|acqua|eau|wasser|té|te|tea|tee|taza|cup|becher|tasse|antorcha|torch|torcia|fackel|palo|stick|bastone|stock)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
+        pattern: new RegExp(`\\b((?:antorcha|torch|torcia|fackel)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
       },
       {
         entityType: "creature",
         source: "keyword-creature",
-        pattern: /\b(troll|monstruo|monster|mostro|ungeheuer|monster|creature|kreatur|criatura|cervatillo|fawn|cerbiatto|rehkitz|bestias salvajes|wild beasts|bêtes sauvages|wilde tiere)\b/giu,
+        pattern: /\b(monstruo|monster|mostro|ungeheuer|creature|kreatur|criatura|cervatillo|fawn|cerbiatto|rehkitz|bestias salvajes|wild beasts|bêtes sauvages|wilde tiere)\b/giu,
       },
       {
         entityType: "concept",
@@ -5925,7 +5917,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!cleanText || !patientLabel || !healerLabel) return null;
     if (!new RegExp(`\\b${escapedRegExp(patientLabel)}\\b`).test(cleanText)) return null;
     if (!new RegExp(`\\b${escapedRegExp(healerLabel)}\\b`).test(cleanText)) return null;
-    const healerLooksHealing = /\b(?:acqua|agua|water|eau|fiore|flower|fleur|sorgente|source|fonte|rimedio|remede|remède|cura|tazza|cup|infusione|tisana|tea|t[eé])\b/.test(healerLabel);
+    const healerLooksHealing = ["object", "concept"].includes(String(healer.entityType || ""));
     if (!healerLooksHealing) return null;
     const hasHealingCue = /\b(?:guarire|guari|guarì|guarisce|guarito|cura|curare|heal|healed|heals|cure|cured|potere|poteri|poder|pouvoir|recupera|recuperò|recupero|ritrova|ritrovò|riacquista|riacquistò|torn[oò] a parlare|pouvoir de gu[eé]rir)\b/.test(cleanText);
     const hasSpeechRecoveryCue = /\b(?:voce|parlare|parlo|parlò|parla|parlava|speak|speaks|spoke|voice|talk|voz|hablar|parler)\b/.test(cleanText);
@@ -5935,7 +5927,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const directHealingActionPatterns = [
       /\b(?:beve|bevve|bevuto|bere|drink|drank|drinks|take|takes|took|prende|prese|preso|riceve|ricevette|receives|received)\b/,
       /\b(?:prepara|prepar[oò]|preparare|trasforma|trasform[oò]|immerge|immerse|immerso|immergere|riempie|riemp[iì]|fills|filled)\b/,
-      /\b(?:tazza|cup|t[eé]|tea|infusione|tisana)\b/,
     ];
     const generalAftermathPatterns = [
       /\b(?:chiunque|anyone|whoever|qualunque|da quel momento|from then|notizia|possibilit[aà]|same possibility|possedeva il potere|possessed the power|potere di guarire)\b/,
@@ -5951,7 +5942,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const hasDirectAction = directHealingActionPatterns.some((pattern) => pattern.test(context));
         if (!hasDirectAction) return;
         const onlyGeneralAftermath = generalAftermathPatterns.some((pattern) => pattern.test(context)) &&
-          !/\b(?:beve|bevve|bevuto|bere|drink|drank|drinks|tazza|cup|t[eé]|tea|prese|prende|took|takes)\b/.test(context);
+          !/\b(?:beve|bevve|bevuto|bere|drink|drank|drinks|prese|prende|took|takes)\b/.test(context);
         if (onlyGeneralAftermath) return;
         if (!best || distance < best.distance) best = { patientPosition, healerPosition, distance };
       });
@@ -5977,12 +5968,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!cleanText || !mechanismLabel || !outcomeLabel) return null;
     if (!new RegExp(`\\b${escapedRegExp(mechanismLabel)}\\b`).test(cleanText)) return null;
     if (!new RegExp(`\\b${escapedRegExp(outcomeLabel)}\\b`).test(cleanText)) return null;
-    const mechanismLooksHealing = /\b(?:acqua|agua|water|eau|fiore|flower|fleur|sorgente|source|fonte|rimedio|remede|remède|cura|tazza|cup|infusione|tisana|tea|t[eé])\b/.test(mechanismLabel);
+    const mechanismLooksHealing = ["object", "concept"].includes(String(mechanism.entityType || ""));
     const outcomeLooksSpeech = semanticSpeechConcept(outcome) ||
       /\b(?:voce|parola|parlare|speech|voice|speaking|speak|voz|habla|parole)\b/.test(outcomeLabel);
     if (!mechanismLooksHealing || !outcomeLooksSpeech) return null;
     const hasHealingCue = /\b(?:guarire|guari|guarì|guarisce|guarito|cura|curare|heal|healed|heals|cure|cured|potere|poteri|poder|pouvoir|magica|magico|recupera|recuperò|ritrova|ritrovò|riacquista|riacquistò)\b/.test(cleanText);
-    const hasPreparationCue = /\b(?:immerse|immerso|immersa|immergere|mise|messo|messa|mette|mettere|prepara|preparò|preparare|beve|bevve|bevuto|bere|drink|drank|drinks|cup|tazza|sorgente|source|spring)\b/.test(cleanText);
+    const hasPreparationCue = /\b(?:immerse|immerso|immersa|immergere|mise|messo|messa|mette|mettere|prepara|preparò|preparare|beve|bevve|bevuto|bere|drink|drank|drinks)\b/.test(cleanText);
     const hasSpeechCue = /\b(?:voce|parlare|parlo|parlò|parla|parlava|speak|speaks|spoke|voice|talk|voz|hablar|parler)\b/.test(cleanText);
     if (!hasHealingCue || !hasSpeechCue || !hasPreparationCue) return null;
     const mechanismPositions = [...cleanText.matchAll(new RegExp(`\\b${escapedRegExp(mechanismLabel)}\\b`, "g"))].map((match) => match.index || 0);
@@ -6016,9 +6007,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const localEntities = entities.filter((entity) => semanticEntityAppearsInText(entity, text));
     const people = localEntities.filter((entity) => entity.entityType === "proper-noun" && !semanticNonPersonProperNoun(entity));
     const healingObjectsRaw = localEntities.filter((entity) =>
-      entity.entityType === "object" &&
-      !semanticWeakEntity(entity) &&
-      /\b(?:acqua|agua|water|eau|fiore|flower|fleur|sorgente|source|fonte|rimedio|remede|remède|cura|tazza|cup|infusione|tisana|tea|t[eé])\b/.test(normalizeEntityToken(entity.label || ""))
+      ["object", "concept"].includes(String(entity.entityType || "")) &&
+      !semanticWeakEntity(entity)
     );
     const healingObjects = healingObjectsRaw
       .sort((a, b) => normalizeEntityToken(b.label || "").length - normalizeEntityToken(a.label || "").length)
@@ -6185,7 +6175,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const attemptedHelpPatterns = [/\b(?:tried|tries|trying|attempted|cerca(?:va)?|tenta(?:va)?|prova(?:va)?|intenta(?:ba)?|essaya(?:it)?|tent(?:a|ait|er)|versucht(?:e)?)\b.{0,80}\b(?:help|aiut|ayud|aider|aid(?:e|er)?|helf)\b/];
     const helpPatterns = [/\b(?:helped|helps|help|aiuta|aiuto|aiut[oò]|ayuda|ayud[oó]|aide|aida|aid(?:e|er)?|hilft|half)\b/];
     const healPatterns = [/\b(?:heal|healed|heals|cure|cured|remede|remède|gueri|gu[eé]ri|guerir|gu[eé]rir|gu[eé]rison|cura|cur[oò]|guarisce|guar[iì]|guarito|sana|san[oó])\b/];
-    const healingObjectPatterns = [/\b(?:acqua|agua|water|eau|fiore|fleur|flower|infusione|tisana|tea|t[eé]|remede|remède|rimedio|cura|fonte|source|sorgente)\b/];
+    const healingObjectPatterns = [/\b(?:remede|remède|rimedio|cura|cure|solution|soluzione)\b/];
     const weaponObjectPatterns = [/\b(?:bastone|stick|palo|spada|sword|arma|weapon|pietra|stone)\b/];
     const speechPatterns = [/\b(?:cannot|can t|could not|unable|mute|muto|muta|non poteva|non riesce|sin voz|no podia|no podia|ne pouvait pas|incapable)\b.{0,80}\b(?:speak|talk|parlare|parla|hablar|parler|sprechen|voce|voz)\b/];
     const propertyPatterns = [/\b(?:has|had|have|property|quality|possesses|possessed|possiede|possedeva|proprieta|proprietà|poder|pouvoir|potere|capacit[eé]|capacidad)\b/];
@@ -8211,9 +8201,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ...(item.roles?.object || []),
       ...(item.roles?.destination || []),
       useRuleMechanismExpansion && item.eventType === "drinks" ? "beve bevve drink drinks" : "",
-      useRuleMechanismExpansion && item.eventType === "fills" ? "riempie riempirono fill filled tazza cup" : "",
-      useRuleMechanismExpansion && item.eventType === "immerses" ? "immerge immersero immerse fiore flower" : "",
-      useRuleMechanismExpansion && item.eventType === "transforms" ? "trasforma trasformandosi bollire tè tea" : "",
+      useRuleMechanismExpansion && item.eventType === "fills" ? "riempie riempirono fill filled" : "",
+      useRuleMechanismExpansion && item.eventType === "immerses" ? "immerge immersero immerse" : "",
+      useRuleMechanismExpansion && item.eventType === "transforms" ? "trasforma trasformandosi bollire boil boiled" : "",
       useRuleMechanismExpansion && item.eventType === "speaks" ? "parla parlare parola voce grido speak voice" : "",
       ]),
     ]
@@ -8223,14 +8213,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((token) => mechanismSourceTokens.has(token) || queryTokens.includes(token))
       .filter((token) => !seedLabels.some((label) => label === token)));
     const ruleMechanismOperationalTerms = useRuleMechanismExpansion ? [
-      "fiore", "flower", "fleur", "flor",
-      "acqua", "water", "eau", "agua",
-      "sorgente", "source", "spring", "fonte",
-      "tazza", "cup", "te", "tea", "infusione", "tisana",
       "beve", "beva", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
       "riempie", "riempirono", "fill", "filled",
       "immerge", "immersero", "immerse", "immerso", "immersa",
-      "trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled",
+      "trasforma", "trasformandosi", "bollire", "bolle", "boil", "boiled",
     ] : [];
     const mechanismOperationalTerms = new Set([
       ...(customRulesMode(rulesConfig) === "replace" && customMechanismTerms.operational.length ? [] : ruleMechanismOperationalTerms),
@@ -8289,7 +8275,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const highMatch = chunkScoreById.has(candidate.chunk?.id);
       const normalizedText = normalizeEntityToken(text);
       const instructionCue = /\b(?:importante|dovr|deve|devono|prepar|using|use|must|should|required|requires|needed|necessar|soluzione|solution|trovare|found|find)\b/.test(normalizedText);
-      const outcomeSuccessCue = /\b(?:grido|usc[iì]|voglio parlare|pronunci|rison|risuon|finally spoke|began to speak|voice rang|spoke|parola dopo)\b/.test(normalizedText);
+      const outcomeSuccessCue = /\b(?:successo|riesc\w*|risultato|esito|finally|began|completed|completato|otten\w*)\b/.test(normalizedText);
       const protectedKind = operationalMatches.length >= 2
         ? (instructionCue ? "setup" : "operation")
         : outcomeMatches.length >= 2 && healingCueScore >= 13 && outcomeSuccessCue
@@ -8371,7 +8357,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const snippetLabels = intent.source
       ? unique([...matchedLabels, ...sourceExpansionTokens])
       : intent.healing || intent.process || intent.cause
-      ? unique([...mechanismEvidenceTerms, "tazza", "tè", "tea", "fiore", "acqua", "sorgente", "beve", "bevve", "drink", ...matchedLabels])
+      ? unique([...mechanismEvidenceTerms, ...matchedLabels])
       : matchedLabels;
     const evidenceSnippetMax = intent.source ? 1600 : 900;
     const mechanismPriorityEvidence = autoAdjacentProtectedEvidence && !preserveDocumentOrder && evidenceMode !== "full_ordered";
@@ -8886,17 +8872,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const trimMechanismSourceEvidence = (text = "") => {
     const value = String(text || "").trim();
     if (!value) return "";
-    const cutMarkers = [
-      "\nDa quel momento",
-      "\nCon il cuore pieno di gioia",
-      "\nQuando tornarono",
-      "\nIn suo onore",
-    ];
-    const cutIndex = cutMarkers
-      .map((marker) => value.indexOf(marker))
-      .filter((index) => index > 0)
-      .sort((left, right) => left - right)[0];
-    return cutIndex ? value.slice(0, cutIndex).trim() : value;
+    return value;
   };
 
   const evidenceSentenceBoundaryIndex = (text = "", maxChars = 1800) => {
@@ -8911,9 +8887,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const value = String(text || "").trim();
     if (!value) return "";
     if (/^(?:[—«"“]|[A-ZÀ-Ý0-9])/u.test(value)) return value;
-    const cue = value.search(/(?:^|\n)\s*(?:[—«"“]|L['’]anziano\b|L['’]anziana\b|Juliette\b|Liber\b|Commosso\b|Un giorno\b|Quando\b|Poi\b|Infine\b)/u);
+    const cue = value.search(/(?:^|\n)\s*(?:[—«"“]|\p{Lu}[\p{L}'’-]*\b)/u);
     if (cue > 0 && cue <= 260) return value.slice(cue).trim();
-    const sentence = value.search(/[.!?;:»”]\s+(?:[—«"“A-ZÀ-Ý]|L['’]anziano\b|Juliette\b|Liber\b)/u);
+    const sentence = value.search(/[.!?;:»”]\s+(?:[—«"“]|\p{Lu})/u);
     if (sentence > 0 && sentence <= 260) return value.slice(sentence + 1).trim();
     return value;
   };
@@ -9059,16 +9035,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const reasoningMechanismOperationalEvidence = (text = "") => {
     const normalized = normalizeEntityToken(text);
     if (!normalized) return false;
-    const preparationOrUse = /\b(?:tazza|cup|t[eé]|tea|infusione|tisana|beve|beva|bevve|bevuto|bere|drink|drank|drinks|riemp|fill|filled|bollire|bolle|bolliva|boil|boiled|trasforma|trasformandosi|rosso|lava)\b/.test(normalized);
-    if (/\b(?:secondo fiore|second flower|rimasto un secondo)\b/.test(normalized) && !preparationOrUse) return false;
-    const strongOperation = /\b(?:tazza|cup|t[eé]|tea|infusione|tisana|beve|beva|bevve|bevuto|bere|drink|drank|drinks|riemp|fill|filled|bollire|bolle|bolliva|boil|boiled|trasforma|trasformandosi|rosso|lava)\b/.test(normalized);
+    const strongOperation = /\b(?:use|using|used|uses|usa|usato|prepara|preparare|prepare|prepared|riemp\w*|fill\w*|immerg\w*|immerse\w*|trasform\w*|transform\w*|boll\w*|boil\w*|beve|beva|bevve|bevuto|bere|drink|drank|drinks)\b/.test(normalized);
     const materialCueCount = [
-      /\b(?:fiore|flower|fleur|flor)\b/.test(normalized),
-      /\b(?:acqua|agua|water|eau|sorgente|source|spring|fonte)\b/.test(normalized),
-      /\b(?:immerge|immersero|immerse|immerso|immersa)\b/.test(normalized),
-      /\b(?:voce|parlare|parla|grido|speak|voice)\b/.test(normalized),
+      /\b(?:source|material|ingredient|strumento|tool|mezzo|object|oggetto|elemento|substance|sostanza)\b/.test(normalized),
+      /\b(?:outcome|result|risultato|esito|effect|effetto|successo|riesce|finally)\b/.test(normalized),
+      /\b(?:process|processo|passaggio|step|method|metodo|mechanism|meccanismo)\b/.test(normalized),
     ].filter(Boolean).length;
-    return strongOperation || materialCueCount >= 3;
+    return strongOperation || materialCueCount >= 2;
   };
 
   const reasoningMechanismFocusSupported = ({ answerFocus = "", primaryEvidenceText = "", selectedEvidenceQuotes = [] } = {}) => {
@@ -9076,10 +9049,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!focus) return false;
     const evidenceText = [primaryEvidenceText, ...selectedEvidenceQuotes].join("\n\n");
     if (!reasoningMechanismOperationalEvidence(evidenceText)) return false;
-    if (/\b(?:anziano|anziana|old man|old woman|elder|luogo pericoloso|viaggio pieno di pericoli|secondo fiore|second flower)\b/i.test(focus) &&
-      !reasoningMechanismOperationalEvidence(focus)) {
-      return false;
-    }
     return true;
   };
 

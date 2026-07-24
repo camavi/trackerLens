@@ -291,6 +291,9 @@ window.TrackerLensAgentRuntime = (() => {
     return `${text.slice(0, Math.max(0, max)).trim()}...`;
   };
 
+  const uniqueStrings = (values = []) =>
+    [...new Set(values.filter(Boolean).map(String))];
+
   const normalizeSearchText = (value = "") =>
     String(value || "")
       .normalize("NFD")
@@ -307,40 +310,30 @@ window.TrackerLensAgentRuntime = (() => {
 
   const expandedQueryTokens = (query = "") => {
     const tokens = queryTokens(query);
-    const normalized = normalizeSearchText(query);
-    const expansions = [];
-    const add = (...items) => items.forEach((item) => {
-      const token = normalizeSearchText(item);
-      if (token && token.length >= 2) expansions.push(token);
-    });
-    if (/\b(?:nemic\w*|ennemico|enemy|enem\w*|mostr\w*|monster\w*|troll|threat\w*|minacc\w*|pericol\w*|danger\w*)\b/.test(normalized)) {
-      add("nemico", "ennemico", "enemy", "mostro", "monster", "troll", "minaccia", "pericolo", "attacca", "attacco", "ferisce", "confronta", "affronta");
-    }
-    if (/\b(?:trova\w*|trovato|found|find\w*|discover\w*|incontra\w*|encounter\w*)\b/.test(normalized)) {
-      add("trova", "trovato", "incontra", "incontrano", "encounters", "found");
-    }
-    if (/\b(?:attacc\w*|ferisc\w*|ferit\w*|hurt\w*|attack\w*)\b/.test(normalized)) {
-      add("attacca", "attacco", "ferisce", "ferito", "hurt", "attack", "troll", "mostro");
-    }
-    return [...new Set([...tokens, ...expansions])].slice(0, 48);
+    return tokens.slice(0, 48);
   };
 
   const scopedDocumentRecords = async ({ workspaceId = "", node = {}, args = {} } = {}) => {
     const stores = knowledgeStores();
     const config = nodeConfig(node);
-    const documents = (await readKnowledgeStore(stores.documents))
+    const argDocumentId = /^kdoc_/i.test(String(args.documentId || "")) ? String(args.documentId || "") : "";
+    const configDocumentId = /^kdoc_/i.test(String(config.documentId || "")) ? String(config.documentId || "") : "";
+    const collectionId = String(args.collectionId || config.collectionId || "").trim();
+    const nodeSourceIds = new Set([node.id, `upload_${node.id}`, `live_${node.id}`].filter(Boolean));
+    const allDocuments = (await readKnowledgeStore(stores.documents))
       .filter((document) => (document.workspaceId || "workspace_global") === workspaceId)
-      .filter((document) => !args.documentId || document.id === args.documentId)
-      .filter((document) => !config.documentId || document.id === config.documentId)
-      .filter((document) => !config.collectionId || document.metadata?.collectionId === config.collectionId)
-      .filter((document) =>
-        document.sourceId === node.id ||
-        document.metadata?.nodeId === node.id ||
-        config.documentId === document.id ||
-        (config.collectionId && document.metadata?.collectionId === config.collectionId)
-      )
+      .filter((document) => !argDocumentId || document.id === argDocumentId)
+      .filter((document) => !configDocumentId || document.id === configDocumentId)
+      .filter((document) => !collectionId || document.metadata?.collectionId === collectionId)
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    return documents;
+    const documents = allDocuments
+      .filter((document) =>
+        nodeSourceIds.has(document.sourceId) ||
+        document.metadata?.nodeId === node.id ||
+        configDocumentId === document.id ||
+        (collectionId && document.metadata?.collectionId === collectionId)
+      );
+    return documents.length ? documents : allDocuments;
   };
 
   const scopedChunkRecords = async ({ workspaceId = "", node = {}, args = {}, documents = [] } = {}) => {
@@ -458,7 +451,7 @@ window.TrackerLensAgentRuntime = (() => {
     ].filter(Boolean).join(" "), 1200),
   });
 
-  const toolEnvelope = ({ ok = true, tool = "", node = {}, status = "ready", answer = "", items = [], evidence = [], confidence = 0, limitations = [], usage = {} } = {}) => ({
+  const toolEnvelope = ({ ok = true, tool = "", node = {}, status = "ready", answer = "", items = [], evidence = [], confidence = 0, limitations = [], usage = {}, debug = {} } = {}) => ({
     ok,
     tool,
     nodeId: node.id || "",
@@ -469,11 +462,23 @@ window.TrackerLensAgentRuntime = (() => {
     confidence: Math.max(0, Math.min(1, Number(confidence || 0))),
     limitations,
     usage,
+    debug,
   });
 
   const runDocumentTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
     const documents = await scopedDocumentRecords({ workspaceId, node, args });
     const chunks = await scopedChunkRecords({ workspaceId, node, args, documents });
+    const scopeDebug = {
+      documentCount: documents.length,
+      chunkCount: chunks.length,
+      documentIds: documents.map((document) => document.id || "").filter(Boolean).slice(0, 12),
+      chunkIds: chunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 12),
+      collectionIds: uniqueStrings(documents.map((document) => document.metadata?.collectionId || "").filter(Boolean)).slice(0, 8),
+      argsDocumentId: args.documentId || "",
+      argsCollectionId: args.collectionId || "",
+      configDocumentId: nodeConfig(node).documentId || "",
+      configCollectionId: nodeConfig(node).collectionId || "",
+    };
     if (tool === "getDocumentInfo") {
       const chunkCountByDocument = chunks.reduce((map, chunk) => map.set(chunk.documentId, (map.get(chunk.documentId) || 0) + 1), new Map());
       return toolEnvelope({
@@ -492,15 +497,22 @@ window.TrackerLensAgentRuntime = (() => {
         })),
         confidence: documents.length ? 0.95 : 0,
         limitations: documents.length ? [] : ["No scoped documents found for this connected node."],
+        debug: scopeDebug,
       });
     }
     if (tool === "getFullDocument") {
       const maxChars = Math.max(1000, Math.min(120000, Number(args.maxChars || 24000)));
       const document = documents.find((item) => !args.documentId || item.id === args.documentId) || documents[documents.length - 1] || null;
       if (!document) {
-        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["No scoped document found."], confidence: 0 });
+        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["No scoped document found."], confidence: 0, debug: scopeDebug });
       }
-      const text = String(document.text || "");
+      const documentChunks = chunks
+        .filter((chunk) => chunk.documentId === document.id)
+        .sort((a, b) => Number(a.ordinal ?? a.index ?? 0) - Number(b.ordinal ?? b.index ?? 0));
+      const chunkText = documentChunks.map((chunk) => String(chunk.text || "").trim()).filter(Boolean).join("\n\n");
+      const storedText = String(document.text || "");
+      const text = chunkText.length > storedText.length ? chunkText : storedText;
+      const sourceMode = chunkText.length > storedText.length ? "chunks" : "document";
       const clipped = text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
       return toolEnvelope({
         tool,
@@ -510,12 +522,26 @@ window.TrackerLensAgentRuntime = (() => {
         evidence: [{ sourceType: "document", documentId: document.id || "", chunkId: "", ordinal: null, text: clipped }],
         confidence: text ? 0.95 : 0.2,
         limitations: text.length > maxChars ? [`Document truncated to ${maxChars} characters.`] : [],
+        debug: {
+          ...scopeDebug,
+          selectedDocumentId: document.id || "",
+          sourceMode,
+          selectedChunkCount: documentChunks.length,
+          selectedChunkIds: documentChunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 24),
+          selectedOrdinals: documentChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
+          storedDocumentChars: storedText.length,
+          reconstructedChunkChars: chunkText.length,
+          fullDocumentChars: text.length,
+          returnedChars: clipped.length,
+          truncated: text.length > maxChars,
+          maxChars,
+        },
       });
     }
     if (tool === "searchChunks") {
       const tokens = expandedQueryTokens(args.query || "");
       if (!tokens.length) {
-        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing query tokens."], confidence: 0 });
+        return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing query tokens."], confidence: 0, debug: scopeDebug });
       }
       const limit = Math.max(1, Math.min(24, Number(args.limit || 6)));
       const candidates = chunks.length
@@ -546,6 +572,16 @@ window.TrackerLensAgentRuntime = (() => {
         evidence,
         confidence: ranked.length ? Math.min(0.95, 0.45 + ranked[0].score * 0.08) : 0,
         limitations: ranked.length ? [] : ["No matching chunks found. Agent should try getFullDocument or a broader query if the answer requires source evidence."],
+        debug: {
+          ...scopeDebug,
+          queryTokens: tokens,
+          candidateCount: candidates.length,
+          selectedChunkCount: ranked.length,
+          selectedChunkIds: ranked.map((item) => item.chunk.id || "").filter(Boolean).slice(0, 24),
+          selectedOrdinals: ranked.map((item) => item.chunk.ordinal ?? item.chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
+          selectedDocumentIds: uniqueStrings(ranked.map((item) => item.chunk.documentId || "").filter(Boolean)).slice(0, 12),
+          maxChars: Math.max(400, Math.min(2400, Number(args.maxChars || 900))),
+        },
       });
     }
     if (tool === "getChunkWindow") {
@@ -554,7 +590,7 @@ window.TrackerLensAgentRuntime = (() => {
         ? chunks.find((chunk) => chunk.id === args.chunkId)
         : chunks.find((chunk) => Number(chunk.ordinal ?? chunk.index ?? -1) === Number(args.ordinal));
       if (!target) {
-        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["Target chunk not found in node scope."], confidence: 0 });
+        return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["Target chunk not found in node scope."], confidence: 0, debug: scopeDebug });
       }
       const targetOrdinal = Number(target.ordinal ?? target.index ?? 0);
       const windowChunks = chunks
@@ -572,6 +608,13 @@ window.TrackerLensAgentRuntime = (() => {
         })),
         evidence: windowChunks.map((chunk) => evidenceFromChunk(chunk)),
         confidence: windowChunks.length ? 0.95 : 0,
+        debug: {
+          ...scopeDebug,
+          selectedChunkCount: windowChunks.length,
+          selectedChunkIds: windowChunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 24),
+          selectedOrdinals: windowChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
+          selectedDocumentIds: uniqueStrings(windowChunks.map((chunk) => chunk.documentId || "").filter(Boolean)).slice(0, 12),
+        },
       });
     }
     return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported document tool: ${tool}`], confidence: 0 });
@@ -874,15 +917,27 @@ window.TrackerLensAgentRuntime = (() => {
     if (tool === "getGraphEvidence") {
       const tokens = expandedQueryTokens(args.query || "");
       const selectedRelations = relations
-        .filter((relation) => !args.relationId || relation.id === args.relationId)
-        .filter((relation) => {
+        .map((relation) => ({
+          relation,
+          score: overlapScore(relationSearchText(relation, entityById.get(relation.sourceEntityId || ""), entityById.get(relation.targetEntityId || "")), tokens) + Number(relation.confidence || 0),
+        }))
+        .filter(({ relation }) => !args.relationId || relation.id === args.relationId)
+        .filter(({ relation, score }) => {
           if (args.entityId && relation.sourceEntityId !== args.entityId && relation.targetEntityId !== args.entityId) return false;
-          return !tokens.length || overlapScore(relationSearchText(relation, entityById.get(relation.sourceEntityId || ""), entityById.get(relation.targetEntityId || "")), tokens) > 0;
+          return !tokens.length || score > Number(relation.confidence || 0);
         })
+        .sort((left, right) => right.score - left.score || String(left.relation.id || "").localeCompare(String(right.relation.id || "")))
+        .map(({ relation }) => relation)
         .slice(0, limit);
       const selectedEntities = entities
-        .filter((entity) => !args.entityId || entity.id === args.entityId)
-        .filter((entity) => !tokens.length || overlapScore([entity.label, entity.entityType, evidenceText(entity.metadata?.ai?.evidence)].join(" "), tokens) > 0)
+        .map((entity) => ({
+          entity,
+          score: overlapScore([entity.label, entity.entityType, evidenceText(entity.metadata?.ai?.evidence)].join(" "), tokens) + Number(entity.confidence || 0),
+        }))
+        .filter(({ entity }) => !args.entityId || entity.id === args.entityId)
+        .filter(({ entity, score }) => !tokens.length || score > Number(entity.confidence || 0))
+        .sort((left, right) => right.score - left.score || String(left.entity.label || "").localeCompare(String(right.entity.label || "")))
+        .map(({ entity }) => entity)
         .slice(0, Math.max(0, limit - selectedRelations.length));
       const relationEvidence = selectedRelations.map((relation) => evidenceFromRelation(relation, chunkById.get(relation.chunkId || ""))).filter((item) => item.text);
       const entityEvidence = selectedEntities.map((entity) => {
@@ -1056,31 +1111,33 @@ window.TrackerLensAgentRuntime = (() => {
     };
   };
 
+  const dependencyLinkType = (dependency = {}) =>
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || dependency.linkType || "data").toLowerCase();
+
+  const isToolAccessDependency = (dependency = {}) =>
+    dependencyLinkType(dependency) === "tool-access" ||
+    ["agent_tools", "agent.tools", "agent-tools"].includes(String(dependency.channel || "").toLowerCase()) ||
+    ["agent_tools", "agent.tools", "agent-tools"].includes(String(dependency.metadata?.sourcePort || "").toLowerCase()) ||
+    ["agent_tools", "agent.tools", "agent-tools"].includes(String(dependency.metadata?.targetPort || "").toLowerCase());
+
   const connectedNodeIds = ({ dependencies = [], nodeId = "" } = {}) => {
     const relatedIds = new Set();
     if (!nodeId) return relatedIds;
-    const adjacency = new Map();
-    dependencies
-      .filter((dependency) => dependency.status !== "disabled")
-      .forEach((dependency) => {
-        const source = dependency.sourceNodeId || "";
-        const target = dependency.targetNodeId || "";
-        if (!source || !target) return;
-        if (!adjacency.has(source)) adjacency.set(source, new Set());
-        if (!adjacency.has(target)) adjacency.set(target, new Set());
-        adjacency.get(source).add(target);
-        adjacency.get(target).add(source);
-      });
-    const queue = [nodeId];
+    const active = dependencies.filter((dependency) => dependency.status !== "disabled");
+    const directToolAccess = active.filter((dependency) =>
+      isToolAccessDependency(dependency) &&
+      (dependency.sourceNodeId === nodeId || dependency.targetNodeId === nodeId)
+    );
+    const direct = (directToolAccess.length ? directToolAccess : active.filter((dependency) =>
+      dependency.sourceNodeId === nodeId || dependency.targetNodeId === nodeId
+    ));
     relatedIds.add(nodeId);
-    while (queue.length) {
-      const current = queue.shift();
-      (adjacency.get(current) || []).forEach((next) => {
-        if (relatedIds.has(next)) return;
-        relatedIds.add(next);
-        queue.push(next);
-      });
-    }
+    direct.forEach((dependency) => {
+      const source = dependency.sourceNodeId || "";
+      const target = dependency.targetNodeId || "";
+      const next = source === nodeId ? target : source;
+      if (next) relatedIds.add(next);
+    });
     return relatedIds;
   };
 
@@ -1134,30 +1191,7 @@ window.TrackerLensAgentRuntime = (() => {
 
   const targetAllowedForAgent = ({ dependencies = [], agentNodeId = "", targetNodeId = "" } = {}) => {
     if (!agentNodeId || agentNodeId === targetNodeId) return true;
-    const adjacency = new Map();
-    dependencies
-      .filter((dependency) => dependency.status !== "disabled")
-      .forEach((dependency) => {
-        const source = dependency.sourceNodeId || "";
-        const target = dependency.targetNodeId || "";
-        if (!source || !target) return;
-        if (!adjacency.has(source)) adjacency.set(source, new Set());
-        if (!adjacency.has(target)) adjacency.set(target, new Set());
-        adjacency.get(source).add(target);
-        adjacency.get(target).add(source);
-      });
-    const seen = new Set([agentNodeId]);
-    const queue = [agentNodeId];
-    while (queue.length) {
-      const current = queue.shift();
-      if (current === targetNodeId) return true;
-      (adjacency.get(current) || []).forEach((next) => {
-        if (seen.has(next)) return;
-        seen.add(next);
-        queue.push(next);
-      });
-    }
-    return false;
+    return connectedNodeIds({ dependencies, nodeId: agentNodeId }).has(targetNodeId);
   };
 
   const callConnectedNodeTool = async ({ workspaceId = "", nodeId = "", tool = "", toolName = "", args = {}, agentNodeId = "", runtime = null } = {}) => {

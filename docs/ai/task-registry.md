@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-23.
+Last updated: 2026-07-24.
 
 ## Active
 
@@ -23,6 +23,8 @@ Current sub-steps:
 - Phase 4 verification trace/debug: UI base started. Flow inspector now has an `Agent Tools` panel that lists connected-chain manifests, runs read-only probe calls and displays the latest tool result envelope. `tool-access` links are visually distinct and do not act as normal data/event subscriptions. Flow Map now includes an `Agent Tools Test` sample for the simplified topology, and the sample/editor now preserve the selected real local model instead of executing Knowledge AI nodes with the `local-model` placeholder.
 - Runtime ownership follow-up: Flow Map now stops page runtime subscriptions before starting the background worker and stops the worker before starting page runtimes/test execution, avoiding duplicate LM Studio POSTs from page+worker processing the same Knowledge event.
 - LM Studio JSON-mode follow-up: Knowledge AI nodes now omit `response_format: json_object` for LM Studio unless explicitly forced, preventing the previous first POST with JSON mode followed by a fallback POST without JSON mode.
+- AI Agent connected-tool cleanup follow-up: hidden story-specific read-tool query rewrites and mechanism answer-shaping examples have been rolled back. The direct AI Agent planner keeps generic connected-tool calls, and the only remaining LLM retry is a generic short final-answer pass when LM Studio thinking output fills the completion budget before producing `message.content`.
+- Agent connected-tool scope fix: `inspectConnectedTools` and `callConnectedNodeTool` now authorize direct Agent connections only, preferring explicit `tool-access` links when present. Agent QA with only `Graph Document Store` connected can no longer traverse the Document -> Chunk -> Dictionary/Event/Entity/Graph component. Document tools now report scoped document/chunk debug counts, `getFullDocument` rebuilds source text from ordered chunks when the stored document record is shorter than the chunk set, and AI Agent prompt rendering now keeps the larger full-document evidence window.
 - Phase 5 MCP adapter: pending. Expose selected connected node tools through a local MCP server adapter and import external MCP tools as controlled observations through a TL MCP client node/connector.
 
 ### TASK-027: Knowledge Runtime
@@ -363,7 +365,7 @@ Main files:
 - Knowledge Event Builder LLM zero-accepted retry: pure LLM Event extraction now continues to compact/micro/chunk provider prompts when the first provider response yields only rejected candidates after grounding/type validation, instead of returning `eventCount: 0` with `status=ready`.
 - Knowledge Event Builder LLM accumulation fix: pure LLM Event extraction now accumulates provider events across global and per-chunk attempts instead of returning after the first valid event, preserving LLM ownership while covering the full document.
 - LM Studio context budget: local LM Studio Knowledge calls now cap prompt chunks/chars, repair prompt size and completion token requests against a conservative default context window, preventing `Context size has been exceeded` / `Channel Error` failures on Gemma-style local models.
-- Agent tool query expansion: read-only connected tools now expand enemy/danger queries to related source terms such as troll/monster/attack before matching stores, and AI Agent tool planning uses a focused dictionary term plus a larger default observation limit.
+- Agent tool hidden-expansion rollback: read-only connected tools no longer inject enemy/danger sample terms before matching stores. AI Agent tool planning remains connected-node and provider-driven, with heuristic selection only as a generic fallback.
 - AI Agent LLM planner: before final answer composition, AI Agent now uses the configured provider to produce a bounded JSON tool plan over connected read-only node tools. Runtime validation prevents unconnected or mutating calls, and heuristic tool selection remains as fallback.
 - Runtime graph foundation.
 - Event bus and channel registry.

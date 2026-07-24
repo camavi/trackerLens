@@ -1092,40 +1092,21 @@ const knowledgeCustomRulesDefaults = (subtype = "") => {
   ];
   const mechanismTerms = {
     operational: [
-      "fiore", "flower", "fleur", "flor",
-      "acqua", "water", "eau", "agua",
-      "sorgente", "source", "spring", "fonte",
-      "tazza", "cup", "te", "tea", "infusione", "tisana",
       "beve", "bevve", "bevuto", "bere", "drink", "drank", "drinks",
       "riempie", "fill", "filled",
       "immerge", "immerse", "immerso", "immersa",
     ],
-    transformation: ["trasforma", "trasformandosi", "bollire", "bolle", "rosso", "lava", "boil", "boiled"],
+    transformation: ["trasforma", "trasformandosi", "bollire", "bolle", "boil", "boiled"],
     outcome: ["parla", "parlare", "parola", "voce", "grido", "speak", "voice", "word"],
     downrank: [],
     terms: ["cura", "guarire", "guarito", "heal", "healed", "processo", "metodo", "cause", "outcome"],
   };
   const dictionaryTypes = {
-    location: [
-      "albero", "alberi", "bosco", "casa", "castello", "caverna", "foresta", "giardino", "luogo", "montagna", "regno", "sentiero", "sorgente", "strada", "villaggio",
-      "cave", "castle", "forest", "garden", "kingdom", "mountain", "path", "road", "tree", "trees", "village", "wood", "woods",
-      "bosque", "castillo", "cueva", "montaña", "pueblo", "reino",
-      "bois", "chateau", "château", "foret", "forêt", "montagne", "royaume", "village",
-    ],
-    object: [
-      "acqua", "bastone", "fiore", "fuoco", "libro", "pietra", "pietre", "roccia", "rocce", "spada", "tazza", "te", "tè",
-      "book", "cup", "fire", "flower", "rock", "rocks", "stone", "stones", "sword",
-      "flor", "fuego", "libro", "piedra", "roca", "taza",
-      "feu", "fleur", "livre", "pierre", "roche", "tasse",
-    ],
-    creature: ["creatura", "mostro", "troll", "creature", "monster", "criatura", "monstruo", "monstre", "kreatur"],
-    concept: [
-      "amicizia", "compassione", "coraggio", "cura", "desiderio", "immaginazione", "intelligenza", "nemico", "parola", "paura", "pericolo", "scoraggiamento", "silenzio", "voce",
-      "courage", "cure", "danger", "discouragement", "enemy", "fear", "friendship", "imagination", "silence", "threat", "voice",
-      "amistad", "imaginación", "miedo", "peligro", "silencio", "voz",
-      "amitié", "guerison", "guérison", "peur", "voix",
-    ],
-    role: ["anziana", "anziano", "bambina", "bambino", "giovane", "mago", "ragazza", "ragazzo", "uomo", "vecchia", "vecchio", "child", "elder", "girl", "man", "old man", "old woman", "wizard", "woman"],
+    location: [],
+    object: [],
+    creature: [],
+    concept: [],
+    role: [],
   };
   const entityTerms = {
     ...dictionaryTypes,
@@ -1137,14 +1118,14 @@ const knowledgeCustomRulesDefaults = (subtype = "") => {
     { eventType: "cannot_speak", cuePatterns: ["non\\\\s+(?:pu[oò]|poteva|riesce|riusciva|riusc[iì])\\\\s+(?:a\\\\s+)?parlare", "non\\\\s+parlava", "cannot\\\\s+speak", "could\\\\s+not\\\\s+speak", "unable\\\\s+to\\\\s+speak"], negativePatterns: [], objectHints: ["voce", "voice", "parola", "speech"], confidence: 0.78 },
     { eventType: "finds", cuePatterns: ["trovarono", "trov[oò]", "scopr[iì]", "found", "finds", "discovered", "discover"], negativePatterns: [], objectHints: [], confidence: 0.68 },
     { eventType: "seeks", cuePatterns: ["cercando", "cerca", "cercava", "cercare", "seeks", "searches", "looking for"], negativePatterns: [], objectHints: ["cura", "cure", "soluzione", "solution"], confidence: 0.72 },
-    { eventType: "fills", cuePatterns: ["riempirono", "riemp[iì]", "riempire", "filled", "fills"], negativePatterns: ["musica|risate|speranza|gioia|paura|silenzio"], objectHints: ["tazza", "cup", "acqua", "water"], confidence: 0.82 },
-    { eventType: "immerses", cuePatterns: ["immersero", "immerse", "immerso", "immersa", "immergere", "dipped", "immersed"], negativePatterns: [], objectHints: ["fiore", "flower", "tazza", "cup", "acqua", "water"], confidence: 0.86 },
-    { eventType: "transforms", cuePatterns: ["trasformandosi", "trasform[oò]", "trasforma", "became", "becomes", "turned into", "transform"], negativePatterns: [], objectHints: ["tè", "tea", "lava"], confidence: 0.88 },
+    { eventType: "fills", cuePatterns: ["riempirono", "riemp[iì]", "riempire", "filled", "fills"], negativePatterns: [], objectHints: [], confidence: 0.82 },
+    { eventType: "immerses", cuePatterns: ["immersero", "immerse", "immerso", "immersa", "immergere", "dipped", "immersed"], negativePatterns: [], objectHints: [], confidence: 0.86 },
+    { eventType: "transforms", cuePatterns: ["trasformandosi", "trasform[oò]", "trasforma", "became", "becomes", "turned into", "transform"], negativePatterns: [], objectHints: [], confidence: 0.88 },
     { eventType: "takes", cuePatterns: ["prese", "prende", "presero", "took", "takes"], negativePatterns: [], objectHints: [], confidence: 0.7 },
-    { eventType: "drinks", cuePatterns: ["bevve", "beve", "bevuto", "bere", "drank", "drinks", "drink"], negativePatterns: [], objectHints: ["tè", "tea", "acqua", "water"], confidence: 0.92 },
+    { eventType: "drinks", cuePatterns: ["bevve", "beve", "bevuto", "bere", "drank", "drinks", "drink"], negativePatterns: [], objectHints: [], confidence: 0.92 },
     { eventType: "has_property", cuePatterns: ["possiede", "possedeva", "possiedono", "possesses", "possessed", "potere", "poteri", "propriet[aà]", "capacit[aà]", "power", "property", "ability"], negativePatterns: [], objectHints: [], confidence: 0.76 },
-    { eventType: "heals", cuePatterns: ["guar[iì]", "guarito", "guarire", "guarisce", "cur[oò]", "curare", "healed", "heals", "cured", "cure"], negativePatterns: [], objectHints: ["cura", "cure", "voce", "voice"], confidence: 0.9 },
-    { eventType: "speaks", cuePatterns: ["parl[oò]", "parla", "pronunciava", "pronunci[oò]", "disse", "dice", "grid[oò]", "speak", "spoke", "said", "shouted"], negativePatterns: ["far|fare|modo\\\\s+per|desideri|possa|potesse|riusc[iì]|riuscire"], objectHints: ["voce", "voice", "parola", "speech"], confidence: 0.82 },
+    { eventType: "heals", cuePatterns: ["guar[iì]", "guarito", "guarire", "guarisce", "cur[oò]", "curare", "healed", "heals", "cured", "cure"], negativePatterns: [], objectHints: [], confidence: 0.9 },
+    { eventType: "speaks", cuePatterns: ["parl[oò]", "parla", "pronunciava", "pronunci[oò]", "disse", "dice", "grid[oò]", "speak", "spoke", "said", "shouted"], negativePatterns: ["far|fare|modo\\\\s+per|desideri|possa|potesse|riusc[iì]|riuscire"], objectHints: [], confidence: 0.82 },
     { eventType: "moves", cuePatterns: ["corsero", "and[oò]", "andarono", "scese", "scesero", "went", "ran", "walked"], negativePatterns: [], objectHints: [], confidence: 0.42 },
     { eventType: "signals", cuePatterns: ["sorrise", "annu[iì]", "guard[oò]", "smiled", "nodded", "looked"], negativePatterns: [], objectHints: [], confidence: 0.4 },
   ];
@@ -1277,7 +1258,7 @@ const knowledgeCustomRulesDefaults = (subtype = "") => {
       ...base,
       notes: "Declarative Event rules used in Rules/Hybrid mode. eventType must be a supported Knowledge event type. Executable code is ignored.",
       blockedEventTerms: [],
-      objectHints: ["tazza", "tè", "tea", "acqua", "water", "sorgente", "source", "spring", "fiore", "flower", "bastone", "stick", "voce", "voice", "parola", "speech", "troll", "mostro", "monster"],
+      objectHints: [],
       eventRules,
     };
   }
@@ -1811,7 +1792,7 @@ const configFieldDefinitions = (node = {}) => {
       return withAiProviderConfigFields([
         { key: "cueMode", label: "Cue mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
-        { key: "query", label: "Query", type: "textarea", placeholder: "come guarisce Liber?" },
+        { key: "query", label: "Query", type: "textarea", placeholder: "how does the process happen?" },
         { key: "maxChunks", label: "Max chunks", placeholder: "24" },
         { key: "maxChunkChars", label: "Max chars per chunk", placeholder: "620" },
         { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"], defaultValue: "document" },

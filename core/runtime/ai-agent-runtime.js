@@ -345,7 +345,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       relationLines ? `Structured relations:\n${relationLines}` : "",
       eventLines ? `Structured events:\n${eventLines}` : "",
       evidenceLines ? `Evidence:\n${evidenceLines}` : "",
-      "If a Reasoning Plan is present, answer primarily from Primary evidence text when it is available. Treat Reasoning required facts as a navigation and verification layer over that text, and Reasoning boundaries as factual limits. Use graph relations/events only to clarify the focused evidence, not to override it. Use direct semantic relations and ordered Structured events as primary evidence when no Primary evidence text is available. For how/why questions, include the concrete ordered event chain when evidence provides one; do not answer only with a broad summary relation such as healed_by/causes if the events explain the mechanism. Use broad relations only when they directly clarify the same mechanism. If focused evidence is present, answer from it instead of saying evidence is missing. Prefer explicit evidence over generic assumptions. Do not relocate actions, containers, tools or places while paraphrasing: if evidence says an object is put in a cup, answer with the cup; do not move it to a nearby source/location unless a quote explicitly says so. Do not merge separate source details into a new label: if evidence names a source/place/object one way and separately describes it with a property, preserve that wording instead of inventing a compact label such as 'magical source' unless that exact label appears in evidence. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names; for example, express transforms/causes chains as natural actions such as 'l'acqua si trasforma in tè' rather than awkward wording like 'causando alla soluzione'.",
+      "If a Reasoning Plan is present, answer primarily from Primary evidence text when it is available. Treat Reasoning required facts as a navigation and verification layer over that text, and Reasoning boundaries as factual limits. Use graph relations/events only to clarify the focused evidence, not to override it. Use direct semantic relations and ordered Structured events as primary evidence when no Primary evidence text is available. For how/why questions, include the concrete ordered event chain when evidence provides one; do not answer only with a broad summary relation such as healed_by/causes if the events explain the mechanism. Use broad relations only when they directly clarify the same mechanism. If focused evidence is present, answer from it instead of saying evidence is missing. Prefer explicit evidence over generic assumptions. Preserve the roles, objects, tools, places and sequence found in the evidence; do not move details between nearby facts unless a quote explicitly supports that merge. Do not compress separate source details into a new label unless that exact label appears in evidence. Always answer in the same language as the user query, not the source document language. Translate graph labels only as needed to answer naturally in the query language. Do not add parenthesized translations or original source terms unless the user explicitly asks for translation or the original term is essential to disambiguate. Write fluent, idiomatic prose instead of literally verbalizing graph relation names.",
     ].filter(Boolean).join("\n\n");
   };
 
@@ -359,7 +359,10 @@ window.TrackerLensAiAgentRuntime = (() => {
     if (typeof result.text === "string" && result.text.trim()) return result.text.trim();
     if (typeof result.response?.text === "string" && result.response.text.trim()) return result.response.text.trim();
     if (typeof result.response === "string" && result.response.trim()) return result.response.trim();
-    if (result.response !== undefined && result.response !== null) return compactJson(result.response, 1200);
+    if (result.response !== undefined && result.response !== null) {
+      if (typeof result.response === "object" && !Array.isArray(result.response) && !Object.values(result.response).some((value) => String(value || "").trim())) return "";
+      return compactJson(result.response, 1200);
+    }
     if (typeof result.summary === "string" && result.summary.trim()) return result.summary.trim();
     return "";
   };
@@ -528,14 +531,10 @@ window.TrackerLensAiAgentRuntime = (() => {
       calls.push({ nodeId: manifest.nodeId, nodeLabel: manifest.label || manifest.nodeId, relation: manifest.relation || "", tool: tool.name, args });
       return true;
     };
-    const normalizedQuery = String(query || "").toLowerCase();
-    const focusTerm = /\b(?:nemic\w*|ennemico|enemy|mostr\w*|monster|troll|pericol\w*|minacc\w*)\b/i.test(normalizedQuery)
-      ? "nemico"
-      : query;
     const limit = Math.max(1, Math.min(8, Number(config.connectedToolLimit || 6)));
     if (!ragContext && !graphContext) pushTool(["searchChunks"], { query, limit: 6 });
     pushTool(["getTimeline", "findEvents"], { query, limit: 10 });
-    pushTool(["defineTerm"], { term: focusTerm, query, limit: 8 });
+    pushTool(["defineTerm"], { term: query, query, limit: 8 });
     pushTool(["findRelations", "findEntities"], { query, limit: 10 });
     pushTool(["getGraphEvidence"], { query, limit: 8 });
     if (!calls.some((call) => call.tool === "searchChunks")) pushTool(["searchChunks"], { query, limit: 6 });
@@ -599,7 +598,6 @@ window.TrackerLensAiAgentRuntime = (() => {
       "You are a Trackers Lens tool planner.",
       "Plan read-only tool calls for the connected nodes. Return ONLY one JSON object, no markdown.",
       "Use the cheapest specific tools first. If source evidence may be needed, include searchChunks/getFullDocument/getGraphEvidence as appropriate.",
-      "For enemy/threat questions, search chunks/relations/events with the user query and related concrete threat terms if needed.",
       "Do not answer the user. Only plan tool calls.",
       "Schema: {\"intent\":\"\",\"steps\":[{\"nodeId\":\"\",\"tool\":\"\",\"args\":{},\"reason\":\"\"}],\"verification\":\"\"}",
       JSON.stringify({
@@ -631,12 +629,21 @@ window.TrackerLensAiAgentRuntime = (() => {
     const query = toolObservationQuery({ payload, event });
     const provider = await pickProvider(config);
     const model = String(config.model || provider?.model || "local-model");
-    const planned = await planConnectedToolCalls({ manifests: manifest?.manifests || [], query, payload, event, provider, model, config });
+    const readableManifests = toolManifestSummary(manifest?.manifests || []);
+    const planned = readableManifests.length <= 1
+      ? { calls: [], plan: null, error: "single-connected-node" }
+      : await planConnectedToolCalls({ manifests: manifest?.manifests || [], query, payload, event, provider, model, config });
     const calls = planned.calls.length
       ? planned.calls
       : chooseAgentToolCalls({ manifests: manifest?.manifests || [], query, ragContext, graphContext, config });
     const observations = [];
-    for (const call of calls) {
+    const hasCall = (nodeId = "", tool = "") => calls.some((call) => call.nodeId === nodeId && call.tool === tool) ||
+      observations.some((observation) => observation.nodeId === nodeId && observation.tool === tool);
+    const manifestForNode = (nodeId = "") => (manifest?.manifests || []).find((item) => item.nodeId === nodeId) || null;
+    const nodeHasTool = (nodeId = "", toolName = "") =>
+      Boolean(manifestForNode(nodeId)?.tools?.some((tool) => tool.name === toolName && tool.mode === "read"));
+    const scopedDocumentId = /^kdoc_/i.test(String(payload.documentId || "")) ? String(payload.documentId || "") : "";
+    const runToolCall = async (call = {}) => {
       const startedAt = performance.now();
       try {
         const result = await window.TrackerLensAgentRuntime.callConnectedNodeTool({
@@ -647,7 +654,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           agentNodeId: node.id,
           runtime,
         });
-        observations.push({
+        const observation = {
           ...call,
           ok: result?.ok !== false,
           status: result?.status || "",
@@ -657,15 +664,42 @@ window.TrackerLensAiAgentRuntime = (() => {
           evidence: (result?.evidence || []).slice(0, 6),
           items: (result?.items || []).slice(0, 8),
           answer: result?.answer || "",
+          usage: result?.usage || {},
+          debug: result?.debug || {},
           latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
-        });
+        };
+        observations.push(observation);
+        return observation;
       } catch (error) {
-        observations.push({
+        const observation = {
           ...call,
           ok: false,
           status: "error",
           error: error?.message || String(error),
           latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+        };
+        observations.push(observation);
+        return observation;
+      }
+    };
+    for (const call of calls) {
+      const observation = await runToolCall(call);
+      const needsSourceFallback = call.tool === "searchChunks" &&
+        observation.ok !== false &&
+        nodeHasTool(call.nodeId, "getFullDocument") &&
+        !hasCall(call.nodeId, "getFullDocument");
+      if (needsSourceFallback) {
+        await runToolCall({
+          nodeId: call.nodeId,
+          nodeLabel: call.nodeLabel,
+          relation: call.relation || "",
+          tool: "getFullDocument",
+          args: {
+            documentId: scopedDocumentId,
+            collectionId: payload.collectionId || payload.metadata?.collectionId || "",
+            maxChars: Math.max(1200, Math.min(12000, Number(config.connectedToolDocumentChars || config.maxDocumentChars || 6000))),
+          },
+          plannedReason: "Full-document read on the same connected Document tool for source verification.",
         });
       }
     }
@@ -681,20 +715,35 @@ window.TrackerLensAiAgentRuntime = (() => {
         ? `Planner fallback: ${toolContext.plannerError}`
         : "";
     const lines = observations.map((observation, index) => {
+      const evidenceTextLimit = observation.tool === "getFullDocument"
+        ? Math.max(1200, Math.min(12000, Number(observation.debug?.returnedChars || config.connectedToolDocumentChars || config.maxDocumentChars || 6000)))
+        : 900;
       const evidence = (observation.evidence || [])
         .slice(0, 4)
-        .map((item, evidenceIndex) => `  [E${index + 1}.${evidenceIndex + 1}] ${item.sourceType || "evidence"} doc=${item.documentId || ""} chunk=${item.chunkId || ""}\n  ${String(item.text || "").slice(0, 900)}`)
+        .map((item, evidenceIndex) => `  [E${index + 1}.${evidenceIndex + 1}] ${item.sourceType || "evidence"} doc=${item.documentId || ""} chunk=${item.chunkId || ""}\n  ${String(item.text || "").slice(0, evidenceTextLimit)}`)
         .join("\n");
       const limitations = observation.limitations?.length ? `\n  limitations: ${observation.limitations.join("; ")}` : "";
-      const answer = observation.answer ? `\n  answer: ${String(observation.answer).slice(0, 500)}` : "";
-      return `[T${index + 1}] ${observation.nodeLabel || observation.nodeId}.${observation.tool} status=${observation.status || "ready"} confidence=${Number.isFinite(Number(observation.confidence)) ? Number(observation.confidence).toFixed(2) : "N/D"} items=${observation.itemCount ?? 0}${answer}${limitations}${evidence ? `\n${evidence}` : ""}`;
+      const answerLimit = observation.tool === "getFullDocument" ? 1200 : 500;
+      const answer = observation.answer ? `\n  answer: ${String(observation.answer).slice(0, answerLimit)}` : "";
+      const debug = observation.debug && Object.keys(observation.debug).length
+        ? [
+          `documents=${observation.debug.documentCount ?? "N/D"}`,
+          `chunks=${observation.debug.chunkCount ?? "N/D"}`,
+          observation.debug.selectedChunkCount !== undefined ? `selectedChunks=${observation.debug.selectedChunkCount}` : "",
+          observation.debug.sourceMode ? `source=${observation.debug.sourceMode}` : "",
+          observation.debug.fullDocumentChars !== undefined ? `fullChars=${observation.debug.fullDocumentChars}` : "",
+          observation.debug.returnedChars !== undefined ? `returnedChars=${observation.debug.returnedChars}` : "",
+          observation.debug.truncated !== undefined ? `truncated=${observation.debug.truncated ? "yes" : "no"}` : "",
+        ].filter(Boolean).join(" ")
+        : "";
+      const debugLine = debug ? `\n  debug: ${debug}` : "";
+      return `[T${index + 1}] ${observation.nodeLabel || observation.nodeId}.${observation.tool} status=${observation.status || "ready"} confidence=${Number.isFinite(Number(observation.confidence)) ? Number(observation.confidence).toFixed(2) : "N/D"} items=${observation.itemCount ?? 0}${debugLine}${answer}${limitations}${evidence ? `\n${evidence}` : ""}`;
     }).join("\n\n");
     return [
       "Connected tool observations:",
       planText,
       lines,
       "Use these observations as runtime evidence. Source-bearing evidence text has higher authority than derived graph/dictionary/event facts. If observations are empty or limited, say what is missing instead of inventing facts.",
-      "When the question asks for an enemy/threat and observations contain labels or evidence such as troll, mostro, monster, attack or opposes, answer with that concrete enemy label and cite the supporting observation.",
     ].join("\n\n");
   };
 
@@ -911,7 +960,34 @@ window.TrackerLensAiAgentRuntime = (() => {
       throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
     }
     const data = await response.json();
-    const text = data.choices?.[0]?.message?.content || "";
+    const choice = data.choices?.[0] || {};
+    const message = choice.message || {};
+    let text = String(message.content || "").trim();
+    if (!text && choice.finish_reason === "length" && String(message.reasoning_content || "").trim()) {
+      const repairPrompt = [
+        "The previous model response used the completion budget for reasoning and left message.content empty.",
+        "Use the notes below only to write the final answer.",
+        "Return only the final answer, no reasoning labels, no JSON, no markdown.",
+        "Answer in the same language as the user's question.",
+        "",
+        "Notes:",
+        String(message.reasoning_content || "").slice(-2800),
+      ].join("\n");
+      const repairResponse = await postAiJson({
+        url: `${endpoint}/chat/completions`,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          model: resolvedModel,
+          messages: [{ role: "user", content: repairPrompt }],
+          temperature: 0.1,
+          max_tokens: Math.max(180, Math.min(480, Math.floor(Number(maxTokens || 800) / 2))),
+        },
+      }).catch(() => null);
+      if (repairResponse?.ok) {
+        const repairData = await repairResponse.json().catch(() => null);
+        text = String(repairData?.choices?.[0]?.message?.content || "").trim();
+      }
+    }
     return {
       text,
       usage: usageFromAiResponse({ data, prompt, text }),
