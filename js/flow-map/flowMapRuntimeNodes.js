@@ -6672,9 +6672,7 @@ const portsAreCompatible = (sourcePort = {}, targetPort = {}, target = {}, sourc
   const sourceType = normalizedPortType(sourcePort.type);
   const targetType = normalizedPortType(targetPort.type);
   if (sourceType === AGENT_CONTROL_PORT_TYPE || targetType === AGENT_CONTROL_PORT_TYPE) {
-    return sourceType === AGENT_CONTROL_PORT_TYPE &&
-      targetType === AGENT_CONTROL_PORT_TYPE &&
-      isAgentControlNode(source);
+    return sourceType === AGENT_CONTROL_PORT_TYPE && targetType === AGENT_CONTROL_PORT_TYPE;
   }
   if (sourceType === "never" || targetType === "never") return false;
   if (sourceType === "any" || targetType === "any") return true;
@@ -7102,6 +7100,8 @@ const createRuntimeLink = async (source, target, options = {}) => {
       metadata: {
         source: "flow-map",
         ...linkMapping,
+        sourceHandleSide: options.sourceHandleSide || "",
+        sourceHandleCorner: options.sourceHandleCorner || "",
       },
       createdAt: now,
       updatedAt: now,

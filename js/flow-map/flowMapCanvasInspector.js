@@ -411,6 +411,12 @@ const edgePortOffset = (dependency, dependencies = []) => {
 const dependencyPort = (dependency = {}, side = "out") =>
   side === "in" ? dependency.metadata?.targetPort || dependency.targetPort || dependency.channel : dependency.metadata?.sourcePort || dependency.sourcePort || dependency.channel;
 
+const dependencySourceHandleSide = (dependency = {}) =>
+  dependency.metadata?.sourceHandleSide || "out";
+
+const dependencySourceHandleCorner = (dependency = {}) =>
+  dependency.metadata?.sourceHandleCorner || "";
+
 const dependencySourcePort = (dependency = {}) =>
   dependency.metadata?.sourcePort || dependency.sourcePort || "all";
 
@@ -586,6 +592,27 @@ const runtimeNodePortY = (node = {}, port = {}, side = "out", portIndex = 0, por
   return nodePortY(portIndex, portCount);
 };
 
+const agentControlPortCorners = (side = "out") =>
+  side === "in" ? ["top-left", "bottom-left"] : ["top-right", "bottom-right"];
+
+const agentControlCornerClass = (corner = "") =>
+  corner ? ` is-agent-corner-${corner}` : "";
+
+const agentControlCornerY = (corner = "") =>
+  String(corner || "").startsWith("bottom") ? "calc(100% - 14px)" : "14px";
+
+const visualPortInstances = (node = {}, port = {}, side = "out", portIndex = 0, portCount = 1) => {
+  if (!isAgentControlPort(port)) {
+    return [{ port, portIndex, corner: "", style: { "--port-y": runtimeNodePortY(node, port, side, portIndex, portCount) } }];
+  }
+  return agentControlPortCorners(side).map((corner) => ({
+    port,
+    portIndex,
+    corner,
+    style: { "--port-y": agentControlCornerY(corner) },
+  }));
+};
+
 const nodeMinHeight = (portCount = 1) =>
   Math.max(138, portCount > 8 ? portCount * 16 + 170 : portCount * 16 + 82);
 
@@ -596,17 +623,25 @@ const portPercentForChannel = (node = {}, channel = "", side = "out") => {
   return nodePortYValue(index, count);
 };
 
-const domPortPoint = (nodeId = "", side = "out", port = "") => {
+const domPortPoint = (nodeId = "", side = "out", port = "", corner = "") => {
   const host = document.querySelector(".tl-flow-canvas");
-  const selector = `[data-flow-node-id="${escapeSelectorValue(nodeId)}"] .tl-flow-node-port[data-port-side="${side}"][data-port-label="${escapeSelectorValue(port || "all")}"]`;
+  const cornerSelector = corner ? `[data-port-corner="${escapeSelectorValue(corner)}"]` : "";
+  const selector = `[data-flow-node-id="${escapeSelectorValue(nodeId)}"] .tl-flow-node-port[data-port-side="${side}"][data-port-label="${escapeSelectorValue(port || "all")}"]${cornerSelector}`;
   const element = document.querySelector(selector) ||
     document.querySelector(`[data-flow-node-id="${escapeSelectorValue(nodeId)}"] .tl-flow-node-port[data-port-side="${side}"]`);
   const hostRect = host?.getBoundingClientRect?.();
   const portRect = element?.getBoundingClientRect?.();
   if (!hostRect || !portRect) return null;
   const zoom = state.viewport.zoom || 1;
+  const resolvedCorner = corner || element?.dataset?.portCorner || "";
+  const anchorSide = resolvedCorner.includes("left")
+    ? "left"
+    : resolvedCorner.includes("right") || element.classList.contains("is-bridge-right-input")
+      ? "right"
+      : side === "in" ? "left" : "right";
+  const anchorX = anchorSide === "left" ? portRect.left : portRect.right;
   return {
-    x: (portRect.left + portRect.width / 2 - hostRect.left - state.viewport.panX) / zoom,
+    x: (anchorX - hostRect.left - state.viewport.panX) / zoom,
     y: (portRect.top + portRect.height / 2 - hostRect.top - state.viewport.panY) / zoom,
   };
 };
@@ -651,24 +686,25 @@ const canvasPoint = (canvas, position, side = "out", offsetY = 0, portPercent = 
   };
 };
 
-const nodeCanvasPoint = ({ canvas, node, index, side = "out", port = "all" }) =>
+const nodeCanvasPoint = ({ canvas, node, index, side = "out", port = "all", corner = "" }) =>
   (() => {
-    const point = domPortPoint(node.id, side, port);
+    const point = domPortPoint(node.id, side, port, corner);
     return point ? point : canvasPoint(canvas, nodePosition(node, index), side, 0, portPercentForChannel(node, port, side));
   })();
 
 const drawBezier = (ctx, from, to, curveOffset = 0, options = {}) => {
   const delta = Math.max(70, Math.abs(to.x - from.x) * 0.42);
+  const sourceControlX = options.sourceSide === "left" ? from.x - delta : from.x + delta;
   const targetControlX = options.targetSide === "right" ? to.x + delta : to.x - delta;
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
-  ctx.bezierCurveTo(from.x + delta, from.y + curveOffset, targetControlX, to.y + curveOffset, to.x, to.y);
+  ctx.bezierCurveTo(sourceControlX, from.y + curveOffset, targetControlX, to.y + curveOffset, to.x, to.y);
 };
 
 const bezierPoint = (from, to, t, curveOffset = 0, options = {}) => {
   const delta = Math.max(70, Math.abs(to.x - from.x) * 0.42);
   const p0 = from;
-  const p1 = { x: from.x + delta, y: from.y + curveOffset };
+  const p1 = { x: options.sourceSide === "left" ? from.x - delta : from.x + delta, y: from.y + curveOffset };
   const p2 = { x: options.targetSide === "right" ? to.x + delta : to.x - delta, y: to.y + curveOffset };
   const p3 = to;
   const mt = 1 - t;
@@ -678,10 +714,10 @@ const bezierPoint = (from, to, t, curveOffset = 0, options = {}) => {
   };
 };
 
-const edgeBezierOptions = (dependency = {}, targetNode = {}) =>
-  isAgentBridgeNode(targetNode) && dependencyPort(dependency, "in") === "listening"
-    ? { targetSide: "right" }
-    : {};
+const edgeBezierOptions = (dependency = {}, targetNode = {}) => ({
+  sourceSide: dependencySourceHandleSide(dependency) === "in" ? "left" : "right",
+  ...(isAgentBridgeNode(targetNode) && dependencyPort(dependency, "in") === "listening" ? { targetSide: "right" } : {}),
+});
 
 const distanceToSegment = (point, a, b) => {
   const dx = b.x - a.x;
@@ -719,7 +755,7 @@ const edgeAtPointer = (event) => {
     const bounds = edgeCanvasBounds();
     if (!rect || !bounds) return;
     const offset = edgePortOffset(dependency, graph.dependencies);
-    const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: "out", port: dependencyPort(dependency, "out") }), bounds);
+    const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: dependencySourceHandleSide(dependency), port: dependencyPort(dependency, "out"), corner: dependencySourceHandleCorner(dependency) }), bounds);
     const to = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: targetNode, index: toIndex, side: "in", port: dependencyPort(dependency, "in") }), bounds);
     const bezierOptions = edgeBezierOptions(dependency, targetNode);
     let previous = from;
@@ -777,7 +813,7 @@ const drawFlowEdges = () => {
     const sourceNode = graph.nodes[fromIndex];
     const targetNode = graph.nodes[toIndex];
     const offset = edgePortOffset(dependency, graph.dependencies);
-    const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: "out", port: dependencyPort(dependency, "out") }), bounds);
+    const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: dependencySourceHandleSide(dependency), port: dependencyPort(dependency, "out"), corner: dependencySourceHandleCorner(dependency) }), bounds);
     const to = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: targetNode, index: toIndex, side: "in", port: dependencyPort(dependency, "in") }), bounds);
     const bezierOptions = edgeBezierOptions(dependency, targetNode);
     const edge = activity.edgeActivity?.get?.(dependency.id);
@@ -860,22 +896,23 @@ const drawFlowEdges = () => {
     const sourceIndex = graph.nodes.findIndex((node) => node.id === state.interaction.sourceId);
     const sourceNode = graph.nodes[sourceIndex];
     if (sourceNode && state.interaction.point) {
-      const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: sourceIndex, side: "out", port: state.interaction.sourcePort || outputPortLabel(sourceNode) }), bounds);
+      const from = edgePoint(nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: sourceIndex, side: state.interaction.sourceSide || "out", port: state.interaction.sourcePort || outputPortLabel(sourceNode), corner: state.interaction.sourceCorner || "" }), bounds);
       const to = {
         x: state.interaction.point.x + bounds.offsetX,
         y: state.interaction.point.y + bounds.offsetY,
       };
+      const dragBezierOptions = { sourceSide: state.interaction.sourceSide === "in" ? "left" : "right" };
       const rgb = toneRgb(graphTone(sourceNode));
       ctx.save();
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      drawBezier(ctx, from, to);
+      drawBezier(ctx, from, to, 0, dragBezierOptions);
       ctx.strokeStyle = rgba(rgb, 0.28);
       ctx.lineWidth = 8;
       ctx.shadowColor = rgba(rgb, 0.42);
       ctx.shadowBlur = 18;
       ctx.stroke();
-      drawBezier(ctx, from, to);
+      drawBezier(ctx, from, to, 0, dragBezierOptions);
       ctx.strokeStyle = rgba(rgb, 0.92);
       ctx.lineWidth = 2;
       ctx.shadowBlur = 0;
@@ -923,7 +960,7 @@ const positionEdgeLabels = () => {
     const sourceNode = graph.nodes[fromIndex];
     const targetNode = graph.nodes[toIndex];
     const offset = edgePortOffset(dependency, graph.dependencies);
-    const from = nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: "out", port: dependencyPort(dependency, "out") });
+    const from = nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: dependencySourceHandleSide(dependency), port: dependencyPort(dependency, "out"), corner: dependencySourceHandleCorner(dependency) });
     const to = nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: targetNode, index: toIndex, side: "in", port: dependencyPort(dependency, "in") });
     const midpoint = bezierPoint(from, to, 0.52, offset, edgeBezierOptions(dependency, targetNode));
     label.style.setProperty("--x", `${midpoint.x}px`);
@@ -1975,7 +2012,7 @@ const renderCanvas = () => {
           const host = document.querySelector(".tl-flow-canvas");
           const rect = host?.getBoundingClientRect?.();
           const from = rect
-            ? nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: "out", port: dependencyPort(dependency, "out") })
+            ? nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: sourceNode, index: fromIndex, side: dependencySourceHandleSide(dependency), port: dependencyPort(dependency, "out"), corner: dependencySourceHandleCorner(dependency) })
             : canvasPoint({ width: 100, height: 100 }, nodePosition(sourceNode, fromIndex), "out", 0, portPercentForChannel(sourceNode, dependencyPort(dependency, "out"), "out"));
           const to = rect
             ? nodeCanvasPoint({ canvas: { width: rect.width, height: rect.height }, node: targetNode, index: toIndex, side: "in", port: dependencyPort(dependency, "in") })
@@ -2032,8 +2069,7 @@ const renderCanvas = () => {
           const fullInputPorts = nodePorts(node, "in");
           const fullOutputPorts = nodePorts(node, "out");
           const inputPorts = visibleNodePorts(node, "in", fullInputPorts, graph);
-          const outputPorts = visibleNodePorts(node, "out", fullOutputPorts, graph)
-            .filter((port) => !isAgentControlPort(port) || nodeCategory(node) === "ai-agents");
+          const outputPorts = visibleNodePorts(node, "out", fullOutputPorts, graph);
           const portCount = Math.max(inputPorts.length, outputPorts.length);
           const fieldCount = sampleOutputFields(node).length;
           const live = activity.nodeActivity.get(node.id);
@@ -2078,37 +2114,42 @@ const renderCanvas = () => {
               },
             },
             renderNodeRuntimeBanner(node, live),
-            ...inputPorts.map((port, portIndex) => _.span({
-              class: `tl-flow-node-port is-input is-${port.type}${isAgentBridge && isAgentControlPort(port) ? " is-bridge-agent-input" : ""}${isAgentBridge && port.name === "listening" ? " is-bridge-right-input is-bridge-listening" : ""}${isAgentControlPort(port) ? " is-agent-control-port" : ""}${port.name === "all" ? " is-pass" : ""}${isPortConnected(graph, node.id, "in", port.name) ? " is-connected" : ""}${live ? " is-event-active" : ""}`,
+            ...inputPorts.flatMap((port, portIndex) => visualPortInstances(node, port, "in", portIndex, inputPorts.length).map((visual) => _.span({
+              class: `tl-flow-node-port is-input is-${port.type}${isAgentBridge && isAgentControlPort(port) ? " is-bridge-agent-input" : ""}${isAgentBridge && port.name === "listening" ? " is-bridge-right-input is-bridge-listening" : ""}${isAgentControlPort(port) ? ` is-agent-control-port${agentControlCornerClass(visual.corner)}` : ""}${port.name === "all" ? " is-pass" : ""}${isPortConnected(graph, node.id, "in", port.name) ? " is-connected" : ""}${live ? " is-event-active" : ""}`,
               title: portTooltip(port, "in", inputPorts),
-              style: { "--port-y": runtimeNodePortY(node, port, "in", portIndex, inputPorts.length) },
+              style: visual.style,
               "data-port-side": "in",
               "data-port-label": port.name,
               "data-port-display": portInlineLabel(port, "in", inputPorts),
               "data-port-type": port.type,
               "data-port-index": portIndex,
+              "data-port-corner": visual.corner,
               onPointerEnter: (event) => {
                 event.stopPropagation();
                 setGraphHover(node.id, `in:${port.name}`);
               },
               onPointerLeave: () => setGraphHover(node.id, ""),
-            }, ...(isAgentControlPort(port) ? [icon(isAgentBridge ? "psychology" : "network_intel_node", "sm")] : []))),
-            ...outputPorts.map((port, portIndex) => _.span({
-              class: `tl-flow-node-port is-output is-${port.type}${isAgentBridge && port.name === "action" ? " is-bridge-action" : ""}${isAgentControlPort(port) ? " is-agent-control-port" : ""}${port.name === "all" ? " is-pass" : ""}${isPortConnected(graph, node.id, "out", port.name) ? " is-connected" : ""}${live ? " is-event-active" : ""}`,
+              onPointerDown: isAgentControlPort(port)
+                ? (event) => beginPortLinkDrag(event, node, index, "in", port.name)
+                : undefined,
+            }, ...(isAgentControlPort(port) ? [icon(isAgentBridge ? "psychology" : "network_intel_node", "sm")] : [])))),
+            ...outputPorts.flatMap((port, portIndex) => visualPortInstances(node, port, "out", portIndex, outputPorts.length).map((visual) => _.span({
+              class: `tl-flow-node-port is-output is-${port.type}${isAgentBridge && port.name === "action" ? " is-bridge-action" : ""}${isAgentControlPort(port) ? ` is-agent-control-port${agentControlCornerClass(visual.corner)}` : ""}${port.name === "all" ? " is-pass" : ""}${isPortConnected(graph, node.id, "out", port.name) ? " is-connected" : ""}${live ? " is-event-active" : ""}`,
               title: portTooltip(port, "out", outputPorts),
-              style: { "--port-y": runtimeNodePortY(node, port, "out", portIndex, outputPorts.length) },
+              style: visual.style,
               "data-port-side": "out",
               "data-port-label": port.name,
               "data-port-display": portInlineLabel(port, "out", outputPorts),
               "data-port-type": port.type,
               "data-port-index": portIndex,
+              "data-port-corner": visual.corner,
               onPointerEnter: (event) => {
                 event.stopPropagation();
                 setGraphHover(node.id, `out:${port.name}`);
               },
               onPointerLeave: () => setGraphHover(node.id, ""),
               onPointerDown: (event) => beginPortLinkDrag(event, node, index, "out", port.name),
-            }, ...(isAgentControlPort(port) ? [icon("network_intel_node", "sm")] : []))),
+            }, ...(isAgentControlPort(port) ? [icon("network_intel_node", "sm")] : [])))),
             _.span(
               { class: "tl-flow-node-title" },
               icon(graphIcon(node), "sm"),

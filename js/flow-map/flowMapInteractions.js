@@ -1632,12 +1632,14 @@ const beginNodeResize = (event, node, index) => {
 };
 
 const beginPortLinkDrag = (event, node, index, side = "out", port = "all") => {
-  if (side !== "out" || event.button !== 0) {
+  const isAgentControlHandle = String(port || "") === "agent_control" || String(event.currentTarget?.dataset?.portType || "") === "agent-control";
+  if ((side !== "out" && !isAgentControlHandle) || event.button !== 0) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   const canvas = event.currentTarget.closest(".tl-flow-canvas");
+  const sourceCorner = event.currentTarget?.dataset?.portCorner || "";
   state.linkingSourceId = node.id;
   state.linkingPort = port || "all";
   state.interaction = {
@@ -1645,6 +1647,8 @@ const beginPortLinkDrag = (event, node, index, side = "out", port = "all") => {
     sourceId: node.id,
     sourceIndex: index,
     sourcePort: port || "all",
+    sourceSide: side,
+    sourceCorner,
     canvas,
     point: pointerPercent(event, canvas),
   };
@@ -1677,9 +1681,9 @@ const updatePortCompatibilityHints = (source = null, sourcePortName = "all") => 
       nodePorts(target, "in").forEach((targetPort) => {
         const validation = connectionValidation(source, target, sourcePortName, targetPort.name);
         const selector = `.tl-flow-node[data-flow-node-id="${escapeSelectorValue(target.id)}"] .tl-flow-node-port.is-input[data-port-label="${escapeSelectorValue(targetPort.name)}"]`;
-        const element = document.querySelector(selector);
-        if (!element) return;
-        element.classList.add(validation.ok ? "is-port-compatible" : "is-port-blocked");
+        document.querySelectorAll(selector).forEach((element) => {
+          element.classList.add(validation.ok ? "is-port-compatible" : "is-port-blocked");
+        });
       });
     });
 };
@@ -1801,7 +1805,9 @@ const updateLinkHoverTarget = (interaction, event) => {
   if (nextTargetId) {
     setNodeLinkClass(nextTargetId, validation.ok ? "is-link-hover" : "is-link-invalid", true);
     const portSelector = `.tl-flow-node[data-flow-node-id="${escapeSelectorValue(nextTargetId)}"] .tl-flow-node-port.is-input[data-port-label="${escapeSelectorValue(targetPort)}"]`;
-    document.querySelector(portSelector)?.classList.add(validation.ok ? "is-port-hover" : "is-port-invalid");
+    document.querySelectorAll(portSelector).forEach((portElement) => {
+      portElement.classList.add(validation.ok ? "is-port-hover" : "is-port-invalid");
+    });
   }
 };
 
@@ -1854,7 +1860,12 @@ const completePortLinkDrag = async (interaction, event) => {
     mount();
     return;
   }
-  await createRuntimeLink(source, target, { sourcePort: interaction.sourcePort || "all", targetPort });
+  await createRuntimeLink(source, target, {
+    sourcePort: interaction.sourcePort || "all",
+    targetPort,
+    sourceHandleSide: interaction.sourceSide || "out",
+    sourceHandleCorner: interaction.sourceCorner || "",
+  });
 };
 
 const handlePointerMove = (event) => {

@@ -1551,8 +1551,9 @@ const updateLiveClasses = (graph, activity) => {
         [dependency.targetNodeId, "in", dependencyPort(dependency, "in")],
       ].forEach(([nodeId, side, port]) => {
         const selector = `.tl-flow-node[data-flow-node-id="${escapeSelectorValue(nodeId)}"] .tl-flow-node-port[data-port-side="${side}"][data-port-label="${escapeSelectorValue(port || "all")}"]`;
-        const portElement = document.querySelector(selector);
-        if (portElement) portElement.classList.add("is-event-active");
+        document.querySelectorAll(selector).forEach((portElement) => {
+          portElement.classList.add("is-event-active");
+        });
       });
     }
   });

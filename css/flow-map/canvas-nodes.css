@@ -941,6 +941,21 @@ textarea.tl-flow-menu-input {
     inset 0 0 0 1px rgba(34, 211, 238, 0.28),
     0 0 18px rgba(34, 211, 238, 0.34);
   color: rgb(165, 243, 252);
+  cursor: crosshair;
+}
+
+.tl-flow-node-port.is-agent-control-port.is-agent-corner-top-left,
+.tl-flow-node-port.is-agent-control-port.is-agent-corner-bottom-left {
+  left: 1px;
+  right: auto;
+  transform: translate(-100%, -50%);
+}
+
+.tl-flow-node-port.is-agent-control-port.is-agent-corner-top-right,
+.tl-flow-node-port.is-agent-control-port.is-agent-corner-bottom-right {
+  left: auto;
+  right: 1px;
+  transform: translate(100%, -50%);
 }
 
 .tl-flow-node-port.is-agent-control .cms-icon,
