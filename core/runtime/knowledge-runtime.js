@@ -537,128 +537,203 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return words.join(" ").trim();
   };
 
-  const keywordBlockedTail = "a\\b|al\\b|ante\\b|comenz[oó]\\b|con\\b|corr[ií]eron\\b|de\\b|del\\b|el\\b|en\\b|encontraron\\b|era\\b|estaba\\b|hacia\\b|la\\b|las\\b|le\\b|les\\b|lo\\b|los\\b|para\\b|por\\b|que\\b|resplandec[ií]a\\b|se\\b|ten[ií]a\\b|tenia\\b|un\\b|una\\b|uno\\b|y\\b|como\\b|cuando\\b|donde\\b|llamada\\b|llamado\\b|joven\\b|persona\\b|viv[ií]a\\b|vivia\\b|lleno\\b|llena\\b|muy\\b";
-  const keywordTail = `(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,2}`;
-  const keywordConnectorTail = `(?:\\s+(?:de|del|de la|de los|of|the|di|della|du|des|la|las|los)\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+(?:\\s+(?!${keywordBlockedTail})[\\p{L}\\p{N}'’_-]+){0,1})?`;
+  const estimateChunkTokens = (text = "") => {
+    const tokens = String(text || "").match(/[\p{L}\p{N}_]+(?:['’.-][\p{L}\p{N}_]+)*/gu) || [];
+    return tokens.length || Math.ceil(String(text || "").length / 4);
+  };
 
-  const splitText = (text = "", { chunkSize = 900, overlap = 120, strategy = "fixed" } = {}) => {
-    const clean = String(text || "").replace(/\r\n/g, "\n").trim();
-    if (!clean) return [];
-    const size = Math.max(160, Number(chunkSize) || 900);
-    const mode = String(strategy || "fixed").toLowerCase().trim();
-    const safeOverlap = Math.max(0, Math.min(Math.floor(size * 0.45), Number(overlap) || 0));
-    const isWordChar = (char = "") => /[\p{L}\p{N}_]/u.test(char);
-    const trimRange = (start = 0, end = clean.length) => {
-      let nextStart = Math.max(0, Math.min(clean.length, start));
-      let nextEnd = Math.max(nextStart, Math.min(clean.length, end));
-      while (nextStart < nextEnd && /\s/.test(clean[nextStart])) nextStart += 1;
-      while (nextEnd > nextStart && /\s/.test(clean[nextEnd - 1])) nextEnd -= 1;
-      return { start: nextStart, end: nextEnd };
-    };
-    const wordStartAt = (index = 0) => {
-      let next = Math.max(0, Math.min(clean.length, index));
-      while (next > 0 && isWordChar(clean[next]) && isWordChar(clean[next - 1])) next -= 1;
-      while (next < clean.length && /\s/.test(clean[next])) next += 1;
-      return next;
-    };
-    const wordEndAt = (index = 0, maxEnd = clean.length) => {
-      let next = Math.max(0, Math.min(clean.length, index));
-      const cap = Math.max(next, Math.min(clean.length, maxEnd));
-      while (next < cap && isWordChar(clean[next - 1] || "") && isWordChar(clean[next] || "")) next += 1;
-      return next;
-    };
-    const bestEndBoundary = (start = 0) => {
-      const target = Math.min(clean.length, start + size);
-      if (target >= clean.length) return clean.length;
-      const minEnd = Math.min(clean.length, start + Math.floor(size * 0.55));
-      const search = clean.slice(minEnd, target);
-      const paragraph = [...search.matchAll(/\n\s*\n/g)].pop();
-      if (paragraph) return minEnd + (paragraph.index || 0);
-      const sentence = [...search.matchAll(/[.!?;:»”"')\]]\s+/g)].pop();
-      if (sentence) return minEnd + (sentence.index || 0) + sentence[0].length;
-      const whitespace = [...search.matchAll(/\s+/g)].pop();
-      if (whitespace) return minEnd + (whitespace.index || 0);
-      return wordEndAt(target, Math.min(clean.length, target + 60));
-    };
-    const pushFixedChunks = (source = "", baseOffset = 0, chunks = []) => {
-      const local = String(source || "").trim();
-      if (!local) return chunks;
-      let start = 0;
-      while (start < local.length) {
-        const remaining = local.slice(start);
-        const absoluteStart = baseOffset + start;
-        const end = remaining.length <= size ? local.length : (() => {
-          const target = Math.min(local.length, start + size);
-          const minEnd = Math.min(local.length, start + Math.floor(size * 0.55));
-          const search = local.slice(minEnd, target);
-          const sentence = [...search.matchAll(/[.!?;:»”"')\]]\s+/g)].pop();
-          if (sentence) return minEnd + (sentence.index || 0) + sentence[0].length;
-          const whitespace = [...search.matchAll(/\s+/g)].pop();
-          if (whitespace) return minEnd + (whitespace.index || 0);
-          let next = target;
-          while (next < Math.min(local.length, target + 60) && isWordChar(local[next - 1] || "") && isWordChar(local[next] || "")) next += 1;
-          return next;
-        })();
-        const range = trimRange(baseOffset + start, baseOffset + end);
-        const value = clean.slice(range.start, range.end);
-        if (value) chunks.push({ text: value, start: range.start, end: range.end });
-        if (end >= local.length) break;
-        const nextStartAbsolute = wordStartAt(Math.max(absoluteStart + (end - start) - safeOverlap, absoluteStart + 1));
-        start = nextStartAbsolute > absoluteStart ? nextStartAbsolute - baseOffset : end;
-      }
-      return chunks;
-    };
-    if (["paragraph", "markdown"].includes(mode)) {
-      const blocks = [];
-      const regex = /\S[\s\S]*?(?=\n\s*\n|$)/g;
-      for (const match of clean.matchAll(regex)) {
-        const range = trimRange(match.index || 0, (match.index || 0) + match[0].length);
-        const value = clean.slice(range.start, range.end);
-        if (value) blocks.push({ text: value, start: range.start, end: range.end });
-      }
-      const chunks = [];
-      let currentText = "";
-      let currentStart = null;
-      let currentEnd = null;
-      const flush = () => {
-        if (!currentText.trim() || currentStart === null || currentEnd === null) return;
-        chunks.push({ text: currentText.trim(), start: currentStart, end: currentEnd });
-        currentText = "";
-        currentStart = null;
-        currentEnd = null;
-      };
-      blocks.forEach((block) => {
-        if (block.text.length > size) {
-          flush();
-          pushFixedChunks(block.text, block.start, chunks);
-          return;
-        }
-        const candidate = currentText ? `${currentText}\n\n${block.text}` : block.text;
-        if (candidate.length <= size || !currentText) {
-          currentText = candidate;
-          currentStart = currentStart ?? block.start;
-          currentEnd = block.end;
-          return;
-        }
-        flush();
-        currentText = block.text;
-        currentStart = block.start;
-        currentEnd = block.end;
-      });
-      flush();
-      return chunks;
-    }
+  const normalizeChunkStrategy = (strategy = "structured") => {
+    const mode = String(strategy || "structured").toLowerCase().trim();
+    if (["fixed", "paragraph", "markdown"].includes(mode)) return "structured";
+    return ["structured", "section", "token"].includes(mode) ? mode : "structured";
+  };
+
+  const chunkTokenBudget = ({ chunkSize = 900, maxChunkTokens = 0 } = {}) => {
+    const explicit = Number(maxChunkTokens || 0);
+    if (explicit > 0) return Math.max(80, Math.floor(explicit));
+    return Math.max(80, Math.round((Number(chunkSize) || 900) / 4));
+  };
+
+  const chunkOverlapBudget = ({ overlap = 120, chunkOverlapTokens = 0, tokenBudget = 225 } = {}) => {
+    const explicit = Number(chunkOverlapTokens || 0);
+    const estimated = explicit > 0 ? explicit : Math.round((Number(overlap) || 0) / 4);
+    return Math.max(0, Math.min(Math.floor(tokenBudget * 0.3), Math.floor(estimated)));
+  };
+
+  const trimChunkRange = (text = "", start = 0, end = text.length) => {
+    let nextStart = Math.max(0, Math.min(text.length, start));
+    let nextEnd = Math.max(nextStart, Math.min(text.length, end));
+    while (nextStart < nextEnd && /\s/.test(text[nextStart])) nextStart += 1;
+    while (nextEnd > nextStart && /\s/.test(text[nextEnd - 1])) nextEnd -= 1;
+    return { start: nextStart, end: nextEnd };
+  };
+
+  const isChunkHeading = (block = "") => {
+    const line = String(block || "").trim();
+    if (!line || line.length > 140 || /\n/.test(line)) return false;
+    if (/^#{1,6}\s+\S/.test(line)) return true;
+    if (/^\d+(?:\.\d+)*[.)]?\s+\S/.test(line) && !/[.!?]$/.test(line)) return true;
+    return /^[A-ZÀ-Ý0-9][\p{L}\p{N}\s:'’()/-]+$/u.test(line) && !/[.!?]$/.test(line);
+  };
+
+  const normalizeHeadingText = (text = "") =>
+    String(text || "")
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^\d+(?:\.\d+)*[.)]?\s+/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const splitOversizedBlock = ({ text = "", start = 0, end = 0, page = 1, sectionPath = [] } = {}, tokenBudget = 225, overlapTokens = 0) => {
+    const words = [...String(text || "").matchAll(/\S+/g)];
     const chunks = [];
-    let start = 0;
-    while (start < clean.length) {
-      const end = bestEndBoundary(start);
-      const range = trimRange(start, end);
-      const value = clean.slice(range.start, range.end);
-      if (value) chunks.push({ text: value, start: range.start, end: range.end });
-      if (end >= clean.length) break;
-      const nextStart = wordStartAt(Math.max(range.end - safeOverlap, range.start + 1));
-      start = nextStart > range.start ? nextStart : wordStartAt(range.end);
+    let cursor = 0;
+    while (cursor < words.length) {
+      let tokenCount = 0;
+      let last = cursor;
+      while (last < words.length) {
+        const nextTokens = estimateChunkTokens(words[last][0]);
+        if (last > cursor && tokenCount + nextTokens > tokenBudget) break;
+        tokenCount += nextTokens;
+        last += 1;
+      }
+      const firstWord = words[cursor];
+      const lastWord = words[Math.max(cursor, last - 1)];
+      const range = trimChunkRange(text, firstWord.index || 0, (lastWord.index || 0) + lastWord[0].length);
+      const value = text.slice(range.start, range.end);
+      if (value) {
+        chunks.push({
+          text: value,
+          start: start + range.start,
+          end: start + range.end,
+          page,
+          sectionPath,
+          tokenEstimate: estimateChunkTokens(value),
+        });
+      }
+      if (last >= words.length) break;
+      if (!overlapTokens) {
+        cursor = last;
+        continue;
+      }
+      let overlapWordCount = 0;
+      let overlapTokenCount = 0;
+      while (last - overlapWordCount > cursor) {
+        const nextTokens = estimateChunkTokens(words[last - overlapWordCount - 1]?.[0] || "");
+        if (overlapWordCount && overlapTokenCount + nextTokens > overlapTokens) break;
+        overlapTokenCount += nextTokens;
+        overlapWordCount += 1;
+        if (overlapTokenCount >= overlapTokens) break;
+      }
+      cursor = Math.max(cursor + 1, last - overlapWordCount);
     }
+    return chunks.length ? chunks : [{ text, start, end, page, sectionPath, tokenEstimate: estimateChunkTokens(text) }];
+  };
+
+  const parseChunkBlocks = (text = "") => {
+    const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    if (!clean) return [];
+    const blocks = [];
+    let page = 1;
+    let sectionPath = [];
+    const regex = /\S[\s\S]*?(?=\n\s*\n|\f|$)/g;
+    for (const match of clean.matchAll(regex)) {
+      const rawStart = match.index || 0;
+      const rawEnd = rawStart + match[0].length;
+      const range = trimChunkRange(clean, rawStart, rawEnd);
+      const value = clean.slice(range.start, range.end);
+      if (!value) continue;
+      const formFeedsBefore = (clean.slice(rawStart, range.start).match(/\f/g) || []).length;
+      page += formFeedsBefore;
+      const heading = isChunkHeading(value);
+      if (heading) sectionPath = [normalizeHeadingText(value)].filter(Boolean);
+      blocks.push({
+        text: value,
+        start: range.start,
+        end: range.end,
+        page,
+        type: heading ? "heading" : "paragraph",
+        sectionPath: sectionPath.slice(),
+        tokenEstimate: estimateChunkTokens(value),
+      });
+      page += (clean.slice(range.end, rawEnd).match(/\f/g) || []).length;
+    }
+    return blocks;
+  };
+
+  const splitText = (text = "", { chunkSize = 900, overlap = 120, strategy = "structured", maxChunkTokens = 0, chunkOverlapTokens = 0 } = {}) => {
+    const blocks = parseChunkBlocks(text);
+    if (!blocks.length) return [];
+    const mode = normalizeChunkStrategy(strategy);
+    const tokenBudget = chunkTokenBudget({ chunkSize, maxChunkTokens });
+    const overlapTokens = mode === "structured" ? chunkOverlapBudget({ overlap, chunkOverlapTokens, tokenBudget }) : 0;
+    const chunks = [];
+    let current = [];
+    let currentTokens = 0;
+    let currentIsOverlap = false;
+
+    const currentText = () => current.map((block) => block.text).join("\n\n").trim();
+    const flush = () => {
+      const textValue = currentText();
+      if (!textValue || !current.length) {
+        current = [];
+        currentTokens = 0;
+        currentIsOverlap = false;
+        return;
+      }
+      const first = current[0];
+      const last = current[current.length - 1];
+      chunks.push({
+        text: textValue,
+        start: first.start,
+        end: last.end,
+        page: first.page,
+        endPage: last.page,
+        sectionPath: last.sectionPath || first.sectionPath || [],
+        tokenEstimate: estimateChunkTokens(textValue),
+      });
+      if (!overlapTokens || mode === "section") {
+        current = [];
+        currentTokens = 0;
+        currentIsOverlap = false;
+        return;
+      }
+      const tail = [];
+      let tailTokens = 0;
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        const block = current[index];
+        if (tail.length && tailTokens + block.tokenEstimate > overlapTokens) break;
+        tail.unshift(block);
+        tailTokens += block.tokenEstimate;
+      }
+      current = tail;
+      currentTokens = tailTokens;
+      currentIsOverlap = Boolean(tail.length);
+    };
+
+    blocks.forEach((block) => {
+      if (block.tokenEstimate > tokenBudget) {
+        flush();
+        chunks.push(...splitOversizedBlock(block, tokenBudget, overlapTokens));
+        current = [];
+        currentTokens = 0;
+        currentIsOverlap = false;
+        return;
+      }
+      const crossesPage = mode !== "token" && current.length && current[current.length - 1].page !== block.page;
+      const overBudget = current.length && currentTokens + block.tokenEstimate > tokenBudget;
+      const newSection = mode === "section" && current.length && block.type === "heading";
+      if (currentIsOverlap && (crossesPage || overBudget || newSection)) {
+        current = [];
+        currentTokens = 0;
+        currentIsOverlap = false;
+      } else if (crossesPage || overBudget || newSection) {
+        flush();
+      }
+      current.push(block);
+      currentTokens += block.tokenEstimate;
+      currentIsOverlap = false;
+    });
+    flush();
     return chunks;
   };
 
@@ -2125,11 +2200,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (looksLikeKnowledgeEnvelope(sourceText)) {
       throw new Error("Documento Knowledge non valido: envelope runtime ricevuto al posto del testo");
     }
-    const chunks = splitText(sourceText, {
+    const chunkOptions = {
       chunkSize: config.chunkSize || config.maxChunkChars || 900,
+      maxChunkTokens: config.maxChunkTokens || config.chunkTokens || config.tokenBudget || 0,
       overlap: config.chunkOverlap || config.overlap || 120,
+      chunkOverlapTokens: config.chunkOverlapTokens || config.overlapTokens || 0,
       strategy: config.strategy || "fixed",
-    });
+    };
+    const chunks = splitText(sourceText, chunkOptions);
+    const normalizedChunkStrategy = normalizeChunkStrategy(chunkOptions.strategy);
+    const tokenBudget = chunkTokenBudget(chunkOptions);
+    const overlapTokens = chunkOverlapBudget({ ...chunkOptions, tokenBudget });
     const now = nowIso();
     const records = [];
     const language = detectLanguage(sourceText, preferredRuntimeLanguage(config));
@@ -2158,6 +2239,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
           nodeId: node?.id || "",
           language,
           collectionId: document.metadata?.collectionId || config.collectionId || "",
+          chunking: {
+            strategy: normalizedChunkStrategy,
+            tokenBudget,
+            overlapTokens,
+            page: chunk.page || 1,
+            endPage: chunk.endPage || chunk.page || 1,
+            sectionPath: Array.isArray(chunk.sectionPath) ? chunk.sectionPath : [],
+            tokenEstimate: chunk.tokenEstimate || chunk.text.split(/\s+/).filter(Boolean).length,
+          },
         },
         createdAt: now,
       };
@@ -4475,24 +4565,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const escapedRegExp = (value = "") =>
     String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  const inferRelationType = (source = {}, target = {}, fallback = "co_occurs") => {
-    const types = new Set([source.entityType || "term", target.entityType || "term"]);
-    const sourceRelationType = inferSourceRelationType(source, target);
-    if (sourceRelationType) return sourceRelationType;
-    if (types.has("proper-noun") && types.has("quote")) return fallback || "co_occurs";
-    if (types.has("proper-noun") && types.has("creature")) return "encounters";
-    if (types.has("proper-noun") && types.has("object")) return "interacts_with";
-    if (types.has("proper-noun") && types.has("location")) return "appears_in";
-    if (types.has("proper-noun") && types.has("concept")) return "expresses";
-    if (types.has("location") && types.has("creature")) return "contains";
-    if (types.has("location") && types.has("object")) return "contains";
-    if (types.has("location") && types.has("concept")) return "context_for";
-    if (types.has("object") && types.has("concept")) return "associated_with";
-    if (types.has("symbol") && types.has("location")) return "marks";
-    if (types.has("symbol") && types.has("quote")) return "part_of";
-    return fallback || "co_occurs";
-  };
-
   const inferConservativeRelationType = (source = {}, target = {}, fallback = "co_occurs") => {
     const types = new Set([source.entityType || "term", target.entityType || "term"]);
     const sourceRelationType = inferSourceRelationType(source, target);
@@ -4531,88 +4603,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const end = Math.min(cleanContext.length, index + cleanLabel.length + radius);
     const windowText = cleanContext.slice(start, end);
     return patterns.some((pattern) => pattern.test(windowText));
-  };
-
-  const quoteSpokenByPerson = (text = "", person = {}, quote = {}) => {
-    const personKey = normalizeEntityToken(person?.label);
-    const quoteLabel = String(quote?.label || "");
-    if (!personKey || !quoteLabel) return false;
-    const personPositions = entityLabelPositions(text, person.label);
-    const quotePositions = entityLabelPositions(text, quoteLabel);
-    if (!personPositions.length || !quotePositions.length) return false;
-    const speechPattern = new RegExp(`\\b${escapedRegExp(personKey)}\\b(?:\\s+[a-z0-9'’_-]+){0,30}\\s+(?:dijo|respondio|pregunto|grito|hablar|pronuncio|pronunciar|voz|boca|said|asked|answered|shouted|spoke)\\b`);
-    return quotePositions.some((quotePosition) =>
-      personPositions.some((personPosition) => {
-        if (personPosition >= quotePosition) return false;
-        if (quotePosition - personPosition > 320) return false;
-        const excerpt = normalizeEntityToken(String(text || "").slice(personPosition, quotePosition + quoteLabel.length));
-        return speechPattern.test(excerpt);
-      })
-    );
-  };
-
-  const inferNarrativeRelationType = (text = "", source = {}, target = {}) => {
-    const context = normalizeEntityToken(relationContextBetween(text, source, target));
-    if (!context) return "";
-    const types = new Set([source.entityType || "term", target.entityType || "term"]);
-    const hasPerson = types.has("proper-noun");
-    const hasObject = types.has("object");
-    const hasLocation = types.has("location");
-    const hasConcept = types.has("concept");
-    const hasCreature = types.has("creature");
-    const hasQuote = types.has("quote");
-    const hasAny = (patterns = []) => patterns.some((pattern) => pattern.test(context));
-    const sourceRelationType = inferSourceRelationType(source, target);
-    if (sourceRelationType) return sourceRelationType;
-    if (hasPerson && hasQuote) {
-      const person = [source, target].find((entity) => entity.entityType === "proper-noun");
-      const quote = [source, target].find((entity) => entity.entityType === "quote");
-      return quoteSpokenByPerson(text, person, quote) ? "says" : "";
-    }
-    if (hasPerson && hasObject) {
-      const person = [source, target].find((entity) => entity.entityType === "proper-noun");
-      const object = [source, target].find((entity) => entity.entityType === "object");
-      const cureContext = normalizeEntityToken(relationContextBetween(text, source, target, 360));
-      const personKey = normalizeEntityToken(person?.label);
-      const objectKey = normalizeEntityToken(object?.label);
-      const personDrinkPattern = personKey
-        ? new RegExp(`\\b${escapedRegExp(personKey)}(?:\\s+[a-z0-9'’_-]+){0,12}\\s+(?:bebi[oó]|beba|beber|tom[oó]|tomo|drink|drank)\\b`)
-        : null;
-      const personIsDrinkingSubject = Boolean(personDrinkPattern?.test(cureContext || context));
-      const personReceivesCure = entityNearPattern(cureContext || context, person?.label, [/\b(?:bebi[oó]|beba|beber|tom[oó]|tomo|drink|drank)\b/], 180);
-      const objectIsCure = /\b(?:te|agua)\b/.test(objectKey) &&
-        entityNearPattern(cureContext || context, object?.label, [/\b(?:te|t[eé]|agua|cura|curar|milagro|healed)\b/], 160);
-      const cureOutcome = /\b(?:hablar|voz|milagro|voice|speak)\b/.test(cureContext || context);
-      if (personIsDrinkingSubject && personReceivesCure && objectIsCure && cureOutcome) return "heals";
-      const personUses = entityNearPattern(context, person?.label, [/\b(?:bebi[oó]|beber|tom[oó]|tomar|sumergio|sumergi[oó]|preparar|preparo|prepar[oó]|lleno|llen[oó]|golpe[oó]|filled|drank|drink|immerse|prepar|hit|struck)\b/], 110);
-      const objectUsed = entityNearPattern(context, object?.label, [/\b(?:bebi[oó]|beber|tom[oó]|tomar|sumergio|sumergi[oó]|preparar|preparo|prepar[oó]|lleno|llen[oó]|golpe[oó]|agua|flor|fuente|manantial|palo|taza|te|t[eé]|filled|drank|drink|immerse|prepar|hit|struck)\b/], 100);
-      if (personUses && objectUsed) return "uses";
-    }
-    if (hasPerson && hasCreature && hasAny([/\b(?:golpe[oó]|ataco|atac[oó]|arremetio|arremeti[oó]|defend|attack|hit|struck|colp)\b/])) return "confronts";
-    if (hasPerson && [source, target].every((entity) => entity.entityType === "proper-noun") && hasAny([/\b(?:ayud[oó]|ayudar|llevo|llev[oó]|tom[oó] su mano|amigo|amigos|helped|helps|took|friend|aiut|aide)\b/])) return "helps";
-    if (hasAny([/\b(?:adempie|adempiuto|compie|compiuto|realizza|realizzato|porta a compimento|fulfill|fulfilled)\b/])) return "fulfills";
-    if (hasAny([/\b(?:prefigura|prefigurato|figura|anticipa|anticipato|annuncia|annunciato|tipo|foreshadow|prefigure)\b/, /\bombra\s+(?:di|del|della|dei|delle)\b/])) return "foreshadows";
-    if (hasAny([/\b(?:alleanza|patto|promessa|promette|promise|covenant)\b/]) && (hasPerson || hasConcept)) return "establishes";
-    if (hasPerson && hasConcept && hasAny([
-      /\b(?:grazie\s+(?:a|alla|al|allo|agli|alle)|maturat[aoie]|dimostrava|dimostr[oò]|mostr[oò]|mostrava|aveva|possedeva|con\s+(?:disciplina|determinazione|forza|coraggio|courage|discipline|determination))\b/,
-      /\b(?:showed|demonstrated|had|possessed|with\s+(?:discipline|determination|courage|strength))\b/,
-    ])) return "has_property";
-    if (hasAny([/\b(?:insegna|insegnamento|dottrina|spiega|mostra|dimostra|teach|teaches|shows)\b/]) && (hasPerson || hasConcept)) return "teaches";
-    if (hasAny([/\b(?:sacrificio|offerta|agnello|sangue|pane|calice|croce|rappresenta|simbolo|significa|represent|symbolizes)\b/]) && (hasObject || hasConcept)) return "represents";
-    if (
-      hasAny([/\b(?:peccato|morte|nemico|condanna|contro|oppone|opposto|contrasta|sconfigge|vince|opposes|defeats|against)\b/]) &&
-      (
-        (hasCreature && (hasPerson || hasObject)) ||
-        (hasPerson && !hasConcept && !hasLocation && !hasObject) ||
-        (hasPerson && hasConcept && hasAny([/\b(?:peccato|morte|nemico|condanna)\b/]))
-      )
-    ) return "opposes";
-    if (hasPerson && hasLocation && !hasAny([/\b(?:aparecio|apareci[oó]|pregunto|pregunt[oó]|indico|indic[oó]|camino hacia|camino a)\b/]) && hasAny([/\b(?:emprendieron|llegaron|entraron|subieron|descendieron|regresar|regresaron|caminaron|viaje|travel|arrived|entered|returned|salir|partir)\b/])) return "travels_to";
-    if (hasPerson && hasConcept && hasAny([/\b(?:record[oó]|demostraba|mostrando|llena de|lleno de|con\s+(?:determinacion|esperanza|coraje|compasion|autocontrol)|showed|remembered|felt)\b/])) return "expresses";
-    if (hasObject && hasObject && source.id !== target.id && source.label !== target.label && hasAny([/\b(?:transform[oó]|transformandose|hervir|hervia|sumerg|became|turned|boil)\b/])) return "transforms";
-    if (hasPerson && (hasConcept || hasQuote) && hasAny([/\b(?:revel[oó]|secreto|advirti[oó]|indic[oó]|donde|solucion|solution|revealed|warned|told)\b/])) return "reveals";
-    if (hasLocation && (hasObject || hasCreature)) return "";
-    return "";
   };
 
   const orientRelationPair = (left = {}, right = {}, relationType = "co_occurs") => {
@@ -5139,22 +5129,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const enabled = config.canonicalizeEntityAliases !== false && String(config.canonicalizeEntityAliases || "true").toLowerCase() !== "false";
     if (!enabled || ["seed", "declared-name"].includes(candidate.source)) return candidate;
     const label = String(candidate.label || "").replace(/\s+/g, " ").trim();
-    const normalized = normalizeEntityToken(label);
-    let canonical = label;
-    if (normalized === "abramo") canonical = "Abrahamo";
-    if (candidate.entityType === "object") {
-      if (/^fuente de agua\s+/.test(normalized)) canonical = "fuente de agua";
-      if (/^agua\s+(?:de|del|della|du|of)\s+/.test(normalized)) canonical = "agua";
-      if (/^water\s+(?:source|spring)\s+/.test(normalized)) canonical = "water source";
-    }
-    if (/^ombra\s+(?:uno|due|tre|1|2|3)$/.test(normalized)) canonical = "ombra";
-    if (candidate.entityType === "location" && /^castillo\s+de\s+musica$/.test(normalized)) canonical = "castillo";
-    if (canonical === label) return candidate;
-    return {
-      ...candidate,
-      label: canonical,
-      aliases: [...new Set([...(candidate.aliases || []), label])],
-    };
+    return label === candidate.label ? candidate : { ...candidate, label };
   };
 
   const entityCandidatesFromText = (text = "", config = {}) => {
@@ -5174,10 +5149,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const inferredType = entityType || inferEntityType(label, source);
       candidates.push({ label, source, confidence, entityType: inferContextualEntityType(label, inferredType, clean) });
     };
-    const pushKeywordMatches = ({ pattern, source, entityType, confidence = 0.76 } = {}) => {
-      if (!pattern) return;
-      [...clean.matchAll(pattern)].forEach((match) => push(match[1] || match[0], source, confidence, entityType));
-    };
     (clean.match(/https?:\/\/[^\s)'"<>]+/gi) || []).forEach((value) => push(value, "url", 0.95));
     (clean.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).forEach((value) => push(value, "email", 0.95));
     (clean.match(/\b[A-Z][A-Z0-9_-]{1,12}\b/g) || []).forEach((value) => push(value, "symbol", 0.68));
@@ -5192,28 +5163,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     ].forEach((pattern) => {
       [...clean.matchAll(pattern)].forEach((match) => push(match[1], "declared-name", 0.88, "proper-noun"));
     });
-    [
-      {
-        entityType: "location",
-        source: "keyword-location",
-        pattern: new RegExp(`\\b((?:bosque|forest|foresta|foret|forêt|wald|bäume|baeume|castillo|castle|chateau|château|schloss|burg|montaña|mountain|montagne|berg|felsen|steine|caverna|cave|grotta|höhle|hoehle|reino|kingdom|regno|reich|pueblo|village|dorf|rio|río|river|fiume|fluss|camino|sendero|path|trail|weg|pfad)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
-      },
-      {
-        entityType: "object",
-        source: "keyword-object",
-        pattern: new RegExp(`\\b((?:antorcha|torch|torcia|fackel)(?:${keywordConnectorTail}|${keywordTail}))\\b`, "giu"),
-      },
-      {
-        entityType: "creature",
-        source: "keyword-creature",
-        pattern: /\b(monstruo|monster|mostro|ungeheuer|creature|kreatur|criatura|cervatillo|fawn|cerbiatto|rehkitz|bestias salvajes|wild beasts|bêtes sauvages|wilde tiere)\b/giu,
-      },
-      {
-        entityType: "concept",
-        source: "keyword-concept",
-        pattern: /\b(autocontrol|self-control|selbstbeherrschung|resiliencia|resilience|widerstandsfähigkeit|widerstandsfaehigkeit|disciplina|discipline|disziplin|optimismo|optimism|optimismus|determinación|determinacion|determination|entschlossenheit|miedo|fear|paura|angst|esperanza|hope|espoir|hoffnung|amistad|friendship|amitié|freundschaft|coraje|courage|mut|compasión|compasion|compassion|mitgefühl|mitgefuehl)\b/giu,
-      },
-    ].forEach(pushKeywordMatches);
     const pushCustomEntityTerms = (terms = [], entityType = "term") => {
       customRuleValues(terms).forEach((term) => {
         const cleanTerm = String(term || "").trim();
@@ -5491,17 +5440,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
           const confidence = Math.min(source.confidence || 0.6, target.confidence || 0.6);
           const distance = entityRelationDistance(chunk.text || "", source, target);
           if (distance > maxRelationDistance) continue;
-          const narrativeRelationType = inferNarrativeRelationType(chunk.text || "", source, target);
           const proximityScore = Number.isFinite(distance) ? Math.max(0, 0.18 - (distance / maxRelationDistance) * 0.18) : 0;
           const score = confidence +
             proximityScore +
-            (narrativeRelationType ? 0.2 : 0) +
             (hasPerson && hasNarrative ? 0.22 : 0) +
             (hasPerson ? 0.1 : 0) +
             (types.has("quote") ? 0.08 : 0) +
             (types.has("creature") || types.has("object") ? 0.06 : 0) -
             (source.entityType === target.entityType ? 0.08 : 0);
-          relationCandidates.push({ source, target, confidence, score, narrativeRelationType });
+          relationCandidates.push({ source, target, confidence, score });
           }
         }
         const selectedRelationCandidates = useRuleFallback
@@ -5526,7 +5473,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
         const chunkEntityRelationCounts = new Map();
         let chunkRelationCount = 0;
-        for (const { source, target, confidence, narrativeRelationType, ai } of allSelectedRelationCandidates) {
+        for (const { source, target, confidence, ai } of allSelectedRelationCandidates) {
         if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) break;
         const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
         const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
@@ -5535,10 +5482,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const relationType = config.relationType ||
           ai?.relationType ||
           sourceRelationType ||
-          (dictionaryDrivenExtraction
-            ? inferConservativeRelationType(source, target)
-            : narrativeRelationType || inferRelationType(source, target));
-        if (dictionaryDrivenExtraction && !relationTypeAllowedForDictionaryPass(relationType, source, target, Boolean(narrativeRelationType))) continue;
+          inferConservativeRelationType(source, target);
+        if (dictionaryDrivenExtraction && !relationTypeAllowedForDictionaryPass(relationType, source, target, false)) continue;
         const oriented = orientRelationPair(source, target, relationType);
         const normalizedPair = normalizeRelationPair(oriented.source || source, oriented.target || target, relationType);
         const relationSource = normalizedPair.source || source;

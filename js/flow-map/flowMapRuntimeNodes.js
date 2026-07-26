@@ -945,6 +945,7 @@ const flattenRuntimeConfig = (config = {}) => {
 const readConfigMap = (form, node = {}) => {
   const config = {};
   Array.from(form?.querySelectorAll?.("[data-config-key]") || []).forEach((field) => {
+    if (field.disabled) return;
     const key = field.dataset.configKey;
     if (!key) return;
     const value = field.type === "checkbox" ? field.checked : field.value?.trim?.() || "";
@@ -1675,6 +1676,16 @@ const configFieldDefinitions = (node = {}) => {
         { key: "replayAllDocuments", label: "Replay all documents", type: "checkbox", defaultValue: false },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.document.created" },
       ];
+    }
+    if (subtype === "chunk-processor") {
+      return mergeSchemaFields([
+        { key: "strategy", label: "Chunk strategy", type: "select", options: ["structured", "section", "token"], defaultValue: "structured" },
+        { key: "maxChunkTokens", label: "Max chunk tokens", type: "number", placeholder: "225", visibleForStrategies: ["structured", "section", "token"] },
+        { key: "chunkOverlapTokens", label: "Overlap tokens", type: "number", placeholder: "30", visibleForStrategies: ["structured"] },
+        { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
+        { key: "replaceExisting", label: "Replace existing chunks", type: "checkbox", defaultValue: true },
+        { key: "outputChannel", label: "Output channel", placeholder: "knowledge.chunk.created" },
+      ]);
     }
     if (subtype === "embedding-generator" || subtype === "vector-memory") {
       return withAiProviderConfigFields([
@@ -3109,9 +3120,9 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
   const payloadRows = visiblePayloadInlineRows({ type: "knowledge", metadata: { subtype, category: "knowledge" } }, config);
   const rows = {
     "chunk-processor": [
-      { iconName: "article", label: "Strategy", value: config.strategy || "fixed" },
-      { iconName: "data_object", label: "Size", value: config.chunkSize || "900" },
-      { iconName: "tune", label: "Overlap", value: config.chunkOverlap || "120" },
+      { iconName: "article", label: "Strategy", value: config.strategy || "structured" },
+      { iconName: "data_object", label: "Max tokens", value: config.maxChunkTokens || config.tokenBudget || Math.max(80, Math.round((Number(config.chunkSize) || 900) / 4)) },
+      { iconName: "tune", label: "Overlap tokens", value: config.chunkOverlapTokens || config.overlapTokens || Math.round((Number(config.chunkOverlap) || 120) / 4) },
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
       { iconName: "hub", label: "Output", value: output || "knowledge.chunk.created" },
@@ -5453,6 +5464,40 @@ const requestRuntimeNodeConfig = async (node) => {
     if (typeInput) typeInput.value = provider.provider || provider.providerType || typeInput.value || "local";
     if (modelInput) modelInput.value = provider.model || provider.defaultModel || modelInput.value || "local-model";
   };
+  const refreshConditionalConfigFields = (form = formRef) => {
+    if (!form) return;
+    const strategy = String(form.querySelector('[data-config-key="strategy"]')?.value || "structured").trim().toLowerCase();
+    const setConfigFieldVisible = (key = "", visible = true) => {
+      const input = form.querySelector(`[data-config-key="${key}"]`);
+      const fieldRoot = input?.closest?.(".tl-flow-config-field");
+      if (!fieldRoot) return;
+      fieldRoot.hidden = !visible;
+      fieldRoot.style.display = visible ? "" : "none";
+      input.disabled = !visible;
+    };
+    if (subtype === "chunk-processor") {
+      setConfigFieldVisible("maxChunkTokens", ["structured", "section", "token"].includes(strategy));
+      setConfigFieldVisible("chunkOverlapTokens", strategy === "structured");
+      setConfigFieldVisible("chunkSize", false);
+      setConfigFieldVisible("chunkOverlap", false);
+    }
+    Array.from(form.querySelectorAll("[data-visible-for-strategies]") || []).forEach((fieldRoot) => {
+      const strategies = String(fieldRoot.dataset.visibleForStrategies || "")
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+      const visible = !strategies.length || strategies.includes(strategy);
+      fieldRoot.hidden = !visible;
+      fieldRoot.style.display = visible ? "" : "none";
+      Array.from(fieldRoot.querySelectorAll("[data-config-key]") || []).forEach((input) => {
+        input.disabled = !visible;
+      });
+    });
+  };
+  const configFieldAttrs = (definition = {}, className = "tl-flow-config-field") => ({
+    class: className,
+    ...(definition.visibleForStrategies ? { "data-visible-for-strategies": definition.visibleForStrategies.join(",") } : {}),
+  });
   const configField = (definition) => {
     const value = defaults[definition.key] ?? defaults.configObject?.[definition.key] ??
       (AI_PROVIDER_CONFIG_KEYS.has(definition.key) ? aiConfigDefaults[definition.key] : undefined) ??
@@ -5464,13 +5509,16 @@ const requestRuntimeNodeConfig = async (node) => {
         ...aiProviders.map((provider) => ({ value: provider.id, label: providerLabelForRuntimeConfig(provider) })),
       ];
       return _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(definition.label),
         _.select(
           {
             "data-config-key": definition.key,
             value,
-            onchange: (event) => syncAiProviderConfigFields(event.currentTarget.value),
+            onchange: (event) => {
+              syncAiProviderConfigFields(event.currentTarget.value);
+              refreshConditionalConfigFields(event.currentTarget.closest("form"));
+            },
           },
           ...options.map((option) => _.option({ value: option.value, selected: option.value === value }, option.label))
         )
@@ -5479,7 +5527,7 @@ const requestRuntimeNodeConfig = async (node) => {
     if (definition.type === "ai-provider-type") {
       const options = aiProviderTypeOptions(aiProviders);
       return _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(definition.label),
         _.select(
           { "data-config-key": definition.key, value: value || options[0] || "local" },
@@ -5490,7 +5538,7 @@ const requestRuntimeNodeConfig = async (node) => {
     if (definition.type === "ai-model") {
       const selectedProvider = aiProviders.find((provider) => provider.id === defaults.configObject?.providerProfile) || null;
       return _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(definition.label),
         _.input({
           "data-config-key": definition.key,
@@ -5503,7 +5551,7 @@ const requestRuntimeNodeConfig = async (node) => {
     if (definition.type === "checkbox") {
       const inputId = `${formId}-${definition.key}`;
       return _.div(
-        { class: "tl-flow-config-field is-check" },
+        configFieldAttrs(definition, "tl-flow-config-field is-check"),
         _.span(definition.label),
         _.fragment(
           _.input({
@@ -5529,14 +5577,18 @@ const requestRuntimeNodeConfig = async (node) => {
     if (definition.type === "select") {
       const isRuleModeField = KNOWLEDGE_RULE_MODE_CONFIG_KEYS.has(definition.key);
       const selectControl = _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(definition.label),
         _.select(
           {
             "data-config-key": definition.key,
             ...(isRuleModeField ? { "data-knowledge-rule-mode-field": "true" } : {}),
             value,
-            onchange: isRuleModeField ? (event) => refreshKnowledgeRulesButtons(event.currentTarget.closest("form")) : undefined,
+            onchange: (event) => {
+              const form = event.currentTarget.closest("form");
+              if (isRuleModeField) refreshKnowledgeRulesButtons(form);
+              refreshConditionalConfigFields(form);
+            },
           },
           ...(definition.options || []).map((option) => _.option({ value: option, selected: option === value }, option))
         )
@@ -5547,14 +5599,14 @@ const requestRuntimeNodeConfig = async (node) => {
     }
     if (definition.type === "textarea") {
       return _.label(
-        { class: "tl-flow-config-field is-wide" },
+        configFieldAttrs(definition, "tl-flow-config-field is-wide"),
         _.span(definition.label),
         _.textarea({ "data-config-key": definition.key, rows: definition.rows || 4, placeholder: definition.placeholder || "", value })
       );
     }
     if (subtype === "telegram" && definition.key === "chatId") {
       return _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(
           definition.label,
           btn({
@@ -5572,7 +5624,7 @@ const requestRuntimeNodeConfig = async (node) => {
     }
     if (subtype === "telegram" && definition.key === "target") {
       return _.label(
-        { class: "tl-flow-config-field" },
+        configFieldAttrs(definition),
         _.span(
           definition.label,
           btn({
@@ -5594,7 +5646,7 @@ const requestRuntimeNodeConfig = async (node) => {
       const fileLabelKey = definition.type === "image-file" ? "imageFileName" : definition.type === "audio-file" ? "audioFileName" : "fileName";
       const fileTypeKey = definition.type === "image-file" ? "imageMimeType" : definition.type === "audio-file" ? "audioMimeType" : "mimeType";
       return _.div(
-        { class: `tl-flow-config-field is-wide is-file${definition.type === "image-file" ? " is-image" : ""}` },
+        configFieldAttrs(definition, `tl-flow-config-field is-wide is-file${definition.type === "image-file" ? " is-image" : ""}`),
         _.span(definition.label),
         _.input({ id: inputId, "data-config-key": definition.key, type: "hidden", value }),
         _.input({
@@ -5626,7 +5678,7 @@ const requestRuntimeNodeConfig = async (node) => {
       );
     }
     return _.label(
-      { class: "tl-flow-config-field" },
+      configFieldAttrs(definition),
       _.span(definition.label),
       _.input({
         "data-config-key": definition.key,
@@ -5725,6 +5777,14 @@ const requestRuntimeNodeConfig = async (node) => {
   });
   dialog.open();
   formRef = document.getElementById(formId);
+  formRef?.addEventListener?.("change", (event) => {
+    if (event.target?.matches?.('[data-config-key="strategy"]')) refreshConditionalConfigFields(formRef);
+  });
+  formRef?.addEventListener?.("input", (event) => {
+    if (event.target?.matches?.('[data-config-key="strategy"]')) refreshConditionalConfigFields(formRef);
+  });
+  refreshConditionalConfigFields(formRef);
+  window.setTimeout?.(() => refreshConditionalConfigFields(document.getElementById(formId)), 0);
 };
 
 const downstreamNodeTree = (rootNode = {}) => {
