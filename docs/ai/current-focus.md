@@ -27,6 +27,7 @@ Connected Agent Node Tool Protocol foundation.
 - AI Agent/Knowledge cleanup is active: hidden story-specific query expansions, answer-shaping examples and sample-material ranking boosts are being removed from runtime paths. Direct AI Agent connected-tool planning now keeps generic tool calls and only retries a short LLM final-answer pass when LM Studio thinking models exhaust `max_tokens` with empty `message.content`.
 - Agent connected-tool scope is direct by default: if an Agent is connected to only one readable node, it can inspect/call only that node's tools, not the whole downstream runtime component. Document Store tool calls now expose debug counts for scoped documents/chunks, selected chunks and returned character counts; `getFullDocument` reconstructs the source from ordered chunks when the stored document record is shorter than the chunk set, and AI Agent prompt rendering preserves the larger full-document evidence window instead of clipping it to the normal short evidence preview.
 - Flow Map AI control ports now keep a single `agent_control` runtime contract but expose four visual handles on every node: top-left and bottom-left for IN, top-right and bottom-right for OUT. This makes tool/agent links easier to route without creating extra runtime ports.
+- Flow Map AI Agent aliases are being corrected to behave as local override nodes: editing an alias must not update the source agent or sibling aliases; aliases inherit future source-agent changes only for fields that have not been locally overridden.
 
 ## Completed Sequence
 

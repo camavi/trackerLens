@@ -34,6 +34,40 @@ window.TrackerLensAiAgentRuntime = (() => {
   const splitList = (value = "") =>
     Array.isArray(value) ? value.filter(Boolean).map(String) : String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 
+  const isPlainObject = (value) =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+  const cloneValue = (value) => {
+    if (value === undefined) return undefined;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return value;
+    }
+  };
+
+  const mergeAgentAliasOverrides = (source = {}, overrides = {}) => {
+    const merge = (base, local) => {
+      if (local === undefined) return cloneValue(base);
+      if (isPlainObject(base) && isPlainObject(local)) {
+        const result = { ...cloneValue(base) };
+        Object.keys(local).forEach((key) => {
+          result[key] = merge(base[key], local[key]);
+        });
+        return result;
+      }
+      return cloneValue(local);
+    };
+    return merge(source || {}, overrides || {});
+  };
+
+  const agentAliasOverrides = (node = {}, config = {}) =>
+    isPlainObject(node.metadata?.aliasOverrides)
+      ? node.metadata.aliasOverrides
+      : isPlainObject(config.aliasOverrides)
+        ? config.aliasOverrides
+        : {};
+
   const configFromAgentRecord = (agent = {}) => ({
     runtimeAgentId: agent.id || "",
     description: agent.description || "",
@@ -98,7 +132,14 @@ window.TrackerLensAiAgentRuntime = (() => {
     try {
       const data = await window.TrackerLensAiRuntimeStore?.list?.();
       const agent = (data?.agents || []).find((item) => item.id === sourceId);
-      return agent ? { ...config, ...configFromAgentRecord(agent), aliasSourceAgentId: sourceId } : config;
+      return agent
+        ? {
+          ...config,
+          ...configFromAgentRecord(mergeAgentAliasOverrides(agent, agentAliasOverrides(node, config))),
+          aliasSourceAgentId: sourceId,
+          aliasOverrides: agentAliasOverrides(node, config),
+        }
+        : config;
     } catch (error) {
       console.warn("AI alias config non risolto", error);
       return config;

@@ -4210,7 +4210,7 @@ const resolveAiAgentEditorRecord = async (node = {}) => {
   const source = await findSavedAiAgent(aiAgentAliasSourceId(node));
   if (!source) return aiAgentFromRuntimeNode(node, aiDefaults);
   return {
-    ...source,
+    ...mergeAiAgentAliasOverrides(source, aiAgentAliasOverrides(node)),
     workspaceId: source.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
   };
 };
@@ -4218,49 +4218,46 @@ const resolveAiAgentEditorRecord = async (node = {}) => {
 const persistAiAgentEditorPayload = async ({ node, payload, form, close }) => {
   const customConfig = readConfigMap(form);
   if (node.metadata?.aiAgentAlias) {
-    if (payload.scope === "runtime") {
-      await window.TrackerLensAiRuntimeStore?.upsertRuntimeAgent?.(payload);
-    } else {
-      await window.TrackerLensAiRuntimeStore?.upsertAgent?.(payload);
-    }
-    const { agentType, inputChannels, outputChannel } = aiAgentChannelsForRecord(payload);
     const aliasId = aiAgentAliasSourceId(node) || payload.id;
-    const aliasNodes = state.runtime.nodes.filter((item) =>
-      item.type === "aiAgent" &&
-      item.metadata?.aiAgentAlias &&
-      (aiAgentAliasSourceId(item) === aliasId || item.id === node.id)
-    );
-    const permissionFlags = normalizeAiAgentPermissionFlags(payload.permissions);
+    const source = await findSavedAiAgent(aliasId);
+    const aliasOverrides = source ? aiAliasOverridesFromPayload(payload, source) : aiAliasPickOverrideFields(payload);
+    const resolvedPayload = source ? mergeAiAgentAliasOverrides(source, aliasOverrides) : payload;
+    const { agentType, inputChannels, outputChannel } = aiAgentChannelsForRecord(resolvedPayload);
+    const permissionFlags = normalizeAiAgentPermissionFlags(resolvedPayload.permissions);
     const permissions = normalizeAssetPermissions(permissionFlags);
-    await Promise.all(aliasNodes.map((aliasNode) => window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({
+    await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({
       node: {
-        ...aliasNode,
-        label: payload.name || aliasNode.label,
-        status: payload.status || aliasNode.status || "active",
+        ...node,
+        label: resolvedPayload.name || node.label,
+        status: resolvedPayload.status || node.status || "active",
         inputs: inputChannels.slice(0, 1),
         outputs: [outputChannel].filter(Boolean),
         channels: [...new Set([...inputChannels.slice(0, 1), outputChannel].filter(Boolean))],
         runtime: {
-          ...(aliasNode.runtime || {}),
-          status: payload.status || aliasNode.status || "active",
-          active: payload.status !== "paused" && payload.status !== "disabled",
+          ...(node.runtime || {}),
+          status: resolvedPayload.status || node.status || "active",
+          active: resolvedPayload.status !== "paused" && resolvedPayload.status !== "disabled",
         },
         metadata: {
-          ...(aliasNode.metadata || {}),
+          ...(node.metadata || {}),
           configured: true,
           aiAgentAlias: true,
+          aliasOverrides,
           aliasSourceAgentId: aliasId,
-          aliasSourceScope: payload.scope || aliasNode.metadata?.aliasSourceScope || "template",
-          icon: payload.icon || aliasNode.metadata?.icon || "psychology",
+          aliasSourceScope: source?.scope || node.metadata?.aliasSourceScope || "template",
+          icon: resolvedPayload.icon || node.metadata?.icon || "psychology",
           subtype: agentType,
           agentRole: agentType,
-          templateId: payload.scope === "runtime" ? payload.templateId || aliasId : aliasId,
-          runtimeStatus: payload.status || aliasNode.metadata?.runtimeStatus || "active",
+          templateId: source?.scope === "runtime" ? source.templateId || aliasId : aliasId,
+          runtimeStatus: resolvedPayload.status || node.metadata?.runtimeStatus || "active",
           config: {
-            ...(aliasNode.metadata?.config || {}),
+            ...(node.metadata?.config || {}),
+            ...aiAgentPayloadConfig(resolvedPayload),
+            ...customConfig,
             aliasSourceAgentId: aliasId,
-            aliasSourceScope: payload.scope || aliasNode.metadata?.aliasSourceScope || "template",
-            templateId: payload.scope === "runtime" ? payload.templateId || aliasId : aliasId,
+            aliasSourceScope: source?.scope || node.metadata?.aliasSourceScope || "template",
+            aliasOverrides,
+            templateId: source?.scope === "runtime" ? source.templateId || aliasId : aliasId,
             linked: "alias",
           },
           manifest: nodeManifest({
@@ -4270,19 +4267,19 @@ const persistAiAgentEditorPayload = async ({ node, payload, form, close }) => {
             inputs: inputChannels.slice(0, 1),
             outputs: [outputChannel].filter(Boolean),
             permissions,
-            runtime: payload.runtime || {},
+            runtime: resolvedPayload.runtime || {},
           }),
           permissions,
-          runtimeMetadata: payload.runtime || {},
+          runtimeMetadata: resolvedPayload.runtime || {},
         },
         updatedAt: new Date().toISOString(),
       },
-    })));
+    });
     await recordFlowAction({
       workspaceId: node.workspaceId || "global",
       nodeId: node.id,
-      message: `Shared AI agent updated through alias: ${payload.name || payload.id}`,
-      context: { action: "ai-agent-alias-source-updated", agentId: aliasId, aliasCount: aliasNodes.length },
+      message: `AI agent alias overrides saved: ${resolvedPayload.name || aliasId}`,
+      context: { action: "ai-agent-alias-overrides-saved", agentId: aliasId, overrideKeys: Object.keys(aliasOverrides) },
     });
     close?.();
     await loadRuntime({ force: true });
@@ -4466,7 +4463,9 @@ const detachAiAgentAliasNode = async ({ node, close = null } = {}) => {
   if (!node?.id || !node.metadata?.aiAgentAlias) return;
   const source = await findSavedAiAgent(aiAgentAliasSourceId(node));
   const { defaults: aiDefaults } = source ? { defaults: {} } : await runtimeDefaultAiConfigForDialog();
-  const payload = source || aiAgentFromRuntimeNode(node, aiDefaults);
+  const payload = source
+    ? mergeAiAgentAliasOverrides(source, aiAgentAliasOverrides(node))
+    : aiAgentFromRuntimeNode(node, aiDefaults);
   const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
   const runtimeAgentId = `runtime_agent_${safeRuntimeId(workspaceId)}_${safeRuntimeId(payload.id || node.id)}_${Date.now()}`;
   const copyPayload = {
