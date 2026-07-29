@@ -1,0 +1,246 @@
+.tl-ai-agent-runtime-dialog-body {
+  display: grid;
+  gap: 16px;
+}
+
+.tl-ai-agent-runtime-summary,
+.tl-ai-agent-runtime-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.tl-ai-agent-runtime-summary>span,
+.tl-ai-agent-runtime-history-row {
+  min-height: 30px;
+}
+
+.tl-ai-agent-runtime-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.72);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tl-ai-agent-runtime-pill.is-online {
+  border-color: rgba(59, 130, 246, 0.44);
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.tl-ai-agent-runtime-pill.is-complete {
+  border-color: rgba(34, 197, 94, 0.44);
+  color: #bbf7d0;
+  background: rgba(22, 163, 74, 0.16);
+}
+
+.tl-ai-agent-runtime-pill.is-warn {
+  border-color: rgba(234, 179, 8, 0.5);
+  color: #fde68a;
+  background: rgba(202, 138, 4, 0.16);
+}
+
+.tl-ai-agent-runtime-pill.is-error {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+  background: rgba(220, 38, 38, 0.16);
+}
+
+.tl-ai-agent-runtime-current,
+.tl-ai-agent-runtime-empty,
+.tl-ai-agent-runtime-timeline,
+.tl-ai-agent-runtime-output,
+.tl-ai-agent-runtime-history {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.tl-ai-agent-runtime-timeline h4,
+.tl-ai-agent-runtime-output h4,
+.tl-ai-agent-runtime-history h4 {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.tl-ai-agent-runtime-output-head,
+.tl-ai-agent-runtime-output-actions,
+.tl-ai-agent-runtime-output-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl-ai-agent-runtime-output-head {
+  justify-content: space-between;
+}
+
+.tl-ai-agent-runtime-output-actions {
+  justify-content: flex-end;
+}
+
+.tl-ai-agent-runtime-output-stat {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  color: rgba(203, 213, 225, 0.86);
+  background: rgba(15, 23, 42, 0.42);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tl-ai-agent-runtime-output-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(234, 179, 8, 0.36);
+  border-radius: 7px;
+  color: #fde68a;
+  background: rgba(202, 138, 4, 0.12);
+}
+
+.tl-ai-agent-runtime-step {
+  display: block;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.22);
+  overflow: hidden;
+}
+
+.tl-ai-agent-runtime-step+.tl-ai-agent-runtime-step {
+  margin-top: 8px;
+}
+
+.tl-ai-agent-runtime-step-index {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #dbeafe;
+  background: rgba(30, 41, 59, 0.9);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.tl-ai-agent-runtime-step-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 12px 12px 46px;
+}
+
+.tl-ai-agent-runtime-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tl-ai-agent-runtime-step-head::-webkit-details-marker {
+  display: none;
+}
+
+.tl-ai-agent-runtime-step-head strong {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tl-ai-agent-runtime-step-head .material-symbols-rounded:last-child {
+  color: rgba(203, 213, 225, 0.72);
+  transition: transform 140ms ease;
+}
+
+.tl-ai-agent-runtime-step[open] .tl-ai-agent-runtime-step-head .material-symbols-rounded:last-child {
+  transform: rotate(180deg);
+}
+
+.tl-ai-agent-runtime-step-main p,
+.tl-ai-agent-runtime-current p,
+.tl-ai-agent-runtime-output p,
+.tl-ai-agent-runtime-empty p {
+  margin: 0;
+  color: rgba(203, 213, 225, 0.82);
+}
+
+.tl-ai-agent-runtime-output p {
+  white-space: pre-wrap;
+}
+
+.tl-ai-agent-runtime-output small {
+  color: rgba(148, 163, 184, 0.86);
+}
+
+.tl-ai-agent-runtime-full-output {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.tl-ai-agent-runtime-output-meta span {
+  align-items: center;
+  color: rgba(203, 213, 225, 0.88);
+}
+
+.tl-ai-agent-runtime-output-meta .material-symbols-rounded {
+  display: inline-grid;
+  place-items: center;
+  width: 18px !important;
+  min-width: 18px;
+  height: 18px !important;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.tl-ai-agent-runtime-full-output pre {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  color: rgba(226, 232, 240, 0.94);
+  background: rgba(2, 6, 23, 0.58);
+  font: inherit;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.tl-ai-agent-runtime-payload,
+.tl-ai-agent-runtime-error {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.55);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}

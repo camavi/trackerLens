@@ -187,6 +187,219 @@
   white-space: nowrap;
 }
 
+.tl-ai-agent-field-hint {
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tl-ai-agent-field-hint.is-warning {
+  color: #fbbf24;
+}
+
+.tl-ai-agent-field-hint.is-danger {
+  color: #f87171;
+}
+
+.tl-ai-agent-toggle-field {
+  min-height: 64px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(214, 226, 235, 0.14);
+  border-radius: 8px;
+  background: rgba(3, 9, 14, 0.44);
+}
+
+.tl-ai-agent-toggle-field>div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.tl-ai-agent-toggle-field strong {
+  color: #e5edf5;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.tl-ai-agent-toggle-field small {
+  color: rgba(148, 163, 184, 0.86);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tl-ai-agent-toggle {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 10px 4px 5px;
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  cursor: pointer;
+}
+
+.tl-ai-agent-toggle-track {
+  width: 46px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.9);
+  transition: background 160ms ease;
+}
+
+.tl-ai-agent-toggle-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.tl-ai-agent-toggle.is-on {
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(20, 83, 45, 0.28);
+}
+
+.tl-ai-agent-toggle.is-on .tl-ai-agent-toggle-track {
+  background: rgba(34, 197, 94, 0.62);
+}
+
+.tl-ai-agent-toggle.is-on .tl-ai-agent-toggle-thumb {
+  transform: translateX(22px);
+  background: #ecfdf5;
+}
+
+.tl-ai-agent-toggle-state {
+  min-width: 58px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tl-ai-agent-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.tl-ai-agent-memory-actions small {
+  color: rgba(254, 202, 202, 0.86);
+}
+
+.tl-ai-agent-memory-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.tl-ai-agent-memory-manager-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tl-ai-agent-memory-manager-row {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.tl-ai-agent-memory-manager-summary span {
+  align-items: center;
+}
+
+.tl-ai-agent-memory-manager-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tl-ai-agent-memory-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+}
+
+.tl-ai-agent-memory-manager-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tl-ai-agent-memory-manager-row small,
+.tl-ai-agent-memory-manager-empty p {
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.tl-ai-agent-memory-manager-row p {
+  margin: 6px 0 0;
+  color: rgba(203, 213, 225, 0.88);
+}
+
+.tl-ai-agent-memory-manager-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+}
+
+.tl-ai-agent-memory-record-view {
+  display: grid;
+  gap: 12px;
+}
+
+.tl-ai-agent-memory-record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tl-ai-agent-memory-record-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.52);
+  font-size: 11px;
+}
+
+.tl-ai-agent-memory-record-meta strong {
+  color: #e5edf5;
+}
+
+.tl-ai-agent-memory-record-text {
+  max-height: 58vh;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  color: #dbe6f2;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.7);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .tl-ai-agent-model-meta {
   min-height: 14px;
   color: var(--tl-text-muted);

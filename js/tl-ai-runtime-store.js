@@ -487,12 +487,12 @@ window.TrackerLensAiRuntimeStore = (() => {
     return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0);
   };
 
-  const listMemory = async ({ scope = "", workspaceId = "", agentId = "", query = "", limit = 50 } = {}) => {
+  const listMemory = async ({ scope = "", workspaceId = "", agentId = "", query = "", limit = 50, includeShared = true } = {}) => {
     const records = await readMemoryRecords();
     return records
       .filter((item) => !scope || item.scope === scope)
       .filter((item) => !workspaceId || item.workspaceId === workspaceId || item.scope === "global")
-      .filter((item) => !agentId || item.agentId === agentId || item.agentId === "shared")
+      .filter((item) => !agentId || item.agentId === agentId || (includeShared && item.agentId === "shared"))
       .map((item) => ({ item, queryScore: memoryQueryScore(item, query) }))
       .filter(({ queryScore }) => !query || queryScore > 0)
       .sort((a, b) =>
@@ -544,6 +544,19 @@ window.TrackerLensAiRuntimeStore = (() => {
   };
 
   const forgetMemory = (id) => deleteRecord(STORES.memory, id);
+
+  const forgetMemoryForAgent = async ({ workspaceId = "", agentId = "", includeShared = false } = {}) => {
+    const targetAgentId = normalizeText(agentId);
+    if (!targetAgentId) return { deleted: 0 };
+    const records = await readMemoryRecords();
+    const targets = records.filter((item) =>
+      item.agentId === targetAgentId &&
+      (includeShared || item.agentId !== "shared") &&
+      (!workspaceId || item.workspaceId === workspaceId || item.scope === "global")
+    );
+    await Promise.all(targets.map((item) => deleteRecord(STORES.memory, item.id)));
+    return { deleted: targets.length };
+  };
 
   const pinMemory = async (id, pinned = true) => {
     const existing = (await readMemoryRecords()).find((item) => item.id === id);
@@ -693,6 +706,7 @@ window.TrackerLensAiRuntimeStore = (() => {
     buildMemoryContext,
     cleanupShortMemory,
     forgetMemory,
+    forgetMemoryForAgent,
     list,
     listMemory,
     localProviderDefaults,

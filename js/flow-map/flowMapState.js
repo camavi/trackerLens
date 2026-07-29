@@ -1309,6 +1309,9 @@ const mergeRuntimeEvent = (event = {}) => {
       : channel
   );
   setRuntimeSignal(state.runtime);
+  if (typeof refreshOpenAiAgentRuntimeDialog === "function") {
+    refreshOpenAiAgentRuntimeDialog(safeEvent);
+  }
   scheduleRuntimeDomRefresh({ preserveScroll: true });
   return true;
 };

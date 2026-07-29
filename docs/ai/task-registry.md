@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-26.
+Last updated: 2026-07-29.
 
 ## Active
 
@@ -27,6 +27,13 @@ Current sub-steps:
 - Agent connected-tool scope fix: `inspectConnectedTools` and `callConnectedNodeTool` now authorize direct Agent connections only, preferring explicit `tool-access` links when present. Agent QA with only `Graph Document Store` connected can no longer traverse the Document -> Chunk -> Dictionary/Event/Entity/Graph component. Document tools now report scoped document/chunk debug counts, `getFullDocument` rebuilds source text from ordered chunks when the stored document record is shorter than the chunk set, and AI Agent prompt rendering now keeps the larger full-document evidence window.
 - AI control port UX: every Flow Map node now renders the same `agent_control` port as four corner handles, with left corners acting as IN targets and right corners as OUT sources. Runtime dependency records still use the single `agent_control` port name.
 - AI Agent alias ownership follow-up: Flow Map aliases now store per-node `aliasOverrides` instead of writing through to `tl_ai_agents`; source-agent updates continue to refresh inherited fields, while locally changed alias fields stay isolated to that node and do not update sibling aliases.
+- AI Agent runtime visibility follow-up: AI Agent jobs now persist step timelines, emit `ai.agent.step` runtime events and expose a Flow Map `View Runtime` dialog on Agent nodes for read-only status/task/provider/timeline inspection.
+- AI Agent runtime card status follow-up: Agent node badges/footers now derive the latest visible runtime state from `ai.agent.step`, exposing Working/Using tools/Calling model/Complete/Fallback/Needs user directly on the canvas.
+- AI Agent long-output continuation follow-up: provider `finishReason: length` now triggers bounded continuation calls, merges continuation text into the final result and records continuation steps for inspection in Agent Runtime.
+- AI Agent continuation limits follow-up: `Max Continuations` defaults to 10, accepts `0` as unlimited for long-running jobs and surfaces warning/danger hints in the editor for high or unlimited values.
+- AI Agent memory clear follow-up: add an editor Memory action to delete stored memory for the current agent/runtime node only, leaving jobs, logs and saved configuration intact.
+- AI Agent memory manager follow-up: expose a reusable Agent Memory dialog from editor/runtime/node surfaces, with per-record delete, refresh and clear-all controls.
+- AI Agent memory persistence follow-up: add a `Save Responses` Memory toggle and persist completed AI Agent outputs as `runtime-response` records when memory persistence is enabled.
 - Phase 5 MCP adapter: pending. Expose selected connected node tools through a local MCP server adapter and import external MCP tools as controlled observations through a TL MCP client node/connector.
 
 ### TASK-027: Knowledge Runtime

@@ -93,6 +93,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     model: agent.provider?.model || "local-model",
     temperature: agent.provider?.temperature ?? 0.2,
     maxTokens: agent.provider?.maxTokens ?? 800,
+    maxContinuationCalls: agent.provider?.maxContinuationCalls ?? 10,
     topP: agent.provider?.topP ?? 0.9,
     streaming: String(Boolean(agent.provider?.streaming)),
     responseFormat: agent.provider?.responseFormat || "json",
@@ -119,6 +120,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     memoryPersistence: agent.memory?.persistence || "workspace",
     memoryCompression: agent.memory?.compression || "summary",
     contextWindow: agent.memory?.contextWindow ?? 6,
+    saveResponsesToMemory: agent.memory?.saveResponses !== false,
     ...(agent.permissions || {}),
     ...(agent.debug || {}),
     ...(agent.metrics || {}),
@@ -953,6 +955,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     return {
       text,
       usage: usageFromAiResponse({ data, prompt, text }),
+      finishReason: data.done_reason || "",
       raw: data,
     };
   };
@@ -1033,8 +1036,58 @@ window.TrackerLensAiAgentRuntime = (() => {
       text,
       usage: usageFromAiResponse({ data, prompt, text }),
       model: resolvedModel,
+      finishReason: choice.finish_reason || "",
       raw: data,
     };
+  };
+
+  const callAiProvider = async ({ provider = {}, model = "", prompt = "", maxTokens = 800 } = {}) => {
+    const providerName = String(provider?.provider || provider?.name || "").toLowerCase();
+    if (providerName.includes("ollama")) return callOllama({ provider, model, prompt, maxTokens });
+    if (providerName.includes("lm") || providerName.includes("studio")) return callLmStudio({ provider, model, prompt, maxTokens });
+    throw new Error("Provider AI non configurato per chat runtime");
+  };
+
+  const mergeContinuationText = (base = "", addition = "") => {
+    const current = String(base || "").trimEnd();
+    const next = String(addition || "").trim();
+    if (!current) return next;
+    if (!next) return current;
+    if (current.endsWith(next)) return current;
+    const tail = current.slice(-600);
+    for (let size = Math.min(tail.length, next.length, 240); size >= 24; size -= 1) {
+      if (tail.endsWith(next.slice(0, size))) {
+        return `${current}${next.slice(size)}`;
+      }
+    }
+    return `${current}\n\n${next}`;
+  };
+
+  const buildContinuationPrompt = ({ originalPrompt = "", generatedText = "", attempt = 1 } = {}) => [
+    "Continue the assistant output below exactly from the point where it stopped.",
+    "Do not repeat completed paragraphs.",
+    "Do not add analysis, metadata, labels, JSON or markdown fences.",
+    "Preserve the same language, tone, names and style.",
+    "If the text is already complete, write only the natural final continuation or ending.",
+    "",
+    "Original task:",
+    String(originalPrompt || "").slice(0, 3600),
+    "",
+    `Current output to continue (attempt ${attempt}):`,
+    String(generatedText || "").slice(-3600),
+  ].join("\n");
+
+  const memoryScopeForPersistence = (config = {}, subtype = "") => {
+    const persistence = String(config.memoryPersistence || "").toLowerCase();
+    if (["none", "off", "disabled"].includes(persistence)) return "";
+    if (["short", "workspace", "global"].includes(persistence)) return persistence;
+    if (persistence === "persistent") return "workspace";
+    return subtype === "memory" ? "short" : "workspace";
+  };
+
+  const shouldSaveResponseToMemory = (config = {}, subtype = "") => {
+    if (String(config.saveResponsesToMemory ?? config.saveResponses ?? "true").toLowerCase() === "false") return false;
+    return Boolean(memoryScopeForPersistence(config, subtype));
   };
 
   const stripJsonFence = (text = "") => {
@@ -1103,6 +1156,21 @@ window.TrackerLensAiAgentRuntime = (() => {
       completionTokens: Number.isFinite(completionTokens) ? completionTokens : 0,
       totalTokens: Number.isFinite(totalTokens) ? totalTokens : 0,
     };
+  };
+
+  const AI_AGENT_STEP_LABELS = {
+    received: "Received event",
+    mapping: "Applied mapping",
+    input_context: "Loaded input context",
+    connected_tools: "Observed connected tools",
+    memory: "Loaded memory",
+    prompt: "Built prompt",
+    llm: "Called model",
+    fallback: "Used fallback",
+    continuation: "Continued output",
+    emit: "Emitted output",
+    complete: "Completed",
+    error: "Error",
   };
 
   class AiAgentRuntime {
@@ -1185,6 +1253,85 @@ window.TrackerLensAiAgentRuntime = (() => {
       } catch (error) {
         console.warn("AI token usage non persistito", error);
       }
+    }
+
+    async recordStep({ node, jobId = "", runId = "", steps = [], step = {}, status = "working", patch = {} } = {}) {
+      if (!node?.id || !jobId) return steps;
+      const now = new Date().toISOString();
+      const stepStatus = String(step.status || status || "working").toLowerCase();
+      const isTerminalStep = ["complete", "completed", "warning", "error", "fallback", "skipped"].includes(stepStatus);
+      const nextStep = {
+        id: step.id || `step_${steps.length + 1}`,
+        type: step.type || "step",
+        label: step.label || AI_AGENT_STEP_LABELS[step.type] || "Runtime step",
+        status: step.status || status || "working",
+        summary: step.summary || "",
+        detail: step.detail || "",
+        payload: step.payload || null,
+        startedAt: step.startedAt || now,
+        completedAt: isTerminalStep ? now : step.completedAt || "",
+      };
+      let replaceIndex = -1;
+      if (isTerminalStep && nextStep.type) {
+        for (let index = steps.length - 1; index >= 0; index -= 1) {
+          const previous = steps[index] || {};
+          if (previous.type === nextStep.type && String(previous.status || "").toLowerCase() === "working") {
+            replaceIndex = index;
+            break;
+          }
+        }
+      }
+      const nextSteps = replaceIndex >= 0
+        ? steps.map((item, index) => index === replaceIndex ? {
+          ...item,
+          ...nextStep,
+          id: item.id || nextStep.id,
+          startedAt: item.startedAt || nextStep.startedAt,
+        } : item)
+        : [...steps, nextStep];
+      const currentStep = nextSteps[nextSteps.length - 1] || null;
+      try {
+        const existingData = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => null);
+        const existingJob = (existingData?.jobs || []).find((job) => job.id === jobId || job.raw?.id === jobId);
+        const existingRaw = existingJob?.raw && typeof existingJob.raw === "object" ? existingJob.raw : {};
+        await window.TrackerLensAiRuntimeStore?.upsertJob?.({
+          ...existingRaw,
+          id: jobId,
+          workspaceId: this.workspaceId,
+          runId,
+          agentId: node.id,
+          agent: node.label || node.id,
+          status,
+          runtimeStatus: status,
+          currentStep,
+          steps: nextSteps,
+          updatedAt: now,
+          ...patch,
+        });
+        await this.bus?.emit?.("ai.agent.step", {
+          jobId,
+          runId,
+          agentId: node.id,
+          agentLabel: node.label || node.id,
+          status,
+          step: nextStep,
+          stepsCount: nextSteps.length,
+        }, {
+          workspaceId: this.workspaceId,
+          eventType: "ai_agent_step",
+          sourceNodeId: node.id,
+          status,
+          meta: {
+            aiAgentRuntime: node.id,
+            jobId,
+            runId,
+            stepType: nextStep.type,
+          },
+        });
+      } catch (error) {
+        console.warn("AI agent step non persistito", error);
+      }
+      return nextSteps;
     }
 
     clearTokenUsageForNodes(ids = []) {
@@ -1306,7 +1453,36 @@ window.TrackerLensAiAgentRuntime = (() => {
 
     async performExecution({ node, payload, event }) {
       const config = await resolveNodeConfig(node);
+      const jobId = `ai_job_${node.id}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const runId = event.meta?.runId || payload?.runId || "";
+      let steps = [];
+      steps = await this.recordStep({
+        node,
+        jobId,
+        runId,
+        steps,
+        status: "working",
+        step: {
+          type: "received",
+          status: "complete",
+          summary: `Input event ${event?.channel || "runtime"} received.`,
+          payload: { inputChannel: event?.channel || "", inputEventId: event?.id || "", sourceNodeId: event?.sourceNodeId || "" },
+        },
+      });
       const inputDataContext = await collectInputDataContext({ node, event, workspaceId: this.workspaceId, config, runtime: this.runtime });
+      steps = await this.recordStep({
+        node,
+        jobId,
+        runId,
+        steps,
+        status: "working",
+        step: {
+          type: "input_context",
+          status: "complete",
+          summary: inputDataContext ? "Loaded linked input context." : "No additional linked input context.",
+          payload: inputDataContext ? { channels: Object.keys(inputDataContext) } : null,
+        },
+      });
       const ragContext = normalizeRagContext({ payload, event });
       const graphContext = normalizeGraphContext({ payload, event });
       const toolContext = await collectConnectedToolObservations({
@@ -1318,6 +1494,25 @@ window.TrackerLensAiAgentRuntime = (() => {
         config,
         ragContext,
         graphContext,
+      });
+      steps = await this.recordStep({
+        node,
+        jobId,
+        runId,
+        steps,
+        status: toolContext?.observations?.length ? "waiting_for_tools" : "working",
+        step: {
+          type: "connected_tools",
+          status: "complete",
+          summary: toolContext?.observations?.length
+            ? `Collected ${toolContext.observations.length} connected tool observation${toolContext.observations.length === 1 ? "" : "s"}.`
+            : "No connected tool observations required.",
+          payload: {
+            plannerError: toolContext?.plannerError || "",
+            calls: (toolContext?.calls || []).map((call) => ({ nodeId: call.nodeId, tool: call.tool })),
+            observations: (toolContext?.observations || []).map((item) => ({ nodeId: item.nodeId, tool: item.tool, ok: item.ok !== false, status: item.status || "" })),
+          },
+        },
       });
       if (toolContext?.observations?.length) {
         await this.bus?.emit?.("agent.tool.observation", {
@@ -1356,9 +1551,51 @@ window.TrackerLensAiAgentRuntime = (() => {
         query: event.channel || nodeSubtype(node),
         limit: 6,
       }).catch(() => "");
+      steps = await this.recordStep({
+        node,
+        jobId,
+        runId,
+        steps,
+        status: "working",
+        step: {
+          type: "memory",
+          status: "complete",
+          summary: memoryDisabled ? "Memory disabled for this agent." : "Loaded workspace memory context.",
+          payload: {
+            disabled: memoryDisabled,
+            hasMemory: Boolean(memory),
+            persistence: config.memoryPersistence || "",
+            saveResponsesToMemory: shouldSaveResponseToMemory(config, nodeSubtype(node)),
+          },
+        },
+      });
       const prompt = buildPrompt({ node, payload, event, memory, config: promptConfig });
-      const jobId = `ai_job_${node.id}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const runId = event.meta?.runId || payload?.runId || "";
+      const configMaxTokens = Number(config.maxTokens || 0);
+      const providerMaxTokens = Number(provider?.maxTokens || 0);
+      const maxTokens = Math.max(128, Math.min(32000, Number(configMaxTokens || providerMaxTokens || 800)));
+      const maxContinuationCalls = Math.max(0, Number(config.maxContinuationCalls ?? config.continuationCalls ?? 10));
+      steps = await this.recordStep({
+        node,
+        jobId,
+        runId,
+        steps,
+        status: "planning",
+        step: {
+          type: "prompt",
+          status: "complete",
+          summary: "Prompt assembled for provider call.",
+          payload: {
+            promptChars: prompt.length,
+            provider: provider?.name || provider?.provider || "fallback",
+            model,
+            maxTokens,
+            maxContinuationCalls,
+            configMaxTokens: config.maxTokens ?? "",
+            providerMaxTokens: provider?.maxTokens ?? "",
+            aliasSourceAgentId: config.aliasSourceAgentId || "",
+          },
+        },
+      });
       await window.TrackerLensAiRuntimeStore?.upsertJob?.({
         id: jobId,
         workspaceId: this.workspaceId,
@@ -1372,7 +1609,10 @@ window.TrackerLensAiAgentRuntime = (() => {
         ragContext,
         graphContext,
         toolContext,
-        status: "running",
+        status: "running_llm",
+        runtimeStatus: "running_llm",
+        currentStep: steps[steps.length - 1] || null,
+        steps,
         provider: provider?.name || provider?.provider || "fallback",
         model,
         createdAt: new Date().toISOString(),
@@ -1381,23 +1621,83 @@ window.TrackerLensAiAgentRuntime = (() => {
       const startedAt = performance.now();
       try {
         let ai = null;
-        const providerName = String(provider?.provider || provider?.name || "").toLowerCase();
-        if (providerName.includes("ollama")) {
-          ai = await callOllama({ provider, model, prompt });
-        } else if (providerName.includes("lm") || providerName.includes("studio")) {
-          ai = await callLmStudio({ provider, model, prompt });
-        } else {
-          throw new Error("Provider AI non configurato per chat runtime");
+        steps = await this.recordStep({
+          node,
+          jobId,
+          runId,
+          steps,
+          status: "running_llm",
+          step: {
+            type: "llm",
+            status: "working",
+            summary: `Calling ${provider?.name || provider?.provider || "provider"} with ${model}.`,
+            payload: { provider: provider?.name || provider?.provider || "", model, maxTokens, maxContinuationCalls },
+          },
+        });
+        ai = await callAiProvider({ provider, model, prompt, maxTokens });
+        let text = ai.text || "";
+        let finishReason = ai.finishReason || "";
+        let usage = normalizeTokenUsage(ai.usage || {});
+        const continuations = [];
+        for (let attempt = 1; finishReason === "length" && (maxContinuationCalls === 0 || attempt <= maxContinuationCalls); attempt += 1) {
+          const continuationPrompt = buildContinuationPrompt({ originalPrompt: prompt, generatedText: text, attempt });
+          steps = await this.recordStep({
+            node,
+            jobId,
+            runId,
+            steps,
+            status: "running_llm",
+            step: {
+              type: "continuation",
+              status: "working",
+              summary: `Continuing output after token limit (${attempt}/${maxContinuationCalls || "unlimited"}).`,
+              payload: { attempt, maxTokens, currentChars: text.length },
+            },
+          });
+          const continuation = await callAiProvider({ provider, model, prompt: continuationPrompt, maxTokens });
+          const continuationText = continuation.text || "";
+          text = mergeContinuationText(text, continuationText);
+          finishReason = continuation.finishReason || "";
+          const continuationUsage = normalizeTokenUsage(continuation.usage || {});
+          usage = normalizeTokenUsage({
+            promptTokens: usage.promptTokens + continuationUsage.promptTokens,
+            completionTokens: usage.completionTokens + continuationUsage.completionTokens,
+            totalTokens: usage.totalTokens + continuationUsage.totalTokens,
+          });
+          continuations.push({
+            attempt,
+            finishReason,
+            chars: continuationText.length,
+            totalChars: text.length,
+            usage: continuationUsage,
+          });
+          steps = await this.recordStep({
+            node,
+            jobId,
+            runId,
+            steps,
+            status: finishReason === "length" ? "running_llm" : "emitting",
+            step: {
+              type: "continuation",
+              status: finishReason === "length" ? "warning" : "complete",
+              summary: finishReason === "length"
+                ? `Continuation ${attempt} also stopped at max token limit.`
+                : `Continuation ${attempt} completed.`,
+              payload: { attempt, maxTokens, finishReason, addedChars: continuationText.length, totalChars: text.length, tokens: continuationUsage.totalTokens },
+            },
+          });
         }
         const latencyMs = Math.round(performance.now() - startedAt);
         const result = {
           provider: provider?.name || provider?.provider || "local",
           model: ai.model || model,
           role: nodeSubtype(node),
-          response: parseAiText(ai.text),
-          text: ai.text,
-          usage: ai.usage || {},
-          cost: estimateCost({ usage: ai.usage || {}, provider, config }),
+          response: parseAiText(text),
+          text,
+          usage,
+          finishReason,
+          continuations,
+          cost: estimateCost({ usage, provider, config }),
           latencyMs,
           inputChannel: event.channel || "",
           prompt,
@@ -1406,7 +1706,27 @@ window.TrackerLensAiAgentRuntime = (() => {
           ragContext,
           graphContext,
           toolContext,
+          jobId,
+          runtimeStatus: "emitting",
+          steps,
         };
+        steps = await this.recordStep({
+          node,
+          jobId,
+          runId,
+          steps,
+          status: "emitting",
+          step: {
+            type: "llm",
+            status: result.finishReason === "length" ? "warning" : "complete",
+            summary: result.finishReason === "length"
+              ? `Model stopped at max token limit after ${latencyMs}ms and ${continuations.length} continuation${continuations.length === 1 ? "" : "s"}.`
+              : `Model response received in ${latencyMs}ms.`,
+            payload: { latencyMs, tokens: result.usage.totalTokens || 0, model: result.model, maxTokens, finishReason: result.finishReason, continuations: continuations.length },
+          },
+        });
+        result.steps = steps;
+        result.runtimeStatus = "emitting";
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -1415,6 +1735,9 @@ window.TrackerLensAiAgentRuntime = (() => {
           agent: node.label || node.id,
           task: event.channel || "runtime event",
           status: "completed",
+          runtimeStatus: "complete",
+          currentStep: steps[steps.length - 1] || null,
+          steps,
           provider: result.provider,
           model,
           durationMs: latencyMs,
@@ -1436,7 +1759,25 @@ window.TrackerLensAiAgentRuntime = (() => {
         const result = {
           ...fallbackResponse({ node, payload, event, reason: error?.message || String(error), ragContext, graphContext }),
           toolContext,
+          jobId,
+          runtimeStatus: "fallback",
+          steps,
         };
+        steps = await this.recordStep({
+          node,
+          jobId,
+          runId,
+          steps,
+          status: "fallback",
+          step: {
+            type: "fallback",
+            status: "fallback",
+            summary: "Provider failed; local fallback result created.",
+            detail: error?.message || String(error),
+          },
+        });
+        result.steps = steps;
+        result.runtimeStatus = "fallback";
         await window.TrackerLensAiRuntimeStore?.upsertJob?.({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -1445,6 +1786,9 @@ window.TrackerLensAiAgentRuntime = (() => {
           agent: node.label || node.id,
           task: event.channel || "runtime event",
           status: "fallback",
+          runtimeStatus: "fallback",
+          currentStep: steps[steps.length - 1] || null,
+          steps,
           provider: result.provider,
           model: result.model,
           durationMs: latencyMs,
@@ -1534,19 +1878,53 @@ window.TrackerLensAiAgentRuntime = (() => {
             graphRelationCount: result.graphContext?.relationCount ?? null,
           },
         });
+        if (result?.jobId && Array.isArray(result.steps)) {
+          const emitSteps = await this.recordStep({
+            node,
+            jobId: result.jobId,
+            runId,
+            steps: result.steps,
+            status: "complete",
+            step: {
+              type: "emit",
+              status: "complete",
+              summary: `Output emitted on ${channel}.`,
+              payload: { outputChannel: channel, latencyMs },
+            },
+          });
+          await this.recordStep({
+            node,
+            jobId: result.jobId,
+            runId,
+            steps: emitSteps,
+            status: "complete",
+            step: {
+              type: "complete",
+              status: "complete",
+              summary: "Agent runtime completed.",
+              payload: { outputChannel: channel },
+            },
+          });
+        }
         await this.log({
           node,
           message: `AI agent emitted ${channel}: ${node.label || node.id}`,
           context: { inputChannel: event.channel, outputChannel: channel, inputEventId: event.id, runId, result: emitPayload, latencyMs },
         });
-        if (nodeSubtype(node) === "memory") {
+        const subtype = nodeSubtype(node);
+        const memoryScope = memoryScopeForPersistence(config, subtype);
+        if (shouldSaveResponseToMemory(config, subtype)) {
+          const resultText = typeof result.text === "string" ? result.text : JSON.stringify(result.response || result);
           await window.TrackerLensAiRuntimeStore?.remember?.({
-            scope: "short",
+            scope: memoryScope,
             workspaceId: this.workspaceId,
             agentId: node.id,
             kind: "runtime-response",
-            name: node.label || node.id,
-            text: typeof result.text === "string" ? result.text : JSON.stringify(result.response || result),
+            name: `${node.label || node.id} response`,
+            text: resultText,
+            summary: resultText.slice(0, 240),
+            tags: [subtype || "agent", "runtime-response", channel].filter(Boolean),
+            weight: subtype === "memory" ? 1.2 : 1,
           });
         }
       } catch (error) {

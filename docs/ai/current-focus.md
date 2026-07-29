@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-07-24.
+Last updated: 2026-07-29.
 
 ## Active Area
 
@@ -28,6 +28,13 @@ Connected Agent Node Tool Protocol foundation.
 - Agent connected-tool scope is direct by default: if an Agent is connected to only one readable node, it can inspect/call only that node's tools, not the whole downstream runtime component. Document Store tool calls now expose debug counts for scoped documents/chunks, selected chunks and returned character counts; `getFullDocument` reconstructs the source from ordered chunks when the stored document record is shorter than the chunk set, and AI Agent prompt rendering preserves the larger full-document evidence window instead of clipping it to the normal short evidence preview.
 - Flow Map AI control ports now keep a single `agent_control` runtime contract but expose four visual handles on every node: top-left and bottom-left for IN, top-right and bottom-right for OUT. This makes tool/agent links easier to route without creating extra runtime ports.
 - Flow Map AI Agent aliases are being corrected to behave as local override nodes: editing an alias must not update the source agent or sibling aliases; aliases inherit future source-agent changes only for fields that have not been locally overridden.
+- AI Agent runtime visibility is starting: Agent jobs now carry step timelines and emit `ai.agent.step`, and Flow Map Agent nodes expose a `View Runtime` dialog for read-only run status, task, provider and step inspection.
+- Agent node cards now surface the latest runtime step as a badge/footer state such as Working, Using tools, Calling model, Complete, Fallback or Needs user.
+- AI Agent long-output continuation is now being added: when a provider stops with `finishReason: length`, the runtime can issue bounded continuation calls, merge the output and expose continuation steps in the runtime timeline.
+- Continuation settings now use `Max Continuations` default 10; `0` means unlimited continuations for controlled long-running jobs, and the editor warns on unlimited or high values.
+- Agent memory management follow-up: the AI Agent editor Memory tab now has a per-agent `Clear Memory` action that deletes stored memory for the current runtime agent without touching jobs, logs or configuration.
+- Agent memory management is moving to a reusable dialog: the editor, Agent node body and Agent Runtime viewer can open a shared memory manager with record counts, per-record deletion and clear-all.
+- Agent memory persistence follow-up: AI Agent responses can now be saved automatically as agent memory records when `Save Responses` is enabled and Memory Persistence is not `none`.
 
 ## Completed Sequence
 

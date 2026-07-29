@@ -1212,9 +1212,11 @@ const refreshNodeRuntimeDom = (graph, activity) => {
     if (footerInfo) {
       const fieldCount = sampleOutputFields(node).length;
       const perf = nodePerformance(node);
+      const agentRuntime = typeof aiAgentRuntimeActivity === "function" ? aiAgentRuntimeActivity(node) : null;
       const runtimeStatus = ["busy", "queued", "overloaded"].includes(live?.status) ? live.status : "";
       footerInfo.textContent = perf
         ? `${performanceLabel(perf)} · ${perf.health || perf.status || "perf"}`
+        : agentRuntime ? `${agentRuntime.label}${agentRuntime.stepLabel ? ` · ${agentRuntime.stepLabel}` : ""}`
         : runtimeStatus ? `${runtimeStatus} · ${live.count} events`
           : live ? `${live.count} events · ${formatShortDate(live.lastAt)}` : fieldCount ? `${fieldCount} outputs` : node.metadata?.library ? "library" : node.status || "idle";
     }
@@ -1452,12 +1454,351 @@ const renderKnowledgeGraphQueryScope = (node = {}) => {
   );
 };
 
+const AI_AGENT_RUNTIME_STATUS_LABELS = {
+  idle: "Idle",
+  queued: "Queued",
+  working: "Working",
+  planning: "Planning",
+  waiting_for_tools: "Using tools",
+  waiting_for_user: "Waiting for user",
+  waiting_for_permission: "Waiting for permission",
+  running_llm: "Calling model",
+  emitting: "Emitting output",
+  complete: "Complete",
+  completed: "Complete",
+  fallback: "Fallback",
+  warning: "Warning",
+  error: "Error",
+  cancelled: "Cancelled",
+  paused: "Paused",
+};
+
+const aiAgentRuntimeStatusLabel = (status = "") =>
+  AI_AGENT_RUNTIME_STATUS_LABELS[String(status || "").toLowerCase()] || status || "Idle";
+
+const aiAgentRuntimeStatusTone = (status = "") => {
+  const value = String(status || "").toLowerCase();
+  if (["complete", "completed"].includes(value)) return "complete";
+  if (["error", "cancelled"].includes(value)) return "error";
+  if (["waiting_for_user", "waiting_for_permission", "fallback", "paused", "warning"].includes(value)) return "warn";
+  if (["working", "planning", "waiting_for_tools", "running_llm", "emitting", "queued"].includes(value)) return "online";
+  return "idle";
+};
+
+const aiAgentJobTime = (job = {}) =>
+  Date.parse(job.updatedAt || job.raw?.updatedAt || job.startedAt || job.raw?.createdAt || 0) || 0;
+
+const latestAiAgentJobs = async (node = {}, limit = 8) => {
+  const data = await window.TrackerLensAiRuntimeStore?.list?.().catch(() => null);
+  return (data?.jobs || [])
+    .filter((job) => job.agentId === node.id || job.raw?.agentId === node.id || job.raw?.runtimeNodeId === node.id)
+    .sort((a, b) => aiAgentJobTime(b) - aiAgentJobTime(a))
+    .slice(0, limit);
+};
+
+const aiAgentRuntimeDialogViews = new Map();
+
+const updateAiAgentRuntimeDialogView = async (entry = {}) => {
+  if (!entry.node?.id || !entry.body?.isConnected) {
+    if (entry.node?.id) aiAgentRuntimeDialogViews.delete(entry.node.id);
+    return;
+  }
+  const jobs = await latestAiAgentJobs(entry.node);
+  entry.body.replaceChildren(renderAiAgentRuntimeDialogContent({ node: entry.node, jobs }));
+};
+
+const refreshOpenAiAgentRuntimeDialog = (event = {}) => {
+  const nodeId = event.sourceNodeId || event.meta?.aiAgentRuntime || event.payload?.agentId || "";
+  if (!nodeId) return;
+  const entry = aiAgentRuntimeDialogViews.get(nodeId);
+  if (!entry || entry.raf) return;
+  entry.raf = requestAnimationFrame(() => {
+    entry.raf = 0;
+    updateAiAgentRuntimeDialogView(entry);
+  });
+};
+
+const aiAgentRuntimeResultSummary = (job = null) => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  const response = result.response && typeof result.response === "object" ? result.response : null;
+  const text = result.text || response?.summary || response?.answer || response?.text || response?.message || job?.message || raw.error || "";
+  if (text) return String(text).trim();
+  return "";
+};
+
+const aiAgentRuntimeOutputMeta = (job = null, text = "") => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  const usage = result.usage || raw.usage || {};
+  const finishReason = result.finishReason || raw.finishReason || "";
+  const chars = String(text || "").length;
+  const tokens = Number(raw.tokens || job?.tokens || usage.totalTokens || usage.total_tokens || 0);
+  return { chars, tokens, finishReason };
+};
+
+const aiAgentRuntimePreviewText = (text = "", max = 1400) => {
+  const value = String(text || "").trim();
+  return value.length > max ? `${value.slice(0, max).trimEnd()}\n...` : value;
+};
+
+const openAiAgentRuntimeFullOutputDialog = ({ node = {}, text = "", meta = {} } = {}) => {
+  const dialog = _.Dialog({
+    class: "tl-ai-agent-runtime-output-dialog",
+    panelClass: "tl-ai-agent-runtime-output-panel",
+    size: "lg",
+    title: "Agent Output",
+    subtitle: node.label || node.id,
+    icon: "article",
+    closeButton: true,
+    scrollable: true,
+    bodyMaxHeight: "76vh",
+    content: () => _.div(
+      { class: "tl-ai-agent-runtime-full-output" },
+      _.div(
+        { class: "tl-ai-agent-runtime-output-meta" },
+        _.span(icon("text_fields", "sm"), `${meta.chars || 0} chars`),
+        meta.tokens ? _.span(icon("token", "sm"), `${meta.tokens} tokens`) : null,
+        meta.finishReason ? _.span(icon(meta.finishReason === "length" ? "warning_amber" : "check_circle", "sm"), `finish: ${meta.finishReason}`) : null
+      ),
+      _.pre(text)
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(text) }, icon("content_copy", "sm"), "Copy"),
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const aiAgentRuntimeExecutionSummary = (job = null, steps = []) => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  const provider = raw.provider || job?.provider || result.provider || "";
+  const model = raw.model || job?.model || result.model || "";
+  const duration = raw.durationMs || job?.durationMs || result.latencyMs || 0;
+  const tokens = raw.tokens || job?.tokens || result.usage?.totalTokens || 0;
+  const toolStep = steps.find((step) => step?.type === "connected_tools");
+  const outputStep = [...steps].reverse().find((step) => step?.type === "emit");
+  const toolCalls = toolStep?.payload?.calls?.length || 0;
+  const toolObservations = toolStep?.payload?.observations?.length || 0;
+  const outputChannel = outputStep?.payload?.outputChannel || result.outputChannel || "";
+  const parts = [
+    `Received ${raw.task || job?.task || "runtime event"}.`,
+    toolCalls || toolObservations
+      ? `Used ${toolCalls} connected tool call${toolCalls === 1 ? "" : "s"} and collected ${toolObservations} observation${toolObservations === 1 ? "" : "s"}.`
+      : "No connected tools were required.",
+    provider || model ? `Called ${[provider, model].filter(Boolean).join(" · ")}${duration ? ` in ${duration}ms` : ""}.` : "",
+    tokens ? `Token usage: ${tokens}.` : "",
+    outputChannel ? `Emitted output on ${outputChannel}.` : "",
+  ].filter(Boolean);
+  return parts.join(" ");
+};
+
+const normalizeAiAgentRuntimeSteps = (steps = []) =>
+  (steps || []).reduce((list, step) => {
+    const status = String(step?.status || "").toLowerCase();
+    const replaceIndex = step?.type && ["complete", "completed", "warning", "error", "fallback", "skipped"].includes(status)
+      ? list.map((item) => item?.type).lastIndexOf(step?.type)
+      : -1;
+    if (replaceIndex >= 0 && String(list[replaceIndex]?.status || "").toLowerCase() === "working") {
+      list[replaceIndex] = {
+        ...list[replaceIndex],
+        ...step,
+        id: list[replaceIndex].id || step.id,
+        startedAt: list[replaceIndex].startedAt || step.startedAt,
+      };
+      return list;
+    }
+    list.push(step);
+    return list;
+  }, []);
+
+const renderAiAgentRuntimeStep = (step = {}, index = 0, { open = false } = {}) => {
+  const status = step.status || "complete";
+  const tone = aiAgentRuntimeStatusTone(status);
+  const payload = step.payload && typeof step.payload === "object" ? step.payload : null;
+  return _.details(
+    { class: `tl-ai-agent-runtime-step is-${tone}`, ...(open ? { open: true } : {}) },
+    _.summary(
+      { class: "tl-ai-agent-runtime-step-head" },
+      _.span({ class: "tl-ai-agent-runtime-step-index" }, String(index + 1)),
+      _.strong(step.label || step.type || "Runtime step"),
+      _.span({ class: `tl-ai-agent-runtime-pill is-${tone}` }, aiAgentRuntimeStatusLabel(status)),
+      icon("expand_more", "sm")
+    ),
+    _.div(
+      { class: "tl-ai-agent-runtime-step-main" },
+      step.summary ? _.p(step.summary) : null,
+      step.detail ? _.small(step.detail) : null,
+      payload ? _.pre({ class: "tl-ai-agent-runtime-payload" }, JSON.stringify(payload, null, 2).slice(0, 1600)) : null
+    )
+  );
+};
+
+const renderAiAgentRuntimeOutput = ({ node = {}, job = null, text = "" } = {}) => {
+  const meta = aiAgentRuntimeOutputMeta(job, text);
+  const truncated = String(text || "").length > 1400;
+  return _.div(
+    { class: "tl-ai-agent-runtime-output" },
+    _.div(
+      { class: "tl-ai-agent-runtime-output-head" },
+      _.h4("Agent Output"),
+      _.div(
+        { class: "tl-ai-agent-runtime-output-actions" },
+        _.span({ class: `tl-ai-agent-runtime-pill is-${meta.finishReason === "length" ? "warn" : "complete"}` }, meta.finishReason ? `finish: ${meta.finishReason}` : "output"),
+        _.span({ class: "tl-ai-agent-runtime-output-stat" }, `${meta.chars} chars`),
+        meta.tokens ? _.span({ class: "tl-ai-agent-runtime-output-stat" }, `${meta.tokens} tokens`) : null,
+        btn({ class: "is-ghost is-compact", title: "Copy full output", onclick: () => copyRuntimeValue(text) }, icon("content_copy", "sm"), "Copy"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Open full output",
+          onclick: () => openAiAgentRuntimeFullOutputDialog({ node, text, meta }),
+        }, icon("open_in_full", "sm"), "Full Output")
+      )
+    ),
+    meta.finishReason === "length"
+      ? _.div({ class: "tl-ai-agent-runtime-output-warning" }, icon("warning_amber", "sm"), _.span("Output stopped by max tokens. Increase Max Tokens to continue longer generations."))
+      : null,
+    _.p(aiAgentRuntimePreviewText(text)),
+    truncated ? _.small("Preview truncated in this panel. Open Full Output to read everything.") : null
+  );
+};
+
+const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
+  const latest = jobs[0] || null;
+  const raw = latest?.raw || {};
+  const steps = normalizeAiAgentRuntimeSteps(Array.isArray(raw.steps) ? raw.steps : []);
+  const status = raw.runtimeStatus || latest?.status || raw.status || node.runtime?.status || node.status || "idle";
+  const tone = aiAgentRuntimeStatusTone(status);
+  const agentOutputText = aiAgentRuntimeResultSummary(latest);
+  return _.div(
+    { class: "tl-ai-agent-runtime-dialog-body" },
+    _.div(
+      { class: "tl-ai-agent-runtime-summary" },
+      _.span({ class: `tl-ai-agent-runtime-pill is-${tone}` }, aiAgentRuntimeStatusLabel(status)),
+        _.span(icon("assignment", "sm"), latest?.task || raw.task || "No task yet"),
+        _.span(icon("dns", "sm"), [latest?.provider || raw.provider || "", latest?.model || raw.model || ""].filter(Boolean).join(" · ") || "No provider run"),
+      _.span(icon("schedule", "sm"), latest?.durationMs ? `${latest.durationMs}ms` : raw.updatedAt || latest?.updatedAt || ""),
+      window.TrackerLensAiAgentEditor?.openMemoryManager ? btn({
+        class: "is-ghost is-compact",
+        onclick: () => window.TrackerLensAiAgentEditor.openMemoryManager({ ...node, name: node.label || node.id, nodeId: node.id, runtimeNodeId: node.id, workspaceId: node.workspaceId || raw.workspaceId || "" }),
+      }, icon("memory", "sm"), "Memory") : null
+    ),
+    latest
+      ? _.div(
+        { class: "tl-ai-agent-runtime-current" },
+        _.strong(["complete", "completed"].includes(String(status).toLowerCase()) ? "Run Summary" : "Current Run"),
+        _.p(aiAgentRuntimeExecutionSummary(latest, steps) || raw.currentStep?.summary || "Runtime job recorded."),
+        raw.error ? _.pre({ class: "tl-ai-agent-runtime-error" }, String(raw.error).slice(0, 1800)) : null
+      )
+      : _.div(
+        { class: "tl-ai-agent-runtime-empty" },
+        icon("terminal", "md"),
+        _.strong("No runtime jobs yet"),
+        _.p("Run this Agent from a connected input event to populate the runtime timeline.")
+      ),
+    steps.length
+      ? _.div(
+        { class: "tl-ai-agent-runtime-timeline" },
+        _.h4("Timeline"),
+        ...steps.map((step, index) => renderAiAgentRuntimeStep(step, index, { open: index === steps.length - 1 }))
+      )
+      : null,
+    agentOutputText
+      ? renderAiAgentRuntimeOutput({ node, job: latest, text: agentOutputText })
+      : null,
+    jobs.length > 1
+      ? _.div(
+        { class: "tl-ai-agent-runtime-history" },
+        _.h4("Recent Runs"),
+        ...jobs.slice(1).map((job) => {
+          const jobRaw = job.raw || {};
+          const jobStatus = jobRaw.runtimeStatus || job.status || jobRaw.status || "";
+          const jobTone = aiAgentRuntimeStatusTone(jobStatus);
+          return _.div(
+            { class: "tl-ai-agent-runtime-history-row" },
+            _.span({ class: `tl-ai-agent-runtime-pill is-${jobTone}` }, aiAgentRuntimeStatusLabel(jobStatus)),
+            _.strong(job.task || jobRaw.task || job.id),
+            _.small(job.updatedAt || jobRaw.updatedAt || job.startedAt || "")
+          );
+        })
+      )
+      : null
+  );
+};
+
+const openAiAgentRuntimeDialog = async (node = {}) => {
+  const jobs = await latestAiAgentJobs(node);
+  const body = _.div(
+    { class: "tl-ai-agent-runtime-live-root" },
+    renderAiAgentRuntimeDialogContent({ node, jobs })
+  );
+  aiAgentRuntimeDialogViews.set(node.id, { node, body, raf: 0 });
+  const dialog = _.Dialog({
+    class: "tl-ai-agent-runtime-view-dialog",
+    panelClass: "tl-ai-agent-runtime-view-panel",
+    size: "lg",
+    title: "Agent Runtime",
+    subtitle: node.label || node.id,
+    icon: "terminal",
+    closeButton: true,
+    scrollable: true,
+    bodyMaxHeight: "72vh",
+    content: () => body,
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({
+        onclick: () => {
+          updateAiAgentRuntimeDialogView(aiAgentRuntimeDialogViews.get(node.id));
+        },
+      }, icon("refresh", "sm"), "Refresh"),
+      btn({
+        onclick: () => {
+          aiAgentRuntimeDialogViews.delete(node.id);
+          close();
+        },
+      }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
 const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   if (isAgentBridgeNode(node)) {
     return [_.div(
       { class: "tl-flow-agent-bridge-core" },
       icon("network_node", "lg")
     )];
+  }
+  if (node.type === "aiAgent" && !node.metadata?.library) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "View AI Agent runtime timeline",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openAiAgentRuntimeDialog(node);
+        },
+      }, icon("terminal", "sm"), "View Runtime"),
+      window.TrackerLensAiAgentEditor?.openMemoryManager ? btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "Manage AI Agent memory",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          window.TrackerLensAiAgentEditor.openMemoryManager({ ...node, name: node.label || node.id, nodeId: node.id, runtimeNodeId: node.id, workspaceId: node.workspaceId || "" });
+        },
+      }, icon("memory", "sm"), "Memory") : null,
+      renderInlineNodeSettings(node),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
+    ];
   }
   if (isFlowBoundaryNode(node)) return [renderFlowPortNodeBody(node, view)];
   if (isEmbeddedFlowMapNode(node)) {

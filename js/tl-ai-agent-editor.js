@@ -214,6 +214,7 @@ window.TrackerLensAiAgentEditor = (() => {
         model: agentFormValue(form, "model") || "local-model",
         temperature: numberValue(form, "temperature", 0.2),
         maxTokens: numberValue(form, "maxTokens", 800),
+        maxContinuationCalls: numberValue(form, "maxContinuationCalls", 10),
         topP: numberValue(form, "topP", 0.9),
         streaming: boolValue(form, "streaming", false),
         responseFormat: agentFormValue(form, "responseFormat") || "json",
@@ -246,6 +247,7 @@ window.TrackerLensAiAgentEditor = (() => {
         persistence: agentFormValue(form, "memoryPersistence") || "workspace",
         compression: agentFormValue(form, "memoryCompression") || "summary",
         contextWindow: numberValue(form, "contextWindow", 6),
+        saveResponses: boolValue(form, "saveResponsesToMemory", true),
       },
       permissions,
       debug,
@@ -272,6 +274,163 @@ window.TrackerLensAiAgentEditor = (() => {
 
   const agentInput = (label, name, value = "", extra = {}) =>
     _.Input({ label, name, value: value ?? "", ...extra });
+  const agentInputWithHint = (label, name, value = "", extra = {}, hint = "") =>
+    _.div(
+      { class: "tl-ai-agent-field" },
+      agentInput(label, name, value, extra),
+      hint ? _.small({ class: `tl-ai-agent-field-hint ${extra.hintTone ? `is-${extra.hintTone}` : ""}` }, hint) : null
+    );
+  const agentMemoryId = (agent = {}) =>
+    agent.runtimeNodeId || agent.nodeId || agent.id || agent.raw?.runtimeNodeId || agent.raw?.id || "";
+  const agentMemoryWorkspaceId = (agent = {}) =>
+    agent.workspaceId || agent.raw?.workspaceId || "";
+  const memoryRecordText = (record = {}) => {
+    if (typeof record.text === "string" && record.text) return record.text;
+    if (typeof record.meta === "string" && record.meta) return record.meta;
+    try {
+      return JSON.stringify(record.raw || record, null, 2);
+    } catch {
+      return String(record.name || record.id || "");
+    }
+  };
+  const openAgentMemoryRecord = (record = {}) => {
+    const fullText = memoryRecordText(record);
+    const meta = {
+      id: record.id || "",
+      scope: record.scope || "",
+      kind: record.kind || "",
+      agentId: record.agentId || "",
+      workspaceId: record.workspaceId || "",
+      tags: record.tags || [],
+      weight: record.weight ?? "",
+      createdAt: record.createdAt || "",
+      updatedAt: record.updatedAt || "",
+    };
+    _.Dialog({
+      class: "tl-ai-agent-memory-record-dialog",
+      panelClass: "tl-ai-agent-memory-record-panel",
+      size: "lg",
+      title: record.name || "Memory Record",
+      subtitle: [record.scope, record.kind, record.updatedAt].filter(Boolean).join(" · "),
+      icon: "article",
+      closeButton: true,
+      scrollable: true,
+      bodyMaxHeight: "72vh",
+      content: () => _.div(
+        { class: "tl-ai-agent-memory-record-view" },
+        _.div(
+          { class: "tl-ai-agent-memory-record-meta" },
+          ...Object.entries(meta)
+            .filter(([, value]) => Array.isArray(value) ? value.length : value !== "")
+            .map(([key, value]) => _.span(_.strong(key), Array.isArray(value) ? value.join(", ") : String(value)))
+        ),
+        _.pre({ class: "tl-ai-agent-memory-record-text" }, fullText)
+      ),
+      actions: ({ close }) => _.Toolbar(
+        { align: "end", gap: 8 },
+        btn({
+          onclick: async () => {
+            await navigator.clipboard?.writeText?.(fullText);
+          },
+        }, icon("content_copy", "sm"), "Copy"),
+        btn({ onclick: close }, "Close")
+      ),
+    }).open();
+  };
+  const renderAgentMemoryManagerBody = async ({ agent = {}, body = null } = {}) => {
+    if (!body) return;
+    const agentId = agentMemoryId(agent);
+    const workspaceId = agentMemoryWorkspaceId(agent);
+    const records = agentId && window.TrackerLensAiRuntimeStore?.listMemory
+      ? await window.TrackerLensAiRuntimeStore.listMemory({ workspaceId, agentId, limit: 200, includeShared: false }).catch(() => [])
+      : [];
+    body.replaceChildren(
+      _.div(
+        { class: "tl-ai-agent-memory-manager" },
+        _.div(
+          { class: "tl-ai-agent-memory-manager-summary" },
+          _.span(icon("memory", "sm"), _.strong(String(records.length)), " records"),
+          _.span(icon("schedule", "sm"), records[0]?.updatedAt || "No memory yet")
+        ),
+        records.length
+          ? _.div(
+            { class: "tl-ai-agent-memory-manager-list" },
+            ...records.map((item) => _.div(
+              { class: "tl-ai-agent-memory-manager-row" },
+              _.div(
+                _.strong(item.name || item.kind || item.id),
+                _.small([item.scope, item.kind, item.updatedAt].filter(Boolean).join(" · ")),
+                _.p(String(item.text || item.meta || "").slice(0, 420))
+              ),
+              _.div(
+                { class: "tl-ai-agent-memory-manager-row-actions" },
+                btn({
+                  class: "is-ghost",
+                  title: "View full memory record",
+                  onclick: () => openAgentMemoryRecord(item),
+                }, icon("open_in_full", "sm"), "Full Record"),
+                btn({
+                  class: "is-ghost is-danger",
+                  title: "Delete memory record",
+                  onclick: async () => {
+                    await window.TrackerLensAiRuntimeStore?.forgetMemory?.(item.id);
+                    renderAgentMemoryManagerBody({ agent, body });
+                  },
+                }, icon("delete", "sm"))
+              )
+            ))
+          )
+          : _.div(
+            { class: "tl-ai-agent-memory-manager-empty" },
+            icon("memory", "md"),
+            _.strong("No memory records"),
+            _.p("This agent has no stored memory records for the current workspace.")
+          )
+      )
+    );
+  };
+  const clearAgentMemory = async (agent = {}, { confirm = true, notify = true } = {}) => {
+    const agentId = agentMemoryId(agent);
+    if (!agentId || !window.TrackerLensAiRuntimeStore?.forgetMemoryForAgent) return null;
+    const ok = !confirm || window.confirm?.(`Clear memory for ${agent.name || agentId}? This does not delete jobs, logs or configuration.`);
+    if (!ok) return null;
+    const result = await window.TrackerLensAiRuntimeStore.forgetMemoryForAgent({
+      workspaceId: agentMemoryWorkspaceId(agent),
+      agentId,
+    });
+    if (notify) window.alert?.(`Memory cleared: ${result?.deleted || 0} record${result?.deleted === 1 ? "" : "s"}.`);
+    return result;
+  };
+  const openAgentMemoryManager = async (agent = {}) => {
+    const body = _.div({ class: "tl-ai-agent-memory-manager-host" }, "Loading memory...");
+    const refresh = async () => renderAgentMemoryManagerBody({ agent, body });
+    const dialog = _.Dialog({
+      class: "tl-ai-agent-memory-manager-dialog",
+      panelClass: "tl-ai-agent-memory-manager-panel",
+      size: "lg",
+      title: "Agent Memory",
+      subtitle: agent.name || agentMemoryId(agent),
+      icon: "memory",
+      closeButton: true,
+      scrollable: true,
+      bodyMaxHeight: "72vh",
+      content: () => body,
+      actions: ({ close }) => _.Toolbar(
+        { align: "end", gap: 8 },
+        btn({ onclick: refresh }, icon("refresh", "sm"), "Refresh"),
+        btn({
+          class: "is-danger",
+          onclick: async () => {
+            const result = await clearAgentMemory(agent, { confirm: true, notify: false });
+            if (result) refresh();
+          },
+        }, icon("delete_sweep", "sm"), "Clear All"),
+        btn({ onclick: close }, "Close")
+      ),
+    });
+    dialog.open();
+    await refresh();
+  };
   const agentSelect = (label, name, value, options, extra = {}) =>
     _.div(
       { class: "tl-ai-agent-field" },
@@ -291,6 +450,35 @@ window.TrackerLensAiAgentEditor = (() => {
     );
   const agentBooleanSelect = (label, name, value = false) =>
     agentSelect(label, name, value ? "true" : "false", [{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }]);
+  const agentToggle = (label, name, value = false, hint = "") => {
+    const isEnabled = value === true || value === "true";
+    const hidden = _.input({ type: "hidden", name, value: isEnabled ? "true" : "false" });
+    const state = _.span({ class: "tl-ai-agent-toggle-state" }, isEnabled ? "Enabled" : "Disabled");
+    const control = _.button(
+      {
+        type: "button",
+        class: `tl-ai-agent-toggle ${isEnabled ? "is-on" : "is-off"}`,
+        role: "switch",
+        "aria-checked": String(isEnabled),
+        onclick: () => {
+          const next = hidden.value !== "true";
+          hidden.value = next ? "true" : "false";
+          control.classList.toggle("is-on", next);
+          control.classList.toggle("is-off", !next);
+          control.setAttribute("aria-checked", String(next));
+          state.textContent = next ? "Enabled" : "Disabled";
+        },
+      },
+      _.span({ class: "tl-ai-agent-toggle-track" }, _.span({ class: "tl-ai-agent-toggle-thumb" })),
+      state
+    );
+    return _.div(
+      { class: "tl-ai-agent-field tl-ai-agent-toggle-field" },
+      hidden,
+      _.div(_.strong(label), hint ? _.small(hint) : null),
+      control
+    );
+  };
   const agentTextarea = (label, name, value = "", rows = 5, placeholder = "") =>
     _.label({ class: "tl-ai-agent-textarea-field" }, _.span(label), _.textarea({ name, rows, placeholder, value: value || "" }));
 
@@ -555,6 +743,17 @@ window.TrackerLensAiAgentEditor = (() => {
           agentModelSelect(),
           agentInput("Temperature", "temperature", provider.temperature ?? 0.2, { type: "number", step: "0.1" }),
           agentInput("Max Tokens", "maxTokens", provider.maxTokens ?? 800, { type: "number" }),
+          agentInputWithHint(
+            "Max Continuations",
+            "maxContinuationCalls",
+            provider.maxContinuationCalls ?? 10,
+            { type: "number", hintTone: Number(provider.maxContinuationCalls ?? 10) === 0 ? "danger" : Number(provider.maxContinuationCalls ?? 10) > 10 ? "warning" : "" },
+            Number(provider.maxContinuationCalls ?? 10) === 0
+              ? "0 = unlimited continuations. Use only for controlled long-running jobs."
+              : Number(provider.maxContinuationCalls ?? 10) > 10
+                ? "High continuation count: this can run for a long time and consume many tokens."
+                : "Default 10. Use 0 for unlimited continuations."
+          ),
           agentInput("Top P", "topP", provider.topP ?? 0.9, { type: "number", step: "0.05" }),
           agentBooleanSelect("Streaming", "streaming", Boolean(provider.streaming)),
           agentSelect("Response Format", "responseFormat", provider.responseFormat || "json", AI_RESPONSE_FORMATS)
@@ -601,7 +800,28 @@ window.TrackerLensAiAgentEditor = (() => {
           agentInput("Expiration", "memoryExpiration", memoryConfig.expiration || "24h"),
           agentSelect("Persistence", "memoryPersistence", memoryConfig.persistence || "workspace", ["none", "short", "workspace", "persistent"]),
           agentSelect("Compression", "memoryCompression", memoryConfig.compression || "summary", ["none", "summary", "semantic", "rolling-window"]),
-          agentInput("Context Window", "contextWindow", memoryConfig.contextWindow ?? 6, { type: "number" })
+          agentInput("Context Window", "contextWindow", memoryConfig.contextWindow ?? 6, { type: "number" }),
+          agentToggle("Save Responses", "saveResponsesToMemory", memoryConfig.saveResponses !== false, "Store completed outputs in this agent memory."),
+          _.div(
+            { class: "tl-ai-agent-memory-actions" },
+            btn({
+              class: "is-ghost is-danger",
+              type: "button",
+              onclick: (event) => {
+                event.preventDefault();
+                clearAgentMemory(agent);
+              },
+            }, icon("delete_sweep", "sm"), "Clear Memory"),
+            btn({
+              class: "is-ghost",
+              type: "button",
+              onclick: (event) => {
+                event.preventDefault();
+                openAgentMemoryManager(agent);
+              },
+            }, icon("memory", "sm"), "Manage Memory"),
+            _.small("Deletes stored memory for this agent only. Jobs, logs and settings stay intact.")
+          )
         ),
       },
       {
@@ -690,6 +910,7 @@ window.TrackerLensAiAgentEditor = (() => {
 
   return {
     open,
+    openMemoryManager: openAgentMemoryManager,
     openRuntimeEditorShell,
     contractFromForm,
     splitList,

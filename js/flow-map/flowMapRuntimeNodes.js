@@ -1,9 +1,81 @@
 // Flow Map runtime node configuration, custom node forms and graph links.
 // Extracted from js/flowMapView.js; loaded in order by flowMap.html.
+const AI_AGENT_NODE_RUNTIME_STATUS_LABELS = {
+  idle: "Idle",
+  queued: "Queued",
+  working: "Working",
+  planning: "Planning",
+  waiting_for_tools: "Using tools",
+  waiting_for_user: "Needs user",
+  waiting_for_permission: "Needs permission",
+  running_llm: "Calling model",
+  emitting: "Emitting",
+  complete: "Complete",
+  completed: "Complete",
+  fallback: "Fallback",
+  warning: "Warning",
+  error: "Error",
+  cancelled: "Cancelled",
+  paused: "Paused",
+};
+
+const AI_AGENT_NODE_RUNTIME_STEP_LABELS = {
+  received: "Received event",
+  mapping: "Applied mapping",
+  input_context: "Loaded input",
+  connected_tools: "Using tools",
+  memory: "Loaded memory",
+  prompt: "Built prompt",
+  llm: "Calling model",
+  continuation: "Continuing output",
+  fallback: "Fallback",
+  emit: "Emitted output",
+  complete: "Complete",
+  error: "Error",
+};
+
+const aiAgentRuntimeBadgeTone = (status = "") => {
+  const value = String(status || "").toLowerCase();
+  if (["error", "cancelled"].includes(value)) return "red";
+  if (["waiting_for_user", "waiting_for_permission", "fallback", "paused", "warning"].includes(value)) return "gold";
+  if (["working", "planning", "waiting_for_tools", "running_llm", "emitting", "queued"].includes(value)) return "violet";
+  if (["complete", "completed"].includes(value)) return "green";
+  return "blue";
+};
+
+const aiAgentRuntimeActivity = (node = {}) => {
+  if (node.type !== "aiAgent" || typeof filteredRuntimeEvents !== "function") return null;
+  const event = (filteredRuntimeEvents() || [])
+    .filter((item) =>
+      item.eventType === "ai_agent_step" ||
+      item.channel === "ai.agent.step" ||
+      item.meta?.stepType
+    )
+    .filter((item) =>
+      item.sourceNodeId === node.id ||
+      item.meta?.aiAgentRuntime === node.id ||
+      item.payload?.agentId === node.id
+    )
+    .sort((a, b) => Date.parse(b.createdAt || b.updatedAt || 0) - Date.parse(a.createdAt || a.updatedAt || 0))[0];
+  if (!event) return null;
+  const status = event.payload?.status || event.status || event.payload?.step?.status || "working";
+  const step = event.payload?.step || {};
+  const stepType = step.type || event.meta?.stepType || "";
+  return {
+    status,
+    label: AI_AGENT_NODE_RUNTIME_STATUS_LABELS[String(status || "").toLowerCase()] || status || "Working",
+    tone: aiAgentRuntimeBadgeTone(status),
+    stepLabel: step.label || AI_AGENT_NODE_RUNTIME_STEP_LABELS[String(stepType).toLowerCase()] || stepType,
+    summary: step.summary || "",
+    createdAt: event.createdAt || event.updatedAt || "",
+  };
+};
+
 const nodeBadges = (node = {}, live = null) => {
   const badges = [];
   const sandbox = nodeSandboxReport(node);
   const perf = nodePerformance(node);
+  const agentRuntime = aiAgentRuntimeActivity(node);
   if (node.metadata?.library) {
     badges.push({ label: "Library", tone: "blue" });
   } else if (node.metadata?.aiAgentAlias || isEmbeddedFlowMapNode(node)) {
@@ -15,6 +87,7 @@ const nodeBadges = (node = {}, live = null) => {
   } else {
     badges.push({ label: node.status || "Active", tone: "green" });
   }
+  if (agentRuntime) badges.push({ label: agentRuntime.label, tone: agentRuntime.tone });
 
   if (sandbox.status === "error") badges.push({ label: "Sandbox", tone: "red" });
   else if (sandbox.status === "policy") badges.push({ label: "Policy", tone: "gold" });
@@ -978,7 +1051,7 @@ const runtimeContractSchemaFields = (schema = {}) =>
     ? window.TrackerLensRuntimeContract.normalizeSettingsSchema(schema)
     : Object.entries(schema || {}).map(([key, type]) => ({ key, label: key, type: String(type || "string") }));
 
-const AI_PROVIDER_CONFIG_KEYS = new Set(["providerProfile", "providerType", "model", "temperature", "maxTokens", "topP", "streaming", "responseFormat"]);
+const AI_PROVIDER_CONFIG_KEYS = new Set(["providerProfile", "providerType", "model", "temperature", "maxTokens", "maxContinuationCalls", "topP", "streaming", "responseFormat"]);
 const AI_PROMPT_CONFIG_KEYS = new Set(["systemPrompt", "promptTemplate", "outputInstructions"]);
 const KNOWLEDGE_RULE_MODE_CONFIG_KEYS = new Set(["entityMode", "dictionaryMode", "eventMode", "enrichmentMode", "cueMode", "queryExpansionMode", "compositionMode"]);
 const AI_PROVIDER_FIELD_DEFINITIONS = Object.freeze([
@@ -987,6 +1060,7 @@ const AI_PROVIDER_FIELD_DEFINITIONS = Object.freeze([
   { key: "model", label: "Model", type: "ai-model" },
   { key: "temperature", label: "Temperature", type: "number", placeholder: "0.2", defaultValue: "0.2", step: "0.1" },
   { key: "maxTokens", label: "Max Tokens", type: "number", placeholder: "800", defaultValue: "800" },
+  { key: "maxContinuationCalls", label: "Max Continuations", type: "number", placeholder: "10", defaultValue: "10" },
   { key: "topP", label: "Top P", type: "number", placeholder: "0.9", defaultValue: "0.9", step: "0.05" },
   { key: "streaming", label: "Streaming", type: "select", options: ["false", "true"], defaultValue: "false" },
   { key: "responseFormat", label: "Response Format", type: "select", options: ["json", "structured", "text", "markdown"], defaultValue: "json" },
@@ -3985,6 +4059,12 @@ const runtimeDefaultAiConfigForDialog = async () => {
   };
 };
 
+const aiAgentConfigBool = (value, fallback = true) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return String(value).toLowerCase() !== "false";
+};
+
 const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
   const defaults = runtimeNodeConfigDefaults(node);
   const config = defaults.configObject || {};
@@ -4029,6 +4109,7 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
       model: config.model || aiDefaults.model || "local-model",
       temperature: config.temperature ?? aiDefaults.temperature ?? 0.2,
       maxTokens: config.maxTokens ?? aiDefaults.maxTokens ?? 800,
+      maxContinuationCalls: config.maxContinuationCalls ?? aiDefaults.maxContinuationCalls ?? 10,
       topP: config.topP ?? 0.9,
       streaming: config.streaming === true || config.streaming === "true",
       responseFormat: config.responseFormat || "json",
@@ -4061,6 +4142,7 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
       persistence: config.memoryPersistence || "workspace",
       compression: config.memoryCompression || "summary",
       contextWindow: config.contextWindow ?? 6,
+      saveResponses: aiAgentConfigBool(config.saveResponsesToMemory, true),
     },
     permissions: {
       canAccessWeb: config.canAccessWeb === true || config.canAccessWeb === "true",
@@ -4074,7 +4156,7 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
     debug: {
       enableLogs: config.enableLogs !== "false",
       savePrompts: config.savePrompts !== "false",
-      saveResponses: config.saveResponses !== "false",
+      saveResponses: aiAgentConfigBool(config.saveResponses, true),
       runtimeMetrics: config.runtimeMetrics !== "false",
       debugMode: config.debugMode === true || config.debugMode === "true",
     },
@@ -4114,6 +4196,7 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   model: payload.provider?.model || "local-model",
   temperature: payload.provider?.temperature ?? 0.2,
   maxTokens: payload.provider?.maxTokens ?? 800,
+  maxContinuationCalls: payload.provider?.maxContinuationCalls ?? 10,
   topP: payload.provider?.topP ?? 0.9,
   streaming: String(Boolean(payload.provider?.streaming)),
   responseFormat: payload.provider?.responseFormat || "json",
@@ -4138,6 +4221,7 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   memoryPersistence: payload.memory?.persistence || "workspace",
   memoryCompression: payload.memory?.compression || "summary",
   contextWindow: payload.memory?.contextWindow ?? 6,
+  saveResponsesToMemory: payload.memory?.saveResponses !== false,
   ...Object.fromEntries(Object.entries(payload.permissions || {}).map(([key, value]) => [key, String(Boolean(value))])),
   ...Object.fromEntries(Object.entries(payload.debug || {}).map(([key, value]) => [key, String(Boolean(value))])),
   ...payload.metrics,
@@ -4213,11 +4297,13 @@ const aiAgentAliasSourceId = (node = {}) =>
 
 const resolveAiAgentEditorRecord = async (node = {}) => {
   const { defaults: aiDefaults } = await runtimeDefaultAiConfigForDialog();
-  if (!node.metadata?.aiAgentAlias) return aiAgentFromRuntimeNode(node, aiDefaults);
+  if (!node.metadata?.aiAgentAlias) return { ...aiAgentFromRuntimeNode(node, aiDefaults), nodeId: node.id, runtimeNodeId: node.id };
   const source = await findSavedAiAgent(aiAgentAliasSourceId(node));
-  if (!source) return aiAgentFromRuntimeNode(node, aiDefaults);
+  if (!source) return { ...aiAgentFromRuntimeNode(node, aiDefaults), nodeId: node.id, runtimeNodeId: node.id };
   return {
     ...mergeAiAgentAliasOverrides(source, aiAgentAliasOverrides(node)),
+    nodeId: node.id,
+    runtimeNodeId: node.id,
     workspaceId: source.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
   };
 };
@@ -5348,6 +5434,7 @@ const requestOrchestratorAgentConfig = (node) => {
               inputField("Model", "model"),
               inputField("Temperature", "temperature", { type: "number", step: "0.1" }),
               inputField("Max tokens", "maxTokens", { type: "number" }),
+              inputField("Max continuations", "maxContinuationCalls", { type: "number" }),
               selectField("Response format", "responseFormat", ["json", "structured", "text", "markdown"]),
               previewCard("Decision provider", "Provider settings are stored with the Orchestrator mission contract and can be used by autonomous planning.")
             ),

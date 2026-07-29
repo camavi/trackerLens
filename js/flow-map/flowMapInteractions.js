@@ -1030,6 +1030,7 @@ const resolveAiAgentAliasNodes = async (nodes = []) => {
           permissions,
           config: {
             ...(node.metadata?.config || {}),
+            ...aiAgentPayloadConfig(resolvedAgent),
             aliasSourceAgentId: sourceId,
             aliasSourceScope: agent.scope || node.metadata?.aliasSourceScope || "template",
             templateId: agent.scope === "runtime" ? agent.templateId || sourceId : sourceId,
