@@ -4543,6 +4543,77 @@ const detachAiAgentAliasNode = async ({ node, close = null } = {}) => {
   await loadRuntime({ force: true });
 };
 
+const resetAiAgentAliasNode = async ({ node, close = null } = {}) => {
+  if (!node?.id || !node.metadata?.aiAgentAlias) return;
+  const aliasId = aiAgentAliasSourceId(node);
+  const source = await findSavedAiAgent(aliasId);
+  if (!source) {
+    window.alert("L'agente originale collegato a questo alias non è più disponibile.");
+    return;
+  }
+  const { agentType, inputChannels, outputChannel } = aiAgentChannelsForRecord(source);
+  const permissionFlags = normalizeAiAgentPermissionFlags(source.permissions);
+  const permissions = normalizeAssetPermissions(permissionFlags);
+  const nextNode = {
+    ...node,
+    label: source.name || node.label,
+    status: source.status || node.status || "active",
+    inputs: inputChannels.slice(0, 1),
+    outputs: [outputChannel].filter(Boolean),
+    channels: [...new Set([...inputChannels.slice(0, 1), outputChannel].filter(Boolean))],
+    runtime: {
+      ...(node.runtime || {}),
+      status: source.status || node.status || "active",
+      active: source.status !== "paused" && source.status !== "disabled",
+    },
+    metadata: {
+      ...(node.metadata || {}),
+      configured: true,
+      aiAgentAlias: true,
+      aliasOverrides: {},
+      aliasSourceAgentId: aliasId,
+      aliasSourceScope: source.scope || node.metadata?.aliasSourceScope || "template",
+      icon: source.icon || node.metadata?.icon || "psychology",
+      subtype: agentType,
+      agentRole: agentType,
+      templateId: source.scope === "runtime" ? source.templateId || aliasId : aliasId,
+      runtimeStatus: source.status || node.metadata?.runtimeStatus || "active",
+      config: {
+        ...aiAgentPayloadConfig(source),
+        aliasSourceAgentId: aliasId,
+        aliasSourceScope: source.scope || node.metadata?.aliasSourceScope || "template",
+        aliasOverrides: {},
+        templateId: source.scope === "runtime" ? source.templateId || aliasId : aliasId,
+        linked: "alias",
+      },
+      manifest: nodeManifest({
+        type: "aiAgent",
+        subtype: agentType,
+        category: "ai-agents",
+        inputs: inputChannels.slice(0, 1),
+        outputs: [outputChannel].filter(Boolean),
+        permissions,
+        runtime: source.runtime || {},
+      }),
+      permissions,
+      runtimeMetadata: source.runtime || {},
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
+  if (window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode) {
+    await window.TrackerLensChannelRegistry.upsertChannelsForRuntimeNode({ node: nextNode });
+  }
+  await recordFlowAction({
+    workspaceId: nextNode.workspaceId || state.filters.workspaceId || "workspace_global",
+    nodeId: nextNode.id,
+    message: `AI agent alias reset to source: ${nextNode.label || aliasId}`,
+    context: { action: "ai-agent-alias-reset", sourceAgentId: aliasId },
+  });
+  close?.();
+  await loadRuntime({ force: true });
+};
+
 const requestAiAgentRuntimeConfig = async (node) => {
   if (!node?.id || !window.TrackerLensAiAgentEditor?.open) return;
   const { providers } = await runtimeDefaultAiConfigForDialog();
@@ -4614,9 +4685,15 @@ const requestAiAgentRuntimeConfig = async (node) => {
       ? `${node.label || node.id} · Shared alias`
       : `${node.label || node.id} · Flow Map runtime node`,
     footerActions: node.metadata?.aiAgentAlias
-      ? ({ close }) => btn({
-        onclick: () => detachAiAgentAliasNode({ node, close }),
-      }, icon("link_off", "sm"), "Make Copy")
+      ? ({ close }) => _.div(
+        { class: "tl-ai-agent-alias-footer-actions" },
+        btn({
+          onclick: () => resetAiAgentAliasNode({ node, close }),
+        }, icon("restart_alt", "sm"), "Reset"),
+        btn({
+          onclick: () => detachAiAgentAliasNode({ node, close }),
+        }, icon("link_off", "sm"), "Make Copy")
+      )
       : null,
     customTabs: orchestratorTabs,
     onSave: ({ payload, form, close }) => subtype === "orchestrator"
