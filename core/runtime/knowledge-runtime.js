@@ -250,6 +250,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
+  const deleteSemanticRelations = async ({ workspaceId, collectionId = "", documentId = "", nodeId = "" } = {}) => {
+    const relations = await listStore(STORES.relations);
+    const staleRelations = byWorkspace(relations, workspaceId)
+      .filter((relation) => relation.metadata?.semantic)
+      .filter((relation) => !relation.metadata?.graphBuilder)
+      .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+      .filter((relation) => !documentId || relation.documentId === documentId)
+      .filter((relation) => !nodeId || relation.metadata?.nodeId === nodeId);
+    await deleteRecords(STORES.relations, staleRelations.map((relation) => relation.id));
+    return { relations: staleRelations.length, ids: staleRelations.map((relation) => relation.id) };
+  };
+
   const clearGraphSnapshots = async ({ workspaceId, collectionId = "", documentId = "", graphScope = "" } = {}) => {
     const scope = String(graphScope || (documentId ? "document" : collectionId ? "collection" : "workspace")).toLowerCase();
     const metrics = await listStore(STORES.metrics);
@@ -540,6 +552,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const estimateChunkTokens = (text = "") => {
     const tokens = String(text || "").match(/[\p{L}\p{N}_]+(?:['’.-][\p{L}\p{N}_]+)*/gu) || [];
     return tokens.length || Math.ceil(String(text || "").length / 4);
+  };
+
+  const trimTextToEstimatedTokens = (text = "", tokenLimit = 0) => {
+    const value = String(text || "");
+    const limit = Math.floor(Number(tokenLimit || 0));
+    if (!value || limit <= 0 || estimateChunkTokens(value) <= limit) return value;
+    const words = [...value.matchAll(/\S+/g)];
+    let tokenCount = 0;
+    let end = 0;
+    for (const word of words) {
+      const nextTokens = estimateChunkTokens(word[0]);
+      if (end > 0 && tokenCount + nextTokens > limit) break;
+      tokenCount += nextTokens;
+      end = (word.index || 0) + word[0].length;
+    }
+    return value.slice(0, end || Math.max(1, Math.floor(limit * 4))).trim();
+  };
+
+  const promptChunkTokenBudget = ({ maxChunkTokens = 0, maxChunkChars = 0, defaultChunkTokens = 400 } = {}) => {
+    const explicitTokens = Number(maxChunkTokens || 0);
+    if (Number.isFinite(explicitTokens) && explicitTokens > 0) return Math.max(80, Math.floor(explicitTokens));
+    const legacyChars = Number(maxChunkChars || 0);
+    if (Number.isFinite(legacyChars) && legacyChars > 0) return Math.max(80, Math.round(legacyChars / 4));
+    return Math.max(80, Math.floor(Number(defaultChunkTokens || 400)));
   };
 
   const normalizeChunkStrategy = (strategy = "structured") => {
@@ -835,18 +871,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return Math.max(min, Math.min(max, wanted, localLimit));
   };
 
-  const knowledgePromptBudget = ({ config = {}, providerType = "", provider = {}, chunksLength = 1, defaultChunkLimit = 8, defaultChunkChars = 1600 } = {}) => {
+  const knowledgePromptBudget = ({ config = {}, providerType = "", provider = {}, chunksLength = 1, defaultChunkLimit = 8, defaultChunkChars = 1600, defaultChunkTokens = 0 } = {}) => {
     const local = isLmStudioProvider(providerType, provider);
     const rawChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || defaultChunkLimit || chunksLength || 1)));
-    const rawChunkChars = Math.max(400, Math.min(3600, Number(config.maxChunkChars || defaultChunkChars || 1200)));
+    const rawChunkTokens = Math.max(80, Math.min(1200, promptChunkTokenBudget({
+      maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens || config.tokenBudget,
+      maxChunkChars: config.maxChunkChars,
+      defaultChunkTokens: defaultChunkTokens || Math.round((Number(defaultChunkChars) || 1200) / 4),
+    })));
     if (!local || config.allowLargeLocalContext === true || String(config.allowLargeLocalContext || "").toLowerCase() === "true") {
-      return { chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit), maxChunkChars: rawChunkChars };
+      return { chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit), maxChunkTokens: rawChunkTokens, maxChunkChars: rawChunkTokens * 4 };
     }
     const context = knowledgeContextSize(config, providerType, provider);
     const contextScale = context <= 4096 ? 1 : Math.min(2, Math.floor(context / 4096));
+    const localMaxChunkTokens = context <= 4096 ? 225 : 300;
     return {
       chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit, Math.max(1, contextScale * 2)),
-      maxChunkChars: Math.min(rawChunkChars, context <= 4096 ? 900 : 1200),
+      maxChunkTokens: Math.min(rawChunkTokens, localMaxChunkTokens),
+      maxChunkChars: Math.min(rawChunkTokens, localMaxChunkTokens) * 4,
     };
   };
 
@@ -1601,7 +1643,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .map((chunk) => ({
         id: chunk.id || "",
         ordinal: chunk.ordinal ?? chunk.index ?? null,
-        text: String(chunk.text || "").replace(/\s+/g, " ").slice(0, Math.max(240, Math.min(900, Number(config.mechanismCueChunkChars || config.maxChunkChars || 620)))),
+        text: trimTextToEstimatedTokens(
+          String(chunk.text || "").replace(/\s+/g, " "),
+          promptChunkTokenBudget({
+            maxChunkTokens: config.mechanismCueChunkTokens || config.maxChunkTokens || config.aiChunkTokens,
+            maxChunkChars: config.mechanismCueChunkChars || config.maxChunkChars,
+            defaultChunkTokens: 155,
+          })
+        ),
       }))
       .filter((chunk) => chunk.text);
     if (!candidateChunks.length) {
@@ -1930,6 +1979,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       mechanismCuePromptTemplate: config.promptTemplate || config.mechanismCuePromptTemplate,
       mechanismCueOutputInstructions: config.outputInstructions || config.mechanismCueOutputInstructions,
       mechanismCueChunkLimit: config.maxChunks || config.mechanismCueChunkLimit,
+      mechanismCueChunkTokens: config.maxChunkTokens || config.mechanismCueChunkTokens,
       mechanismCueChunkChars: config.maxChunkChars || config.mechanismCueChunkChars,
     };
     let mechanismCue = await callGraphMechanismCueAi({
@@ -2738,7 +2788,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxTerms = Math.max(8, Math.min(120, Number(config.maxTerms || 60)));
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
-    const configuredMaxChunkChars = promptBudget.maxChunkChars;
+    const configuredMaxChunkTokens = promptBudget.maxChunkTokens;
     const localProvider = isLmStudioProvider(providerType, provider) || providerType === "ollama";
     const chunkPassLimit = Math.max(
       configuredChunkLimit,
@@ -2775,7 +2825,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
         const chunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const maxChunkChars = chunkPass ? Math.min(1400, configuredMaxChunkChars) : micro ? Math.min(900, configuredMaxChunkChars) : compact ? Math.min(1200, configuredMaxChunkChars) : configuredMaxChunkChars;
+        const maxChunkTokens = chunkPass ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : compact ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens;
         const maxEntries = chunkPass ? Math.min(12, maxTerms) : micro ? Math.min(8, maxTerms) : compact ? Math.min(16, maxTerms) : maxTerms;
         return [
           systemPrompt,
@@ -2807,7 +2857,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({
               id: chunk.id || `chunk_${index + 1}`,
               ordinal: chunk.ordinal ?? chunk.index ?? index,
-              text: String(chunk.text || "").slice(0, maxChunkChars),
+              text: trimTextToEstimatedTokens(chunk.text || "", maxChunkTokens),
             })),
           }),
         ].join("\n\n");
@@ -3896,7 +3946,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const micro = promptMode === "micro";
       const chunkPass = promptMode === "chunk";
       const chunkLimit = chunkPass ? 1 : micro ? 1 : compact ? Math.min(2, promptBudget.chunkLimit, sourceChunks.length) : Math.min(promptBudget.chunkLimit, sourceChunks.length);
-      const chunkChars = chunkPass ? Math.min(900, promptBudget.maxChunkChars) : micro ? Math.min(700, promptBudget.maxChunkChars) : compact ? Math.min(1000, promptBudget.maxChunkChars) : promptBudget.maxChunkChars;
+      const chunkTokens = chunkPass ? Math.min(225, promptBudget.maxChunkTokens) : micro ? Math.min(175, promptBudget.maxChunkTokens) : compact ? Math.min(250, promptBudget.maxChunkTokens) : promptBudget.maxChunkTokens;
       const termLimit = micro ? 12 : compact ? 24 : 60;
       const eventLimit = chunkPass ? 8 : micro ? 6 : compact ? 14 : Math.max(1, Math.min(120, Number(config.maxEvents || 80)));
       const schema = {
@@ -3938,7 +3988,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunks: sourceChunks.slice(0, chunkLimit).map((chunk) => ({
             id: chunk.id,
             ordinal: chunk.ordinal ?? chunk.index ?? chunk.start ?? 0,
-            text: String(chunk.text || "").slice(0, chunkChars),
+            text: trimTextToEstimatedTokens(chunk.text || "", chunkTokens),
           })),
         }),
       ].join("\n\n");
@@ -4889,7 +4939,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxRelations = Math.max(0, Math.min(160, Number(config.maxRelations || 64)));
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
-    const configuredMaxChunkChars = promptBudget.maxChunkChars;
+    const configuredMaxChunkTokens = promptBudget.maxChunkTokens;
     const localProvider = isLmStudioProvider(providerType, provider) || providerType === "ollama";
     const chunkPassLimit = Math.max(
       configuredChunkLimit,
@@ -4921,7 +4971,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
         const chunkLimit = chunkPass ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const maxChunkChars = chunkPass ? Math.min(1400, configuredMaxChunkChars) : micro ? Math.min(900, configuredMaxChunkChars) : compact ? Math.min(1200, configuredMaxChunkChars) : configuredMaxChunkChars;
+        const maxChunkTokens = chunkPass ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : compact ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens;
         const promptMaxEntities = chunkPass ? Math.min(16, maxEntities) : micro ? Math.min(10, maxEntities) : maxEntities;
         const promptMaxRelations = micro ? 0 : chunkPass ? Math.min(12, maxRelations) : maxRelations;
         const schema = micro
@@ -4946,7 +4996,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             maxRelations: promptMaxRelations,
             allowedRelationTypes: entityAiRelationVocabulary,
             dictionaryTerms: dictionaryEntries.slice(0, micro ? 20 : chunkPass ? 30 : 60).map((entry) => ({ term: entry.term, type: entry.typeCandidates?.[0]?.type || "", aliases: entry.aliases || [] })),
-            chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({ id: chunk.id || `chunk_${index + 1}`, ordinal: chunk.ordinal ?? chunk.index ?? index, text: String(chunk.text || "").slice(0, maxChunkChars) })),
+            chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({ id: chunk.id || `chunk_${index + 1}`, ordinal: chunk.ordinal ?? chunk.index ?? index, text: trimTextToEstimatedTokens(chunk.text || "", maxChunkTokens) })),
           }),
         ].join("\n\n");
       };
@@ -6526,7 +6576,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const compact = mode === "compact";
       const micro = mode === "micro";
       const chunkLimit = micro ? 1 : compact ? 1 : chunks.length;
-      const chunkChars = micro ? 520 : compact ? 900 : Math.max(400, Math.min(3200, Number(config.maxChunkChars || 1800)));
+      const chunkTokens = micro
+        ? 130
+        : compact
+          ? 225
+          : promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 450 });
       const entityLimit = micro ? 0 : compact ? 12 : 80;
       const relationLimit = micro ? 0 : compact ? 12 : 80;
       const effectiveMaxEntities = micro ? Math.min(maxEntities, 12) : compact ? Math.min(maxEntities, 20) : maxEntities;
@@ -6550,7 +6604,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         "Schema:",
         JSON.stringify(compactSchema),
         JSON.stringify({
-          chunks: chunks.slice(0, chunkLimit).map((chunk) => ({ id: chunk.id, text: String(chunk.text || "").slice(0, chunkChars) })),
+          chunks: chunks.slice(0, chunkLimit).map((chunk) => ({ id: chunk.id, text: trimTextToEstimatedTokens(chunk.text || "", chunkTokens) })),
           entities: entities.slice(0, entityLimit).map((entity) => ({ id: entity.id, label: entity.label, entityType: entity.entityType })),
           relations: relations.slice(0, relationLimit).map((relation) => ({ source: relation.sourceLabel, type: relation.relationType, target: relation.targetLabel })),
         }),
@@ -6566,7 +6620,48 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let lastError = "";
       let usedMode = attemptModes[0];
       let proposal = null;
+      let lastModel = model;
       let totalUsage = {};
+      const proposalHasPayload = (item = null) =>
+        Array.isArray(item?.entities) || Array.isArray(item?.relations) || Array.isArray(item?.rejectedCandidates);
+      const proposalHasSignal = (item = null) =>
+        (item?.entities || []).length || (item?.relations || []).length || (item?.rejectedCandidates || []).length;
+      const repairGraphBuilderJson = async ({ text = "", mode = "" } = {}) => {
+        const rawText = String(text || "").trim();
+        if (!rawText) return null;
+        const repairPrompt = [
+          "Convert the following model output into one strict JSON object for Knowledge Graph Builder.",
+          "Return ONLY JSON. No markdown, no prose.",
+          "Schema: {\"entities\":[{\"label\":\"\",\"entityType\":\"proper-noun|technology|concept|object|location|source|term|symbol\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"relations\":[{\"sourceLabel\":\"\",\"targetLabel\":\"\",\"relationType\":\"\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"rejectedCandidates\":[]}",
+          `Allowed relationType values: ${allowedRelationTypes.join(", ")}`,
+          "Keep only labels, relation types and evidence quotes already present in the model output. Do not invent new graph facts.",
+          "Input:",
+          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
+        ].join("\n\n");
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 240, max: 1400 });
+        const repairBody = providerType === "ollama"
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
+        let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
+        let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
+          const fallbackBody = { ...repairBody };
+          delete fallbackBody.response_format;
+          repairResponse = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+          repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
+        }
+        if (!repairResponse.ok) {
+          lastError = `repair-http-${repairResponse.status}${repairErrorText ? `: ${repairErrorText}` : ""}`;
+          return null;
+        }
+        const repairData = await repairResponse.json();
+        const repairText = repairData.response || repairData.choices?.[0]?.message?.content || repairData.output_text || "";
+        totalUsage = addKnowledgeAiUsage(totalUsage, knowledgeAiUsageFromResponse({ data: repairData, prompt: repairPrompt, text: repairText }));
+        lastModel = repairData.model || lastModel;
+        const repaired = parseAiJsonObject(repairText);
+        if (!proposalHasPayload(repaired) || !proposalHasSignal(repaired)) return null;
+        return { proposal: repaired, promptMode: `${mode}-repair` };
+      };
       for (const mode of attemptModes) {
         usedMode = mode;
         const prompt = promptFor({ mode });
@@ -6588,6 +6683,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
             max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
+        const requestBody = providerType === "ollama"
+          ? body
+          : withJsonObjectResponseFormat(body, providerType, config);
         knowledgeLlmDebug("graph-builder:request", {
           mode,
           provider: provider.id || providerType || "",
@@ -6597,40 +6695,60 @@ window.TrackerLensKnowledgeRuntime = (() => {
           entityCount: entities.length,
           relationCount: relations.length,
           promptChars: prompt.length,
-          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          maxTokens: requestBody.max_tokens || requestBody.options?.num_predict || 0,
           promptPreview: compactDebugText(prompt),
         });
-        response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
+        response = await postChatJson({ url, body: requestBody, headers: headersForProvider(provider, config) });
+        let errorText = response.ok ? "" : await chatErrorText(response);
+        if (!response.ok && providerType !== "ollama" && /json|format/i.test(errorText)) {
+          const fallbackBody = { ...requestBody };
+          delete fallbackBody.response_format;
+          response = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+          errorText = response.ok ? "" : await chatErrorText(response);
+        }
         if (response.ok) {
           const data = await response.json();
           const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
           const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
           totalUsage = addKnowledgeAiUsage(totalUsage, usage);
+          lastModel = data.model || lastModel;
           proposal = parseAiJsonObject(text);
-          const hasPayload = Array.isArray(proposal?.entities) || Array.isArray(proposal?.relations);
-          const hasSignal = (proposal?.entities || []).length || (proposal?.relations || []).length || (proposal?.rejectedCandidates || []).length;
+          const hasPayload = proposalHasPayload(proposal);
+          const hasSignal = proposalHasSignal(proposal);
           if (hasPayload && hasSignal) {
             return {
               proposal,
               provider: provider.id || providerType || "provider",
-              model: data.model || model,
+              model: lastModel,
               usage: totalUsage,
               promptMode: usedMode,
               error: "",
             };
           }
+          if (!hasPayload) {
+            const repaired = await repairGraphBuilderJson({ text, mode });
+            if (repaired) {
+              return {
+                proposal: repaired.proposal,
+                provider: provider.id || providerType || "provider",
+                model: lastModel,
+                usage: totalUsage,
+                promptMode: repaired.promptMode,
+                error: "",
+              };
+            }
+          }
           lastError = hasPayload ? "empty-ai-proposal" : "invalid-ai-json";
           continue;
         }
-        const errorText = await chatErrorText(response);
         lastError = `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`;
         const canShrink = response.status === 400 || /context|token|too large|size/i.test(errorText);
         if (!canShrink) break;
       }
       if (!response?.ok) {
-        return { proposal: null, provider: provider.id || providerType, model, usage: totalUsage, error: lastError || "ai-error" };
+        return { proposal: null, provider: provider.id || providerType, model: lastModel, usage: totalUsage, error: lastError || "ai-error" };
       }
-      return { proposal, provider: provider.id || providerType || "provider", model, usage: totalUsage, promptMode: usedMode, error: lastError || "empty-ai-proposal" };
+      return { proposal, provider: provider.id || providerType || "provider", model: lastModel, usage: totalUsage, promptMode: usedMode, error: lastError || "empty-ai-proposal" };
     } catch (error) {
       return { proposal: null, provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error" };
     }
@@ -7304,6 +7422,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((chunk) => !collectionId || chunk.metadata?.collectionId === collectionId)
       .filter((chunk) => !documentId || chunk.documentId === documentId);
     const chunkById = new Map(scopedChunks.map((chunk) => [chunk.id, chunk]));
+    const replaceExistingSemantic = config.replaceExisting !== false && String(config.replaceExisting || "true").toLowerCase() !== "false";
+    const semanticCleanup = replaceExistingSemantic
+      ? await deleteSemanticRelations({ workspaceId, collectionId, documentId, nodeId: node?.id || "" })
+      : { relations: 0, ids: [] };
+    const staleSemanticRelationIds = new Set(semanticCleanup.ids || []);
     const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.55)));
     const enrichmentMode = ["ai", "hybrid"].includes(String(config.enrichmentMode || "ai").toLowerCase())
@@ -7388,6 +7511,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
     const existingSemanticKeys = new Set(byWorkspace(relationsAll, workspaceId)
       .filter((relation) => relation.metadata?.semantic)
+      .filter((relation) => !staleSemanticRelationIds.has(relation.id))
       .map((relation) => [
         relation.documentId || "",
         relation.relationType || "",
@@ -7463,6 +7587,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       semanticRelations,
       relationCount: semanticRelations.length,
       semanticRelationCount: semanticRelations.length,
+      clearedRelationCount: semanticCleanup.relations || 0,
       context,
       ai: {
         provider: aiResult.provider || "",

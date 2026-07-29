@@ -3401,7 +3401,7 @@ const runKnowledgeGraphSampleTest = async () => {
     icon: "account_tree",
     subtype: "entity-extractor",
     category: "knowledge",
-    settingsSchema: { extractionMode: "strict|balanced|wide", seedTerms: "string", confidenceThreshold: "number", maxEntities: "number", maxRelations: "number", collectionId: "string", outputChannel: "string" },
+    settingsSchema: { extractionMode: "strict|balanced|wide", seedTerms: "string", confidenceThreshold: "number", maxEntities: "number", maxRelations: "number", replaceExisting: "boolean", collectionId: "string", outputChannel: "string" },
     paletteLabel: "Entity Extractor",
     config: {
       extractionMode: "balanced",
@@ -3409,6 +3409,7 @@ const runKnowledgeGraphSampleTest = async () => {
       confidenceThreshold: 0.45,
       maxEntities: 80,
       maxRelations: 160,
+      replaceExisting: true,
       collectionId,
       outputChannel: "knowledge.entity.created",
     },
@@ -3424,12 +3425,13 @@ const runKnowledgeGraphSampleTest = async () => {
     icon: "psychology",
     subtype: "semantic-relation-enricher",
     category: "knowledge",
-    settingsSchema: { enrichmentMode: "rules|ai|hybrid", maxRelations: "number", confidenceThreshold: "number", relationTypes: "string", collectionId: "string", outputChannel: "string" },
+    settingsSchema: { enrichmentMode: "rules|ai|hybrid", maxRelations: "number", confidenceThreshold: "number", relationTypes: "string", replaceExisting: "boolean", collectionId: "string", outputChannel: "string" },
     paletteLabel: "Semantic Relation Enricher",
     config: {
       enrichmentMode: "ai",
       maxRelations: 80,
       confidenceThreshold: 0.52,
+      replaceExisting: true,
       collectionId,
       documentId: graphDocumentId,
       outputChannel: "knowledge.semantic.relations",
@@ -4026,6 +4028,7 @@ const runKnowledgeAgentToolsSampleTest = async () => {
     model: sampleModel || aiDefaults.model || "local-model",
     temperature: aiDefaults.temperature ?? 0.2,
     maxTokens: aiDefaults.maxTokens ?? 2048,
+    maxChunkTokens: aiDefaults.maxChunkTokens ?? 400,
     topP: aiDefaults.topP ?? 0.9,
     responseFormat: "json",
   };
@@ -4177,7 +4180,7 @@ const runKnowledgeAgentToolsSampleTest = async () => {
     subtype: "entity-extractor",
     category: "knowledge",
     paletteLabel: "Entity Extractor",
-    config: { ...sampleAiConfig, entityMode: "llm", extractionMode: "balanced", seedTerms: "Juliette,Liber,troll,foresta,fiore,acqua,te,bastone", collectionId, outputChannel: "knowledge.entity.created" },
+    config: { ...sampleAiConfig, entityMode: "llm", extractionMode: "balanced", seedTerms: "Juliette,Liber,troll,foresta,fiore,acqua,te,bastone", replaceExisting: true, collectionId, outputChannel: "knowledge.entity.created" },
   });
   const querySource = nodeBase({
     name: "query_source",

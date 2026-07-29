@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-24.
+Last updated: 2026-07-26.
 
 ## Active
 
@@ -83,6 +83,9 @@ Current sub-steps:
 - Rerun after `graph-builder-18` still allowed weak AI `friend_of` evidence and missed `reveals` when source/quote were split across nearby text; `graph-builder-19` requires explicit friendship/bond cues for `friend_of` and uses speaker-to-quote context for supplemental `reveals` evidence.
 - Rerun after `graph-builder-19` exposed a generic over-permissive person filter, not a Liber-specific hardcode: supplemental `friend_of` paired location-like proper nouns when a chunk contained `amica`. `graph-builder-20` filters common non-person place/object proper nouns, requires pair-specific friendship evidence, and removes the first-person fallback for supplemental `reveals` speakers.
 - Rerun after `graph-builder-20` verifies false location `friend_of` edges are removed but supplemental `reveals` could still choose a person mentioned after the quote; `graph-builder-21` requires supplemental quote speakers to occur before the quote with a speech/voice cue in the speaker-to-quote context.
+- Knowledge graph clear controls: Entity Extractor exposes `replaceExisting` and a manual `Clear Entities` card button, Semantic Relation Enricher now clears stale same-scope semantic relations via `replaceExisting`/`Clear Semantic`, and Graph Builder Agent shows `replaceExisting` plus `Clear Builder`.
+- Knowledge AI chunk prompt budgets: Dictionary Builder, Entity Extractor, Knowledge Graph Builder Agent and Mechanism Cue Agent now use `maxChunkTokens` in UI/schema and trim supplied LLM chunks by estimated tokens, while legacy saved `maxChunkChars` values remain supported as token-estimated fallback.
+- Knowledge Graph Builder JSON recovery: Builder AI requests now use the shared JSON response-format helper where supported, retry without that format if the provider rejects it, and repair non-parseable model output before falling through to compact/micro attempts.
 - Step 15 Knowledge Dictionary Runtime: started. Do not delete the existing Semantic Relation Enricher or Knowledge Graph Builder Agent; reuse their local stores, evidence validation, provider/proxy integration, graph persistence, debug/export and test harness. Freeze growth of case-specific Builder micro-rules except generic safety validation. Add a scoped dictionary layer before graph construction so language terms, lemmas, aliases, type candidates, semantic hints and relation cues are learned from document evidence and can guide Entity Extractor/Graph Builder without hardcoding one book/story. Dictionary scope must default to document/flow isolation, with explicit promotion to collection/workspace/global language scopes only when requested.
 - Step 15 timeline:
   1. Phase 0 document architecture pivot and freeze graph-builder rule expansion: complete.

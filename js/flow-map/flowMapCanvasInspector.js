@@ -1571,6 +1571,60 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
   }
+  if (isKnowledgeEntityExtractorNode(node)) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Entity Extractor graph records for this scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeEntityGraphClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Entities"),
+      renderInlineNodeSettings(node),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
+    ];
+  }
+  if (isKnowledgeSemanticRelationEnricherNode(node)) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Semantic Relation Enricher records for this scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeSemanticRelationsClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Semantic"),
+      renderInlineNodeSettings(node),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
+    ];
+  }
+  if (isKnowledgeGraphBuilderAgentNode(node)) {
+    return [
+      _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      _.p(view.description),
+      btn({
+        class: "tl-flow-embedded-map-view-btn is-danger",
+        title: "Clear Graph Builder Agent records for this scope",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          requestKnowledgeGraphBuilderClear(node);
+        },
+      }, icon("delete_sweep", "sm"), "Clear Builder"),
+      renderInlineNodeSettings(node),
+      ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
+    ];
+  }
   if (nodeCategory(node) === "knowledge" && nodeSubtype(node) === "graph-query") {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
@@ -3064,6 +3118,15 @@ const isKnowledgeDictionaryBuilderNode = (node = {}) =>
 
 const isKnowledgeEventBuilderNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-event-builder";
+
+const isKnowledgeEntityExtractorNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && nodeSubtype(node) === "entity-extractor";
+
+const isKnowledgeSemanticRelationEnricherNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && nodeSubtype(node) === "semantic-relation-enricher";
+
+const isKnowledgeGraphBuilderAgentNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-graph-builder-agent";
 
 const knowledgeDictionaryTierRank = (tier = "") => {
   const ranks = { core: 0, typed: 1, context: 2, weak: 3 };
@@ -4872,6 +4935,141 @@ const clearKnowledgeEventsForNode = async (node = {}) => {
   return { events: scopedEvents.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
 };
 
+const clearKnowledgeEntityGraphForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [entities, relations, metrics, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.entities),
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.metrics),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedEntities = (entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => entity.metadata?.nodeId === node.id)
+    .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+    .filter((entity) => graphScope !== "document" || !documentId || entity.documentId === documentId);
+  const entityIds = new Set(scopedEntities.map((entity) => entity.id));
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) =>
+      relation.metadata?.nodeId === node.id ||
+      entityIds.has(relation.sourceEntityId) ||
+      entityIds.has(relation.targetEntityId)
+    )
+    .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+    .filter((relation) => graphScope !== "document" || !documentId || relation.documentId === documentId);
+  const scopedMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .filter((metric) => graphScope !== "document" || !documentId || metric.value?.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((relation) => relation.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.entities, scopedEntities.map((entity) => entity.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((metric) => metric.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
+  ]);
+  return { entities: scopedEntities.length, relations: scopedRelations.length, snapshots: scopedMetrics.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
+};
+
+const clearKnowledgeSemanticRelationsForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [relations, metrics, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.metrics),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) => relation.metadata?.semantic)
+    .filter((relation) => !relation.metadata?.graphBuilder)
+    .filter((relation) => relation.metadata?.nodeId === node.id)
+    .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+    .filter((relation) => graphScope !== "document" || !documentId || relation.documentId === documentId);
+  const scopedMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .filter((metric) => graphScope !== "document" || !documentId || metric.value?.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((relation) => relation.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((metric) => metric.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
+  ]);
+  return { relations: scopedRelations.length, snapshots: scopedMetrics.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
+};
+
+const clearKnowledgeGraphBuilderForNode = async (node = {}) => {
+  if (!node?.id) return null;
+  const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
+  const stores = {
+    entities: knowledgeTableName("TL_KNOWLEDGE_ENTITIES", "tl_knowledge_entities"),
+    relations: knowledgeTableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
+    metrics: knowledgeTableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
+    queries: knowledgeTableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
+  };
+  const [entities, relations, metrics, queries] = await Promise.all([
+    readKnowledgeInspectorStore(stores.entities),
+    readKnowledgeInspectorStore(stores.relations),
+    readKnowledgeInspectorStore(stores.metrics),
+    readKnowledgeInspectorStore(stores.queries),
+  ]);
+  const scopedEntities = (entities || [])
+    .filter((entity) => (entity.workspaceId || "workspace_global") === workspaceId)
+    .filter((entity) => entity.metadata?.graphBuilder)
+    .filter((entity) => entity.metadata?.nodeId === node.id)
+    .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
+    .filter((entity) => graphScope !== "document" || !documentId || entity.documentId === documentId);
+  const builderEntityIds = new Set(scopedEntities.map((entity) => entity.id));
+  const scopedRelations = (relations || [])
+    .filter((relation) => (relation.workspaceId || "workspace_global") === workspaceId)
+    .filter((relation) => relation.metadata?.graphBuilder)
+    .filter((relation) =>
+      relation.metadata?.nodeId === node.id ||
+      builderEntityIds.has(relation.sourceEntityId) ||
+      builderEntityIds.has(relation.targetEntityId)
+    )
+    .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
+    .filter((relation) => graphScope !== "document" || !documentId || relation.documentId === documentId);
+  const scopedMetrics = (metrics || [])
+    .filter((metric) => (metric.workspaceId || "workspace_global") === workspaceId)
+    .filter((metric) => metric.metric === "knowledge.graph.snapshot")
+    .filter((metric) => !collectionId || metric.value?.collectionId === collectionId)
+    .filter((metric) => graphScope !== "document" || !documentId || metric.value?.documentId === documentId);
+  const scopedQueries = (queries || [])
+    .filter((query) => (query.workspaceId || "workspace_global") === workspaceId)
+    .filter((query) => !collectionId || query.scope?.collectionId === collectionId || query.collectionId === collectionId)
+    .filter((query) => graphScope !== "document" || !documentId || query.scope?.documentId === documentId || query.documentId === documentId);
+  await Promise.all([
+    deleteKnowledgeInspectorStoreRecords(stores.relations, scopedRelations.map((relation) => relation.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.entities, scopedEntities.map((entity) => entity.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.metrics, scopedMetrics.map((metric) => metric.id)),
+    deleteKnowledgeInspectorStoreRecords(stores.queries, scopedQueries.map((query) => query.id)),
+  ]);
+  return { entities: scopedEntities.length, relations: scopedRelations.length, snapshots: scopedMetrics.length, queries: scopedQueries.length, graphScope, collectionId, documentId: graphScope === "document" ? documentId : "" };
+};
+
 const clearKnowledgeDocumentMemoryForNode = async (node = {}) => {
   if (!node?.id || !isKnowledgeDocumentStoreNode(node)) return null;
   const { workspaceId, collectionId, documentId, graphScope } = knowledgeClearScopeForNode(node);
@@ -5169,6 +5367,15 @@ const clearKnowledgeCascadeForNode = async (rootNode = {}) => {
     } else if (isKnowledgeEventBuilderNode(child)) {
       action = "knowledge-events-clear";
       result = await clearKnowledgeEventsForNode(child);
+    } else if (isKnowledgeEntityExtractorNode(child)) {
+      action = "knowledge-entity-graph-clear";
+      result = await clearKnowledgeEntityGraphForNode(child);
+    } else if (isKnowledgeSemanticRelationEnricherNode(child)) {
+      action = "knowledge-semantic-relations-clear";
+      result = await clearKnowledgeSemanticRelationsForNode(child);
+    } else if (isKnowledgeGraphBuilderAgentNode(child)) {
+      action = "knowledge-graph-builder-clear";
+      result = await clearKnowledgeGraphBuilderForNode(child);
     }
     if (action) {
       cleared.push({
@@ -5328,6 +5535,36 @@ const requestKnowledgeEventsClear = (node = {}) =>
     message: `Knowledge events cleared: ${node.label || node.id}`,
     description: "Verranno rimossi gli eventi narrativi e le query derivate per questo scope. Documenti, chunk, dictionary e grafo restano intatti.",
     clearFn: clearKnowledgeEventsForNode,
+  });
+
+const requestKnowledgeEntityGraphClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear Entity Extractor graph records?",
+    actionLabel: "Clear Entities",
+    action: "knowledge-entity-graph-clear",
+    message: `Entity Extractor graph records cleared: ${node.label || node.id}`,
+    description: "Verranno rimossi entità create da questo Entity Extractor, relazioni collegate, query e snapshot del grafo per questo scope. Documenti, chunk, dictionary, eventi ed embedding restano intatti.",
+    clearFn: clearKnowledgeEntityGraphForNode,
+  });
+
+const requestKnowledgeSemanticRelationsClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear semantic relations?",
+    actionLabel: "Clear Semantic",
+    action: "knowledge-semantic-relations-clear",
+    message: `Semantic relations cleared: ${node.label || node.id}`,
+    description: "Verranno rimosse solo le relazioni semantiche create da questo Semantic Relation Enricher per questo scope. Le relazioni del Graph Builder Agent restano intatte.",
+    clearFn: clearKnowledgeSemanticRelationsForNode,
+  });
+
+const requestKnowledgeGraphBuilderClear = (node = {}) =>
+  requestKnowledgeStoreClear(node, {
+    title: "Clear Graph Builder records?",
+    actionLabel: "Clear Builder",
+    action: "knowledge-graph-builder-clear",
+    message: `Graph Builder records cleared: ${node.label || node.id}`,
+    description: "Verranno rimossi solo entità e relazioni create dal Knowledge Graph Builder Agent per questo scope. Il grafo base dell'Entity Extractor resta intatto.",
+    clearFn: clearKnowledgeGraphBuilderForNode,
   });
 
 const knowledgeGraphExportData = (graphData = {}, { includeIsolated = false } = {}) => {
