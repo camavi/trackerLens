@@ -400,6 +400,98 @@
   white-space: pre-wrap;
 }
 
+.tl-ai-agent-alias-diagnostics {
+  display: grid;
+  gap: 14px;
+}
+
+.tl-ai-agent-alias-diagnostics-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.tl-ai-agent-alias-diagnostics-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.56);
+}
+
+.tl-ai-agent-alias-diagnostics-card.is-wide {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(650px, 100%);
+}
+
+.tl-ai-agent-alias-diagnostics-card h4 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.tl-ai-agent-alias-diagnostics-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.22fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+  width: 100%;
+}
+
+.tl-ai-agent-alias-diagnostics-card span {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.tl-ai-agent-alias-diagnostics-card strong {
+  min-width: 0;
+  color: #e5edf5;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.tl-ai-agent-alias-diagnostics-card p {
+  margin: 0;
+  color: #aab7c8;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tl-ai-agent-alias-overrides-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tl-ai-agent-alias-raw {
+  margin-top: 2px;
+}
+
+.tl-ai-agent-alias-raw summary {
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tl-ai-agent-alias-raw pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  color: #dbe6f2;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.68);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .tl-ai-agent-model-meta {
   min-height: 14px;
   color: var(--tl-text-muted);
@@ -485,7 +577,8 @@
   }
 
   .tl-ai-agent-tab-grid,
-  .tl-ai-agent-permission-grid {
+  .tl-ai-agent-permission-grid,
+  .tl-ai-agent-alias-diagnostics-grid {
     grid-template-columns: 1fr;
   }
 }

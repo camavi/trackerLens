@@ -1951,6 +1951,16 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openAiAgentRuntimeDialog(node);
         },
       }, icon("terminal", "sm"), "View Runtime"),
+      node.metadata?.aiAgentAlias && typeof openAiAgentAliasDiagnostics === "function" ? btn({
+        class: "tl-flow-embedded-map-view-btn",
+        title: "Inspect alias source, local overrides and resolved policy",
+        onPointerDown: stopNodeControlEvent,
+        onclick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openAiAgentAliasDiagnostics(node);
+        },
+      }, icon("account_tree", "sm"), "Alias Diagnostics") : null,
       _.label(
         {
           class: "tl-flow-kdoc-replay-toggle",

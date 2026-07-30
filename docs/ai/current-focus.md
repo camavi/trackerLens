@@ -41,6 +41,7 @@ Connected Agent Node Tool Protocol foundation.
 - Agent trigger trace follow-up: AI Agent input traces now include trigger mode, source node, dependency/link id, ports and channel so unexpected starts can be audited from the Runtime dialog.
 - Agent execution guard follow-up: AI Agents now expose `Trigger Policy` (`On connected event`, `On any accepted input`, `Manual only`) and the runtime enforces it before starting from bus events.
 - Agent node policy summary follow-up: AI Agent cards now show trigger policy, Fresh Run state and memory read/save status directly on the node body.
+- Agent alias diagnostics follow-up: AI Agent alias nodes now expose a read-only diagnostics dialog showing the source agent, alias node identity, local override paths and the resolved runtime/memory policy.
 
 ## Completed Sequence
 
