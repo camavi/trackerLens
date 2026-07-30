@@ -737,7 +737,7 @@ const aiDirectInputChannel = (node = {}, graph = graphModel()) => {
   return incoming[0] || config.input || node.inputs?.[0] || nodeChannels(node)[0] || "input";
 };
 
-const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph } = {}) => {
+const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph, freshRun = false } = {}) => {
   const channel = aiDirectInputChannel(node, graph);
   const payload = nodeTestPayload(node, runId);
   const bus = workspaceEventBus(workspaceId);
@@ -755,6 +755,7 @@ const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph } = {}
       targetNodeId: node.id,
       inputChannel: channel,
       flowMapDirectAiExecution: true,
+      freshRun,
     },
   });
   if (event) mergeRuntimeEvent(event);
@@ -769,7 +770,7 @@ const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph } = {}
         event: event || {
           channel,
           payload,
-          meta: { runId },
+          meta: { runId, freshRun },
           sourceNodeId: "flow-map-ai-direct-test",
           targetNodeId: node.id,
         },
@@ -789,6 +790,7 @@ const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph } = {}
           provider: result?.provider || "",
           model: result?.model || "",
           flowMapDirectAiExecution: true,
+          freshRun,
         },
       });
       if (responseEvent) mergeRuntimeEvent(responseEvent);
@@ -821,7 +823,7 @@ const executeDirectAiAgentNode = async ({ node, workspaceId, runId, graph } = {}
     workspaceId,
     nodeId: node.id,
     message: `Direct AI Agent test started: ${node.label || node.id}`,
-    context: { action: "flow-map-ai-direct-test", runId, inputChannel: channel, payloadPreview: compactPayloadPreview(payload, 220) },
+    context: { action: freshRun ? "flow-map-ai-fresh-run" : "flow-map-ai-direct-test", runId, inputChannel: channel, freshRun, payloadPreview: compactPayloadPreview(payload, 220) },
   });
   return { channels: [channel, outputChannel].filter(Boolean), payload: result || payload };
 };

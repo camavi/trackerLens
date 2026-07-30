@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-07-29.
+Last updated: 2026-07-30.
 
 ## Active Area
 
@@ -35,6 +35,12 @@ Connected Agent Node Tool Protocol foundation.
 - Agent memory management follow-up: the AI Agent editor Memory tab now has a per-agent `Clear Memory` action that deletes stored memory for the current runtime agent without touching jobs, logs or configuration.
 - Agent memory management is moving to a reusable dialog: the editor, Agent node body and Agent Runtime viewer can open a shared memory manager with record counts, per-record deletion and clear-all.
 - Agent memory persistence follow-up: AI Agent responses can now be saved automatically as agent memory records when `Save Responses` is enabled and Memory Persistence is not `none`.
+- Agent runtime input trace follow-up: the Runtime dialog is adding `Full Prompt` and `Full Trace` visibility so each run can show objective, payload, memory, input history, connected tools and the exact provider prompt.
+- Agent memory policy follow-up: `Read Memory` is now separated from `Save Responses`, so an Agent can save outputs without injecting previous memory into the next prompt.
+- Agent fresh-run follow-up: AI Agent nodes now expose `Fresh Run` as a toggle policy, so the next normal upstream-triggered execution ignores memory read and input history without auto-running the Agent or changing saved Agent memory settings.
+- Agent trigger trace follow-up: AI Agent input traces now include trigger mode, source node, dependency/link id, ports and channel so unexpected starts can be audited from the Runtime dialog.
+- Agent execution guard follow-up: AI Agents now expose `Trigger Policy` (`On connected event`, `On any accepted input`, `Manual only`) and the runtime enforces it before starting from bus events.
+- Agent node policy summary follow-up: AI Agent cards now show trigger policy, Fresh Run state and memory read/save status directly on the node body.
 
 ## Completed Sequence
 

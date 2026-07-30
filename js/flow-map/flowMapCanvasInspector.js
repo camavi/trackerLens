@@ -1119,6 +1119,29 @@ const renderNodeMetricRows = (node = {}, ...labels) => [
   renderNodeTokenMetrics(node),
 ].filter(Boolean);
 
+const configBoolEnabled = (value, fallback = true) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return String(value).toLowerCase() !== "false";
+};
+
+const aiAgentPolicyLabel = (policy = "") => ({
+  connected_event: "connected",
+  accepted_input: "accepted",
+  manual_only: "manual",
+}[String(policy || "connected_event").toLowerCase()] || String(policy || "connected_event"));
+
+const renderAiAgentPolicySummary = (node = {}) => {
+  const config = nodeRuntimeConfig(node);
+  const readMemory = configBoolEnabled(config.readMemory, true);
+  const saveResponses = configBoolEnabled(config.saveResponsesToMemory ?? config.saveResponses, true);
+  return _.div(
+    { class: "tl-flow-ai-agent-policy-summary" },
+    _.span(icon("shield", "sm"), _.strong("Trigger"), aiAgentPolicyLabel(config.triggerPolicy)),
+    _.span(icon("memory", "sm"), _.strong("Memory"), `read ${readMemory ? "on" : "off"} · save ${saveResponses ? "on" : "off"}`)
+  );
+};
+
 const latestOutputPreviewRecordForNode = (node = {}, outputPorts = []) => {
   if (!node?.id) return null;
   const isRuntimeActivityEvent = (event = {}) =>
@@ -1572,6 +1595,101 @@ const openAiAgentRuntimeFullOutputDialog = ({ node = {}, text = "", meta = {} } 
   dialog.open();
 };
 
+const aiAgentRuntimePromptText = (job = null) => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  return String(raw.prompt || result.prompt || raw.inputTrace?.prompt || result.inputTrace?.prompt || "");
+};
+
+const aiAgentRuntimeTraceData = (job = null) => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  const trace = raw.inputTrace && typeof raw.inputTrace === "object"
+    ? raw.inputTrace
+    : result.inputTrace && typeof result.inputTrace === "object"
+      ? result.inputTrace
+      : {};
+  return {
+    inputEvent: trace.inputEvent || {
+      channel: raw.task || result.inputChannel || "",
+      runId: raw.runId || result.runId || "",
+    },
+    trigger: trace.trigger || {},
+    objective: trace.objective || result.response?.objective || "",
+    payload: trace.payload || result.payload || null,
+    config: trace.config || {},
+    prompt: trace.prompt || aiAgentRuntimePromptText(job),
+    promptChars: trace.promptChars || aiAgentRuntimePromptText(job).length,
+    memoryContext: trace.memoryContext ?? raw.memoryContext ?? result.memoryContext ?? "",
+    memoryChars: trace.memoryChars ?? String(raw.memoryContext || result.memoryContext || "").length,
+    inputDataContext: trace.inputDataContext ?? raw.inputDataContext ?? result.inputDataContext ?? null,
+    ragContext: trace.ragContext ?? raw.ragContext ?? result.ragContext ?? null,
+    graphContext: trace.graphContext ?? raw.graphContext ?? result.graphContext ?? null,
+    toolContext: trace.toolContext ?? raw.toolContext ?? result.toolContext ?? null,
+  };
+};
+
+const aiAgentRuntimeJsonText = (value = null) => {
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value ?? "");
+  }
+};
+
+const openAiAgentRuntimePromptDialog = ({ node = {}, job = null } = {}) => {
+  const prompt = aiAgentRuntimePromptText(job);
+  const dialog = _.Dialog({
+    class: "tl-ai-agent-runtime-prompt-dialog",
+    panelClass: "tl-ai-agent-runtime-prompt-panel",
+    size: "lg",
+    title: "Full Prompt",
+    subtitle: node.label || node.id,
+    icon: "article",
+    closeButton: true,
+    scrollable: true,
+    bodyMaxHeight: "76vh",
+    content: () => _.div(
+      { class: "tl-ai-agent-runtime-full-output" },
+      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(icon("text_fields", "sm"), `${prompt.length} chars`)),
+      _.pre(prompt || "No prompt recorded for this run.")
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(prompt) }, icon("content_copy", "sm"), "Copy"),
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
+const openAiAgentRuntimeTraceDialog = ({ node = {}, job = null } = {}) => {
+  const trace = aiAgentRuntimeTraceData(job);
+  const traceText = aiAgentRuntimeJsonText(trace);
+  const dialog = _.Dialog({
+    class: "tl-ai-agent-runtime-trace-dialog",
+    panelClass: "tl-ai-agent-runtime-trace-panel",
+    size: "lg",
+    title: "Input Trace",
+    subtitle: node.label || node.id,
+    icon: "account_tree",
+    closeButton: true,
+    scrollable: true,
+    bodyMaxHeight: "76vh",
+    content: () => _.div(
+      { class: "tl-ai-agent-runtime-full-output" },
+      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(icon("data_object", "sm"), `${traceText.length} chars`)),
+      _.pre(traceText)
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: () => copyRuntimeValue(trace) }, icon("content_copy", "sm"), "Copy"),
+      btn({ onclick: close }, "Close")
+    ),
+  });
+  dialog.open();
+};
+
 const aiAgentRuntimeExecutionSummary = (job = null, steps = []) => {
   const raw = job?.raw || {};
   const result = raw.result && typeof raw.result === "object" ? raw.result : {};
@@ -1666,6 +1784,51 @@ const renderAiAgentRuntimeOutput = ({ node = {}, job = null, text = "" } = {}) =
   );
 };
 
+const renderAiAgentRuntimeInputTrace = ({ node = {}, job = null } = {}) => {
+  const trace = aiAgentRuntimeTraceData(job);
+  const inputDataChannels = trace.inputDataContext && typeof trace.inputDataContext === "object"
+    ? Object.keys(trace.inputDataContext).length
+    : 0;
+  const toolObservations = Array.isArray(trace.toolContext?.observations) ? trace.toolContext.observations.length : 0;
+  const trigger = trace.trigger || {};
+  const hasMemory = Boolean(String(trace.memoryContext || "").trim());
+  const hasPrompt = Boolean(String(trace.prompt || "").trim());
+  return _.div(
+    { class: "tl-ai-agent-runtime-trace-card" },
+    _.div(
+      { class: "tl-ai-agent-runtime-output-head" },
+      _.h4("Input Trace"),
+      _.div(
+        { class: "tl-ai-agent-runtime-output-actions" },
+        btn({
+          class: "is-ghost is-compact",
+          title: "Open full prompt sent to the model",
+          disabled: !hasPrompt,
+          onclick: () => openAiAgentRuntimePromptDialog({ node, job }),
+        }, icon("article", "sm"), "Full Prompt"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Open full runtime input trace",
+          onclick: () => openAiAgentRuntimeTraceDialog({ node, job }),
+        }, icon("account_tree", "sm"), "Full Trace")
+      )
+    ),
+    _.div(
+      { class: "tl-ai-agent-runtime-trace-grid" },
+      _.span(icon("input", "sm"), _.strong("channel"), trace.inputEvent?.channel || "unknown"),
+      _.span(icon("bolt", "sm"), _.strong("trigger"), trigger.mode || "unknown"),
+      _.span(icon("shield", "sm"), _.strong("policy"), trigger.triggerPolicy || trace.config?.triggerPolicy || "connected_event"),
+      _.span(icon("account_tree", "sm"), _.strong("from"), trigger.sourceLabel || trigger.sourceNodeId || "unknown"),
+      _.span(icon("link", "sm"), _.strong("link"), trigger.dependencyId || trigger.connectionId || trigger.dependencyChannel || "none"),
+      _.span(icon("article", "sm"), _.strong("prompt"), `${trace.promptChars || 0} chars`),
+      _.span(icon("memory", "sm"), _.strong("memory"), hasMemory ? `${trace.memoryChars || String(trace.memoryContext || "").length} chars` : "none"),
+      _.span(icon("history", "sm"), _.strong("history"), inputDataChannels ? `${inputDataChannels} channel${inputDataChannels === 1 ? "" : "s"}` : "none"),
+      _.span(icon("construction", "sm"), _.strong("tools"), toolObservations ? `${toolObservations} observation${toolObservations === 1 ? "" : "s"}` : "none"),
+      trace.objective ? _.span({ class: "is-wide" }, icon("flag", "sm"), _.strong("objective"), String(trace.objective).slice(0, 220)) : null
+    )
+  );
+};
+
 const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
   const latest = jobs[0] || null;
   const raw = latest?.raw || {};
@@ -1699,6 +1862,7 @@ const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
         _.strong("No runtime jobs yet"),
         _.p("Run this Agent from a connected input event to populate the runtime timeline.")
       ),
+    latest ? renderAiAgentRuntimeInputTrace({ node, job: latest }) : null,
     steps.length
       ? _.div(
         { class: "tl-ai-agent-runtime-timeline" },
@@ -1775,6 +1939,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   if (node.type === "aiAgent" && !node.metadata?.library) {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
+      renderAiAgentPolicySummary(node),
       _.p(view.description),
       btn({
         class: "tl-flow-embedded-map-view-btn",
@@ -1786,6 +1951,26 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           openAiAgentRuntimeDialog(node);
         },
       }, icon("terminal", "sm"), "View Runtime"),
+      _.label(
+        {
+          class: "tl-flow-kdoc-replay-toggle",
+          title: nodeRuntimeConfig(node).freshRun === true || nodeRuntimeConfig(node).freshRun === "true"
+            ? "Next normal executions ignore memory and input history"
+            : "Use normal memory and input history policy",
+          onPointerDown: stopNodeControlEvent,
+          onclick: stopNodeControlEvent,
+        },
+        _.span("Fresh Run"),
+        _.Toggle({
+          class: "tl-flow-inline-toggle",
+          checked: nodeRuntimeConfig(node).freshRun === true || nodeRuntimeConfig(node).freshRun === "true",
+          color: nodeRuntimeConfig(node).freshRun === true || nodeRuntimeConfig(node).freshRun === "true" ? "success" : "secondary",
+          dense: true,
+          onPointerDown: stopNodeControlEvent,
+          onclick: stopNodeControlEvent,
+          onChange: (checked) => persistInlineRuntimeNodeConfig({ node, patch: { freshRun: Boolean(checked) } }),
+        })
+      ),
       window.TrackerLensAiAgentEditor?.openMemoryManager ? btn({
         class: "tl-flow-embedded-map-view-btn",
         title: "Manage AI Agent memory",

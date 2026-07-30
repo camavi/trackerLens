@@ -4102,6 +4102,7 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
       queueLimit: config.queueLimit ?? 25,
       parallelJobs: config.parallelJobs ?? 1,
       dropPolicy: config.dropPolicy || "queue",
+      triggerPolicy: config.triggerPolicy || "connected_event",
     },
     provider: {
       profileId: config.providerProfile || aiDefaults.providerProfile || "",
@@ -4142,6 +4143,7 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
       persistence: config.memoryPersistence || "workspace",
       compression: config.memoryCompression || "summary",
       contextWindow: config.contextWindow ?? 6,
+      readMemory: aiAgentConfigBool(config.readMemory, true),
       saveResponses: aiAgentConfigBool(config.saveResponsesToMemory, true),
     },
     permissions: {
@@ -4191,6 +4193,7 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   parallelJobs: payload.runtime?.parallelJobs ?? 1,
   maxConcurrentTasks: payload.runtime?.parallelJobs ?? 1,
   dropPolicy: payload.runtime?.dropPolicy || "queue",
+  triggerPolicy: payload.runtime?.triggerPolicy || "connected_event",
   providerProfile: payload.provider?.profileId || "",
   providerType: payload.provider?.providerType || "ollama",
   model: payload.provider?.model || "local-model",
@@ -4221,6 +4224,7 @@ const aiAgentPayloadConfig = (payload = {}) => ({
   memoryPersistence: payload.memory?.persistence || "workspace",
   memoryCompression: payload.memory?.compression || "summary",
   contextWindow: payload.memory?.contextWindow ?? 6,
+  readMemory: payload.memory?.readMemory !== false,
   saveResponsesToMemory: payload.memory?.saveResponses !== false,
   ...Object.fromEntries(Object.entries(payload.permissions || {}).map(([key, value]) => [key, String(Boolean(value))])),
   ...Object.fromEntries(Object.entries(payload.debug || {}).map(([key, value]) => [key, String(Boolean(value))])),

@@ -57,6 +57,7 @@
 .tl-ai-agent-runtime-empty,
 .tl-ai-agent-runtime-timeline,
 .tl-ai-agent-runtime-output,
+.tl-ai-agent-runtime-trace-card,
 .tl-ai-agent-runtime-history {
   display: grid;
   gap: 10px;
@@ -68,6 +69,7 @@
 
 .tl-ai-agent-runtime-timeline h4,
 .tl-ai-agent-runtime-output h4,
+.tl-ai-agent-runtime-trace-card h4,
 .tl-ai-agent-runtime-history h4 {
   margin: 0;
   color: #e2e8f0;
@@ -102,6 +104,39 @@
   background: rgba(15, 23, 42, 0.42);
   font-size: 11px;
   font-weight: 700;
+}
+
+.tl-ai-agent-runtime-trace-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tl-ai-agent-runtime-trace-grid span {
+  min-width: 0;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
+  color: rgba(203, 213, 225, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.32);
+  font-size: 12px;
+}
+
+.tl-ai-agent-runtime-trace-grid span.is-wide {
+  grid-column: 1 / -1;
+}
+
+.tl-ai-agent-runtime-trace-grid strong {
+  flex: 0 0 auto;
+  color: #e2e8f0;
+}
+
+.tl-ai-agent-runtime-trace-grid .material-symbols-rounded {
+  flex: 0 0 auto;
+  color: #93c5fd;
 }
 
 .tl-ai-agent-runtime-output-warning {
@@ -187,6 +222,12 @@
   white-space: pre-wrap;
 }
 
+@media (max-width: 860px) {
+  .tl-ai-agent-runtime-trace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tl-ai-agent-runtime-output small {
   color: rgba(148, 163, 184, 0.86);
 }
@@ -198,8 +239,16 @@
 }
 
 .tl-ai-agent-runtime-output-meta span {
+  min-width: 0;
+  display: inline-flex !important;
   align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
   color: rgba(203, 213, 225, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.32);
+  font-size: 12px;
 }
 
 .tl-ai-agent-runtime-output-meta .material-symbols-rounded {

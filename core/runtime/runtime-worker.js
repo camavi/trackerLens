@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.268-agent-memory-save-1";
+const RUNTIME_WORKER_VERSION = "0.1.274-agent-trigger-policy-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -39,7 +39,7 @@ const loadRuntimeScripts = () => {
     "storage-runtime.js?v=agent-tool-links-1",
     "knowledge-runtime.js?v=knowledge-no-hidden-story-rules-1",
     "agent-runtime.js?v=agent-tool-full-doc-prompt-1",
-    "ai-agent-runtime.js?v=agent-memory-save-1",
+    "ai-agent-runtime.js?v=agent-trigger-policy-1",
     "orchestrator-agent-runtime.js?v=agent-tool-links-1"
   );
 };

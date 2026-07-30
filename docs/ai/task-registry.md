@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-07-29.
+Last updated: 2026-07-30.
 
 ## Active
 
@@ -34,6 +34,12 @@ Current sub-steps:
 - AI Agent memory clear follow-up: add an editor Memory action to delete stored memory for the current agent/runtime node only, leaving jobs, logs and saved configuration intact.
 - AI Agent memory manager follow-up: expose a reusable Agent Memory dialog from editor/runtime/node surfaces, with per-record delete, refresh and clear-all controls.
 - AI Agent memory persistence follow-up: add a `Save Responses` Memory toggle and persist completed AI Agent outputs as `runtime-response` records when memory persistence is enabled.
+- AI Agent input trace follow-up: persist a structured `inputTrace` per run and expose Runtime dialog actions for `Full Prompt` and `Full Trace`, making objective, payload, memory, history and connected-tool context auditable.
+- AI Agent memory policy follow-up: split read/write memory controls with `Read Memory` and `Save Responses`, allowing fresh prompts while still archiving completed outputs.
+- AI Agent fresh-run follow-up: add a node-level `Fresh Run` toggle policy that affects the next normal upstream-triggered execution by disabling memory read and input history, without auto-running the Agent.
+- AI Agent trigger trace follow-up: add trigger source/dependency/port/channel metadata to `inputTrace` and surface it in the Runtime dialog for unexpected-start debugging.
+- AI Agent execution guard follow-up: add `Trigger Policy` runtime configuration and enforce connected-event, accepted-input or manual-only starts before an Agent handles bus events.
+- AI Agent node policy summary follow-up: show trigger policy, Fresh Run and memory read/save state directly on AI Agent node cards.
 - Phase 5 MCP adapter: pending. Expose selected connected node tools through a local MCP server adapter and import external MCP tools as controlled observations through a TL MCP client node/connector.
 
 ### TASK-027: Knowledge Runtime

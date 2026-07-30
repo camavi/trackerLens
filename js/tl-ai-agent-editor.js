@@ -146,6 +146,11 @@ window.TrackerLensAiAgentEditor = (() => {
   const AI_AGENT_TYPES = ["analyzer", "summarizer", "decision", "classifier", "predictor", "memory", "router", "planner", "debugger"];
   const AI_EXECUTION_MODES = ["on_event", "interval", "continuous", "manual", "scheduled"];
   const AI_DROP_POLICIES = ["queue", "reject", "latest"];
+  const AI_TRIGGER_POLICIES = [
+    { value: "connected_event", label: "On connected event" },
+    { value: "accepted_input", label: "On any accepted input" },
+    { value: "manual_only", label: "Manual only" },
+  ];
   const AI_INPUT_DATA_MODES = ["off", "latest", "history", "latest_history"];
   const AI_AGENT_STATUSES = ["active", "idle", "running", "warning", "paused", "error", "disconnected", "disabled", "experimental"];
   const AI_RESPONSE_FORMATS = ["text", "json", "markdown", "structured", "signal"];
@@ -206,6 +211,7 @@ window.TrackerLensAiAgentEditor = (() => {
         queueLimit: numberValue(form, "queueLimit", 25),
         parallelJobs: numberValue(form, "parallelJobs", 1),
         dropPolicy: agentFormValue(form, "dropPolicy") || "queue",
+        triggerPolicy: agentFormValue(form, "triggerPolicy") || "connected_event",
         state: "idle",
       },
       provider: {
@@ -247,6 +253,7 @@ window.TrackerLensAiAgentEditor = (() => {
         persistence: agentFormValue(form, "memoryPersistence") || "workspace",
         compression: agentFormValue(form, "memoryCompression") || "summary",
         contextWindow: numberValue(form, "contextWindow", 6),
+        readMemory: boolValue(form, "readMemory", true),
         saveResponses: boolValue(form, "saveResponsesToMemory", true),
       },
       permissions,
@@ -725,7 +732,8 @@ window.TrackerLensAiAgentEditor = (() => {
           agentInput("Cooldown (ms)", "cooldownMs", runtime.cooldownMs ?? 0, { type: "number" }),
           agentInput("Queue Limit", "queueLimit", runtime.queueLimit ?? 25, { type: "number" }),
           agentInput("Parallel Jobs", "parallelJobs", runtime.parallelJobs ?? 1, { type: "number" }),
-          agentSelect("Drop Policy", "dropPolicy", runtime.dropPolicy || "queue", AI_DROP_POLICIES)
+          agentSelect("Drop Policy", "dropPolicy", runtime.dropPolicy || "queue", AI_DROP_POLICIES),
+          agentSelect("Trigger Policy", "triggerPolicy", runtime.triggerPolicy || "connected_event", AI_TRIGGER_POLICIES)
         ),
       },
       {
@@ -801,6 +809,7 @@ window.TrackerLensAiAgentEditor = (() => {
           agentSelect("Persistence", "memoryPersistence", memoryConfig.persistence || "workspace", ["none", "short", "workspace", "persistent"]),
           agentSelect("Compression", "memoryCompression", memoryConfig.compression || "summary", ["none", "summary", "semantic", "rolling-window"]),
           agentInput("Context Window", "contextWindow", memoryConfig.contextWindow ?? 6, { type: "number" }),
+          agentToggle("Read Memory", "readMemory", memoryConfig.readMemory !== false, "Inject stored memory into the next prompt."),
           agentToggle("Save Responses", "saveResponsesToMemory", memoryConfig.saveResponses !== false, "Store completed outputs in this agent memory."),
           _.div(
             { class: "tl-ai-agent-memory-actions" },

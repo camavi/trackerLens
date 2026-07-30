@@ -2465,6 +2465,42 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
   white-space: nowrap;
 }
 
+.tl-flow-ai-agent-policy-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tl-flow-ai-agent-policy-summary span {
+  min-width: 0;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  color: rgba(203, 213, 225, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.28);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.tl-flow-ai-agent-policy-summary span.is-on {
+  color: #bbf7d0;
+  border-color: rgba(34, 197, 94, 0.38);
+  background: rgba(22, 163, 74, 0.16);
+}
+
+.tl-flow-ai-agent-policy-summary strong {
+  color: #e2e8f0;
+}
+
+.tl-flow-ai-agent-policy-summary .material-symbols-rounded {
+  flex: 0 0 auto;
+  font-size: 13px !important;
+  line-height: 1;
+}
+
 .tl-flow-node-footer {
   min-width: 0;
   display: grid;

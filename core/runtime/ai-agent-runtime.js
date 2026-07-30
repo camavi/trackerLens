@@ -87,6 +87,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     parallelJobs: agent.runtime?.parallelJobs ?? 1,
     maxConcurrentTasks: agent.runtime?.parallelJobs ?? agent.runtime?.maxConcurrentTasks ?? 1,
     dropPolicy: agent.runtime?.dropPolicy || "queue",
+    triggerPolicy: agent.runtime?.triggerPolicy || "connected_event",
     providerProfile: agent.provider?.profileId || "",
     provider: agent.provider?.providerType || agent.provider?.provider || "ollama",
     providerType: agent.provider?.providerType || agent.provider?.provider || "ollama",
@@ -120,6 +121,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     memoryPersistence: agent.memory?.persistence || "workspace",
     memoryCompression: agent.memory?.compression || "summary",
     contextWindow: agent.memory?.contextWindow ?? 6,
+    readMemory: agent.memory?.readMemory !== false,
     saveResponsesToMemory: agent.memory?.saveResponses !== false,
     ...(agent.permissions || {}),
     ...(agent.debug || {}),
@@ -169,17 +171,71 @@ window.TrackerLensAiAgentRuntime = (() => {
     return unique([...(node.inputs || []), ...(node.channels || [])]);
   };
 
-  const agentAcceptsDependencyEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
+  const isToolAccessDependency = (dependency = {}) =>
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") === "tool-access";
+
+  const dependencyEventChannel = (dependency = {}) =>
+    String(dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "");
+
+  const matchingAgentDependencyForEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
     const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
-    if (!incomingDependencies.length) return true;
-    if (event?.targetNodeId && event.targetNodeId === node.id) return true;
     const eventChannel = String(event?.channel || "");
     const sourceNodeId = String(event?.sourceNodeId || "");
-    return incomingDependencies.some((dependency) =>
-      String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access" &&
+    return incomingDependencies.find((dependency) =>
+      !isToolAccessDependency(dependency) &&
       String(dependency.sourceNodeId || "") === sourceNodeId &&
-      String(dependency.channel || dependency.metadata?.targetPort || dependency.metadata?.sourcePort || "") === eventChannel
-    );
+      dependencyEventChannel(dependency) === eventChannel
+    ) || null;
+  };
+
+  const agentAcceptsDependencyEvent = ({ node = {}, event = {}, dependencies = [] } = {}) => {
+    const policy = String(nodeConfig(node).triggerPolicy || "connected_event").toLowerCase();
+    if (policy === "manual_only") return false;
+    const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+    if (!incomingDependencies.length) return policy === "accepted_input" || event?.targetNodeId === node.id;
+    if (event?.targetNodeId && event.targetNodeId === node.id) return true;
+    return Boolean(matchingAgentDependencyForEvent({ node, event, dependencies }));
+  };
+
+  const buildAgentTriggerTrace = ({ node = {}, event = {}, dependencies = [], nodes = [] } = {}) => {
+    const incomingDependencies = (dependencies || []).filter((dependency) => dependency.targetNodeId === node.id);
+    const dependency = matchingAgentDependencyForEvent({ node, event, dependencies }) ||
+      (event?.targetNodeId === node.id
+        ? incomingDependencies.find((item) => !isToolAccessDependency(item) && (!event?.sourceNodeId || item.sourceNodeId === event.sourceNodeId)) || null
+        : null);
+    const nodesById = new Map((nodes || []).map((item) => [item.id, item]));
+    const sourceNode = nodesById.get(event?.sourceNodeId || dependency?.sourceNodeId || "") || {};
+    const targetNode = nodesById.get(node.id) || node;
+    const triggerPolicy = String(nodeConfig(node).triggerPolicy || "connected_event").toLowerCase();
+    const mode = triggerPolicy === "manual_only"
+      ? "manual-only"
+      : event?.meta?.flowMapDirectAiExecution
+      ? "direct-test"
+      : event?.targetNodeId === node.id
+        ? "targeted-event"
+        : dependency
+          ? "connected-event"
+          : incomingDependencies.length
+            ? "unmatched"
+            : "open-input";
+    return {
+      mode,
+      freshRun: Boolean(nodeConfig(node).freshRun || event?.meta?.freshRun),
+      inputChannel: event?.channel || "",
+      inputEventId: event?.id || "",
+      sourceNodeId: event?.sourceNodeId || dependency?.sourceNodeId || "",
+      sourceLabel: sourceNode.label || event?.sourceNodeId || dependency?.sourceNodeId || "",
+      targetNodeId: node.id || "",
+      targetLabel: targetNode.label || node.label || node.id || "",
+      dependencyId: dependency?.id || dependency?.connectionId || "",
+      connectionId: dependency?.connectionId || "",
+      dependencyChannel: dependencyEventChannel(dependency),
+      sourcePort: dependency?.metadata?.sourcePort || dependency?.sourcePort || "",
+      targetPort: dependency?.metadata?.targetPort || dependency?.targetPort || "",
+      linkType: dependency?.metadata?.linkType || dependency?.mapping?.linkType || "data",
+      incomingDependencyCount: incomingDependencies.length,
+      triggerPolicy,
+    };
   };
 
   const agentOutput = (node = {}, config = {}) =>
@@ -197,6 +253,56 @@ window.TrackerLensAiAgentRuntime = (() => {
     }
     return text.length > max ? `${text.slice(0, max)}\n...` : text;
   };
+
+  const buildRuntimeInputTrace = ({
+    node = {},
+    payload = {},
+    event = {},
+    config = {},
+    prompt = "",
+    memory = "",
+    inputDataContext = null,
+    ragContext = null,
+    graphContext = null,
+    toolContext = null,
+    triggerTrace = null,
+  } = {}) => ({
+    agentId: node.id || "",
+    agentLabel: node.label || node.id || "",
+    inputEvent: {
+      id: event.id || "",
+      channel: event.channel || "",
+      eventType: event.eventType || "",
+      sourceNodeId: event.sourceNodeId || "",
+      runId: event.meta?.runId || payload?.runId || "",
+      createdAt: event.createdAt || "",
+      freshRun: Boolean(config.freshRun || event.meta?.freshRun || payload?.__tlFreshRun),
+    },
+    trigger: triggerTrace,
+    objective: payload?.objective || payload?.Objective || payload?.task || payload?.query || payload?.question || "",
+    payload,
+    config: {
+      inputDataMode: config.inputDataMode || "",
+      freshRun: Boolean(config.freshRun || event.meta?.freshRun || payload?.__tlFreshRun),
+      triggerPolicy: config.triggerPolicy || "connected_event",
+      inputHistoryLimit: config.inputHistoryLimit ?? "",
+      memoryMode: config.memoryMode || "",
+      memoryPersistence: config.memoryPersistence || "",
+      contextWindow: config.contextWindow ?? "",
+      readMemory: config.readMemory ?? "",
+      saveResponsesToMemory: config.saveResponsesToMemory ?? config.saveResponses ?? "",
+      promptStrategy: config.promptStrategy || "",
+      outputFormat: config.outputFormat || config.responseFormat || "",
+    },
+    prompt,
+    promptChars: String(prompt || "").length,
+    memoryContext: memory,
+    memoryChars: String(memory || "").length,
+    inputDataContext,
+    ragContext,
+    graphContext,
+    toolContext,
+  });
 
   const isRagContextEvent = ({ payload = {}, event = {} } = {}) =>
     event?.channel === "knowledge.rag.context" ||
@@ -1090,6 +1196,11 @@ window.TrackerLensAiAgentRuntime = (() => {
     return Boolean(memoryScopeForPersistence(config, subtype));
   };
 
+  const shouldReadMemory = (config = {}) => {
+    if (String(config.readMemory ?? "true").toLowerCase() === "false") return false;
+    return !["off", "none", "disabled"].includes(String(config.memoryMode || "").toLowerCase());
+  };
+
   const stripJsonFence = (text = "") => {
     const clean = String(text || "").trim();
     const fenced = clean.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -1452,9 +1563,22 @@ window.TrackerLensAiAgentRuntime = (() => {
     }
 
     async performExecution({ node, payload, event }) {
-      const config = await resolveNodeConfig(node);
+      let config = await resolveNodeConfig(node);
+      if (config.freshRun || event?.meta?.freshRun || payload?.__tlFreshRun) {
+        config = {
+          ...config,
+          inputDataMode: "off",
+          readMemory: false,
+        };
+      }
       const jobId = `ai_job_${node.id}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const runId = event.meta?.runId || payload?.runId || "";
+      const triggerTrace = buildAgentTriggerTrace({
+        node,
+        event,
+        dependencies: this.runtime?.dependencies || [],
+        nodes: this.runtime?.nodes || [],
+      });
       let steps = [];
       steps = await this.recordStep({
         node,
@@ -1466,7 +1590,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           type: "received",
           status: "complete",
           summary: `Input event ${event?.channel || "runtime"} received.`,
-          payload: { inputChannel: event?.channel || "", inputEventId: event?.id || "", sourceNodeId: event?.sourceNodeId || "" },
+          payload: { inputChannel: event?.channel || "", inputEventId: event?.id || "", sourceNodeId: event?.sourceNodeId || "", trigger: triggerTrace },
         },
       });
       const inputDataContext = await collectInputDataContext({ node, event, workspaceId: this.workspaceId, config, runtime: this.runtime });
@@ -1544,8 +1668,8 @@ window.TrackerLensAiAgentRuntime = (() => {
       };
       const provider = await pickProvider(config);
       const model = String(config.model || provider?.model || "local-model");
-      const memoryDisabled = ["off", "none", "disabled"].includes(String(config.memoryMode || "").toLowerCase());
-      const memory = memoryDisabled ? "" : await window.TrackerLensAiRuntimeStore?.buildMemoryContext?.({
+      const memoryReadEnabled = shouldReadMemory(config);
+      const memory = !memoryReadEnabled ? "" : await window.TrackerLensAiRuntimeStore?.buildMemoryContext?.({
         workspaceId: this.workspaceId,
         agentId: node.id,
         query: event.channel || nodeSubtype(node),
@@ -1560,9 +1684,10 @@ window.TrackerLensAiAgentRuntime = (() => {
         step: {
           type: "memory",
           status: "complete",
-          summary: memoryDisabled ? "Memory disabled for this agent." : "Loaded workspace memory context.",
+          summary: memoryReadEnabled ? "Loaded workspace memory context." : "Memory read disabled for this agent.",
           payload: {
-            disabled: memoryDisabled,
+            disabled: !memoryReadEnabled,
+            readMemory: memoryReadEnabled,
             hasMemory: Boolean(memory),
             persistence: config.memoryPersistence || "",
             saveResponsesToMemory: shouldSaveResponseToMemory(config, nodeSubtype(node)),
@@ -1570,6 +1695,19 @@ window.TrackerLensAiAgentRuntime = (() => {
         },
       });
       const prompt = buildPrompt({ node, payload, event, memory, config: promptConfig });
+      const inputTrace = buildRuntimeInputTrace({
+        node,
+        payload,
+        event,
+        config,
+        prompt,
+        memory,
+        inputDataContext,
+        ragContext,
+        graphContext,
+        toolContext,
+        triggerTrace,
+      });
       const configMaxTokens = Number(config.maxTokens || 0);
       const providerMaxTokens = Number(provider?.maxTokens || 0);
       const maxTokens = Math.max(128, Math.min(32000, Number(configMaxTokens || providerMaxTokens || 800)));
@@ -1604,6 +1742,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         agent: node.label || node.id,
         task: event.channel || "runtime event",
         prompt,
+        inputTrace,
         memoryContext: memory,
         inputDataContext,
         ragContext,
@@ -1701,6 +1840,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           latencyMs,
           inputChannel: event.channel || "",
           prompt,
+          inputTrace,
           memoryContext: memory,
           inputDataContext,
           ragContext,
@@ -1744,6 +1884,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           tokens: result.usage.totalTokens || 0,
           cost: result.cost,
           prompt,
+          inputTrace,
           memoryContext: memory,
           inputDataContext,
           ragContext,
@@ -1795,6 +1936,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           tokens: 0,
           cost: estimateCost({ usage: {}, provider, config }),
           prompt,
+          inputTrace,
           memoryContext: memory,
           inputDataContext,
           ragContext,
