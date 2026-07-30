@@ -42,6 +42,7 @@ Connected Agent Node Tool Protocol foundation.
 - Agent execution guard follow-up: AI Agents now expose `Trigger Policy` (`On connected event`, `On any accepted input`, `Manual only`) and the runtime enforces it before starting from bus events.
 - Agent node policy summary follow-up: AI Agent cards now show trigger policy, Fresh Run state and memory read/save status directly on the node body.
 - Agent alias diagnostics follow-up: AI Agent alias nodes now expose a read-only diagnostics dialog showing the source agent, alias node identity, local override paths and the resolved runtime/memory policy.
+- Task node objective UX follow-up: long `Objective`/note payload fields now open a compact textarea dialog from the node card, keeping the canvas dense while allowing full prompt editing.
 
 ## Completed Sequence
 

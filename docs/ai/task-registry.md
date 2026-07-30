@@ -41,6 +41,7 @@ Current sub-steps:
 - AI Agent execution guard follow-up: add `Trigger Policy` runtime configuration and enforce connected-event, accepted-input or manual-only starts before an Agent handles bus events.
 - AI Agent node policy summary follow-up: show trigger policy, Fresh Run and memory read/save state directly on AI Agent node cards.
 - AI Agent alias diagnostics follow-up: add a node-level read-only diagnostics dialog for aliases, showing the linked source agent, alias identity, local override paths and resolved runtime/memory policy.
+- Task node objective UX follow-up: make long `Objective`/note payload fields open a textarea dialog from the node card instead of forcing prompt authoring into the compact inline input.
 - Phase 5 MCP adapter: pending. Expose selected connected node tools through a local MCP server adapter and import external MCP tools as controlled observations through a TL MCP client node/connector.
 
 ### TASK-027: Knowledge Runtime

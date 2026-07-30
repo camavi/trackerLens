@@ -1871,6 +1871,93 @@ body.is-flow-link-dragging .tl-flow-node:not(.is-link-source) .tl-flow-node-port
   color: var(--payload-icon-color, rgb(var(--node-rgb, 214, 226, 235))) !important;
 }
 
+.tl-flow-payload-note-open.cms-btn {
+  min-height: 27px;
+  justify-content: stretch;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 7px;
+  color: #8c9196f2;
+  border: 1px solid rgba(var(--node-rgb, 214, 226, 235), 0.18);
+  border-radius: 7px;
+  background: rgba(2, 6, 12, 0.22);
+  box-shadow: none;
+  text-align: left;
+}
+
+.tl-flow-payload-note-open.cms-btn:hover {
+  border-color: rgba(var(--node-rgb, 214, 226, 235), 0.34);
+  background: rgba(var(--node-rgb, 214, 226, 235), 0.11);
+}
+
+.tl-flow-payload-note-open>.cms-icon:first-child {
+  flex: 0 0 auto;
+  color: var(--payload-icon-color, rgba(var(--node-rgb, 214, 226, 235), 0.86));
+}
+
+.tl-flow-payload-note-open>.cms-icon:last-child {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: rgba(226, 232, 240, 0.64);
+}
+
+.tl-flow-payload-note-open-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+}
+
+.tl-flow-payload-note-open-copy strong,
+.tl-flow-payload-note-open-copy em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-flow-payload-note-open-copy strong {
+  color: rgba(226, 232, 240, 0.64);
+  font-size: 8px;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.tl-flow-payload-note-open-copy em {
+  color: rgba(248, 250, 252, 0.94);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  line-height: 1.1;
+}
+
+.tl-flow-payload-note-dialog-body {
+  display: grid;
+  min-width: 0;
+}
+
+.tl-flow-payload-note-dialog-textarea {
+  width: 100%;
+  min-height: 280px;
+  max-height: 58vh;
+  resize: vertical;
+  padding: 14px;
+  color: #e5edf5;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.72);
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.tl-flow-payload-note-dialog-textarea:focus {
+  outline: 2px solid rgba(59, 130, 246, 0.52);
+  outline-offset: 2px;
+}
+
 .tl-flow-kdoc-config-title {
   min-width: 0;
   min-height: 25px;

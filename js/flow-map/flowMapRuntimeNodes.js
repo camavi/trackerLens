@@ -3044,7 +3044,7 @@ const visiblePayloadInlineRows = (node = {}, config = {}, { limit = 8 } = {}) =>
 
 const payloadInlineSaveTimers = new Map();
 
-const persistPayloadInlineValue = async ({ node = {}, item = {}, value = "", debounce = 0 } = {}) => {
+const persistPayloadInlineValue = async ({ node = {}, item = {}, value = "", debounce = 0, refresh = false } = {}) => {
   if (!node?.id || !item?.key) return;
   const timerKey = `${node.id}:${item.id || item.key}`;
   if (payloadInlineSaveTimers.has(timerKey)) window.clearTimeout(payloadInlineSaveTimers.get(timerKey));
@@ -3083,12 +3083,68 @@ const persistPayloadInlineValue = async ({ node = {}, item = {}, value = "", deb
       record: false,
       channels: false,
     });
+    if (refresh) mount();
   };
   if (debounce > 0) {
     payloadInlineSaveTimers.set(timerKey, window.setTimeout(run, debounce));
   } else {
     await run();
   }
+};
+
+const openPayloadNoteInlineDialog = (node = {}, item = {}, value = "") => {
+  let draftValue = String(value || "");
+  const label = item.label || payloadItemLabel(item.key) || "Prompt";
+  const textarea = _.textarea({
+    class: "tl-flow-payload-note-dialog-textarea",
+    rows: 12,
+    value: draftValue,
+    placeholder: item.description || `Write ${label.toLowerCase()}...`,
+    spellcheck: "true",
+    onPointerDown: stopNodeControlEvent,
+    onclick: stopNodeControlEvent,
+    onInput: (event) => {
+      event.stopPropagation();
+      draftValue = String(event.currentTarget?.value || "");
+    },
+    onkeydown: (event) => {
+      event.stopPropagation();
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        dialog.close();
+        persistPayloadInlineValue({ node, item, value: draftValue, refresh: true });
+      }
+    },
+  });
+  const dialog = _.Dialog({
+    class: "tl-flow-payload-note-dialog",
+    panelClass: "tl-flow-payload-note-dialog-panel",
+    size: "lg",
+    title: label,
+    subtitle: node.label || node.id || "",
+    icon: item.iconName || "article",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-payload-note-dialog-body" },
+      textarea
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Cancel"),
+      btn({
+        color: "primary",
+        onclick: () => {
+          close();
+          persistPayloadInlineValue({ node, item, value: draftValue, refresh: true });
+        },
+      }, icon("save", "sm"), "Save")
+    ),
+  });
+  dialog.open();
+  requestAnimationFrame(() => {
+    textarea.focus?.();
+    textarea.setSelectionRange?.(textarea.value.length, textarea.value.length);
+  });
 };
 
 const renderPayloadInlineControl = (node = {}, item = {}) => {
@@ -3161,6 +3217,25 @@ const renderPayloadInlineControl = (node = {}, item = {}) => {
         persistPayloadInlineValue({ node, item, value: nextValue });
       },
     });
+  }
+  if (item.type === "note" || item.type === "textarea") {
+    const displayValue = currentValue.trim() || "Open prompt editor";
+    return btn({
+      class: "tl-flow-payload-inline-control tl-flow-payload-note-open",
+      title: currentValue ? `${item.label}: ${currentValue}` : `Open ${item.label || "prompt"} editor`,
+      onPointerDown: stop,
+      onclick: (event) => {
+        event.preventDefault();
+        stop(event);
+        openPayloadNoteInlineDialog(node, item, currentValue);
+      },
+    },
+    payloadItemIconNode({ icon: item.iconName, iconColor: item.iconColor }),
+    _.span({ class: "tl-flow-payload-note-open-copy" },
+      _.strong(item.label || payloadItemLabel(item.key) || "Prompt"),
+      _.em(shortInlineConfigValue(displayValue, "empty"))
+    ),
+    icon("open_in_new", "sm"));
   }
   return _.Input({
     size: "sm",
