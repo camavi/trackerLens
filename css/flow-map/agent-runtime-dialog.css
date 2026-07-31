@@ -123,6 +123,9 @@
   border-radius: 8px;
   background: rgba(2, 6, 23, 0.32);
   font-size: 12px;
+  text-overflow: ellipsis;
+  overflow: auto;
+  white-space: nowrap;
 }
 
 .tl-ai-agent-runtime-trace-grid span.is-wide {

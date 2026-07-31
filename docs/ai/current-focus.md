@@ -9,6 +9,10 @@ Last updated: 2026-07-30.
 
 Connected Agent Node Tool Protocol foundation.
 
+## Next Task
+
+Custom Node Packages are the next product/architecture path after the AI Agent long-objective validation. TL should allow developers to upload/install node packages containing manifest, runtime JS, UI schema, JSON schemas, assets, examples and docs. Because arbitrary JS cannot be guaranteed 100% safe, the design must use trust levels (`verified`, `community`, `local-dev`, `blocked`), permission-gated runtime APIs, marketplace signature/verification, AI-assisted code review and strong warnings for external unverified installs. See `docs/ai/runtime/custom-node-packages.md`.
+
 ## Current Work
 
 - Connected Node Tool Protocol v1 is being defined so Agent/LLM nodes can inspect connected nodes, plan tool calls, request full or partial document evidence, ask Dictionary/Event/Graph/Memory nodes for focused observations, verify answers from source-bearing evidence and only then respond or emit validated actions.

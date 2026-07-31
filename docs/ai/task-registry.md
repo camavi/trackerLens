@@ -7,6 +7,23 @@ Last updated: 2026-07-30.
 
 ## Active
 
+### TASK-029: Custom Node Packages
+
+Status: Planned as the next architecture task after AI Agent long-objective validation.
+Priority: High.
+Risk: High because external JavaScript cannot be fully controlled; TL must distinguish verified marketplace packages from unverified local/external installs.
+
+Current sub-steps:
+
+- Package contract: planned. Define `.tl-node.zip` / folder packages with `node.json`, `runtime.js`, `ui.json`, `assets/`, `schemas/`, `examples/` and `README.md`.
+- Manifest-only import: planned. First implementation should load metadata, palette registration, assets and UI schema without executing package JS.
+- Permission model: planned. Packages must declare network, filesystem, AI provider, memory and runtime graph permissions; TL must show requested permissions before install.
+- Trust levels: planned. Nodes should be visibly marked as `verified`, `community`, `local-dev` or `blocked`.
+- Official marketplace: planned. Verified packages require signature checks, manifest validation, static analysis, AI-assisted code review, smoke tests and a verified badge.
+- External/local install: planned. Users may install local zip/folder packages only with explicit warning; unverified code is user-risk and must not be presented as TL-verified.
+- Sandboxed runtime: planned after manifest-only import. Runtime JS should run through a restricted `{ input, config, tools, emit, log }` API, with AI/memory/network/runtime graph access gated by permissions.
+- Versioning/migrations: planned. Package updates must preserve existing Flow Map node configs and provide migration hooks before marketplace rollout.
+
 ### TASK-028: Connected Agent Node Tools
 
 Status: Protocol foundation started.
