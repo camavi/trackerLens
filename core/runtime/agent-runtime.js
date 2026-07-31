@@ -822,8 +822,12 @@ window.TrackerLensAgentRuntime = (() => {
       worldId: record.worldId || "",
     }));
     const relations = [];
+    const relationKeys = new Set();
     const add = (source, relationType, target) => {
       if (!source?.id || !target?.id || source.id === target.id) return;
+      const key = `${source.id}::${relationType}::${target.id}`;
+      if (relationKeys.has(key)) return;
+      relationKeys.add(key);
       relations.push({
         sourceEntityId: source.id,
         targetEntityId: target.id,

@@ -2661,8 +2661,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const byTypeLabel = new Map(records.map((record) => [`${record.recordType}::${normalizeEntityToken(record.label || record.id)}`, record]));
     const resolve = (value = "", type = "") => byId.get(value) || byTypeLabel.get(`${type}::${normalizeEntityToken(value)}`) || null;
     const relations = [];
+    const relationKeys = new Set();
     const addRelation = (source, relationType, target) => {
       if (!source?.id || !target?.id || source.id === target.id) return;
+      const key = `${source.id}::${relationType}::${target.id}`;
+      if (relationKeys.has(key)) return;
+      relationKeys.add(key);
       relations.push({
         id: `worldrel_${safeId(relationType)}_${safeId(source.id)}_${safeId(target.id)}`,
         sourceEntityId: source.id,
