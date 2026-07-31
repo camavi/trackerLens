@@ -48,6 +48,7 @@ Custom Node Packages are the next product/architecture path after the AI Agent l
 - Agent alias diagnostics follow-up: AI Agent alias nodes now expose a read-only diagnostics dialog showing the source agent, alias node identity, local override paths and the resolved runtime/memory policy.
 - Task node objective UX follow-up: long `Objective`/note payload fields now open a compact textarea dialog from the node card, keeping the canvas dense while allowing full prompt editing.
 - Entity Extractor LLM QA follow-up: current traces show the weak graph is a mix of small-model JSON/schema drift, prompt ambiguity around relation endpoint labels and a runtime endpoint-resolution gap after cross-chunk entity dedup. The runtime now salvages malformed provider JSON, keeps raw provider payloads inspectable, rejects placeholder relation targets in the prompt and resolves LLM relation endpoints against the global run entity set when chunk-local entities were deduplicated.
+- Structured/World Knowledge foundation started: `Structured Knowledge Store` persists typed schema/versioned JSON records in a generic local store, while `World Database` uses the same store with `worldbuilding/v1` records for worlds, kingdoms, packs, classes, personalities, names, story blocks and stories. World DB validates hierarchy/story-block references and emits both `world.database.updated` and graph-shaped context for Agent/tool use; Flow Map inspector now has dedicated Structured/World debug export tabs.
 
 ## Completed Sequence
 

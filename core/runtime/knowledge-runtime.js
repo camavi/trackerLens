@@ -13,6 +13,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     relations: tableName("TL_KNOWLEDGE_RELATIONS", "tl_knowledge_relations"),
     dictionary: tableName("TL_KNOWLEDGE_DICTIONARY", "tl_knowledge_dictionary"),
     events: tableName("TL_KNOWLEDGE_EVENTS", "tl_knowledge_events"),
+    structured: tableName("TL_STRUCTURED_KNOWLEDGE", "tl_structured_knowledge"),
     queries: tableName("TL_KNOWLEDGE_QUERIES", "tl_knowledge_queries"),
     sources: tableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
     metrics: tableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
@@ -26,6 +27,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     { name: STORES.relations, columns: ["workspaceId", "sourceEntityId", "targetEntityId", "relationType", "createdAt"] },
     { name: STORES.dictionary, columns: ["workspaceId", "documentId", "collectionId", "language", "term", "lemma", "scope", "createdAt"] },
     { name: STORES.events, columns: ["workspaceId", "documentId", "collectionId", "chunkId", "eventType", "sequence", "createdAt"] },
+    { name: STORES.structured, columns: ["workspaceId", "collectionId", "schemaId", "recordType", "parentId", "worldId", "createdAt"] },
     { name: STORES.queries, columns: ["workspaceId", "query", "status", "createdAt"] },
     { name: STORES.sources, columns: ["workspaceId", "sourceType", "status", "createdAt"] },
     { name: STORES.metrics, columns: ["workspaceId", "metric", "createdAt"] },
@@ -2407,6 +2409,303 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .map((token) => String(token || "").trim())
       .filter((token) => token.length >= 2)
       .filter((token) => token.length <= 4 ? normalizedTokens.has(token) : normalized.includes(token)));
+  };
+
+  const parseJsonLike = (value, fallback = null) => {
+    if (value === undefined || value === null || value === "") return fallback;
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(String(value));
+    } catch {
+      return fallback;
+    }
+  };
+
+  const structuredArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") return [value];
+    return [];
+  };
+
+  const structuredPayloadRecords = (payload = {}, config = {}) => {
+    const configRecords = parseJsonLike(config.records || config.seedRecords || "", null);
+    const configRecord = parseJsonLike(config.record || config.seedRecord || "", null);
+    return [
+      ...structuredArray(payload?.records),
+      ...structuredArray(payload?.record),
+      ...structuredArray(payload?.items),
+      ...structuredArray(payload?.data?.records),
+      ...structuredArray(configRecords),
+      ...structuredArray(configRecord),
+    ].filter((item) => item && typeof item === "object");
+  };
+
+  const structuredRecordType = (item = {}, config = {}) =>
+    String(item.recordType || item.type || item.kind || item.entityType || config.recordType || "record")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.:-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "record";
+
+  const structuredRecordLabel = (item = {}) =>
+    String(item.label || item.name || item.title || item.id || "").replace(/\s+/g, " ").trim();
+
+  const structuredRecordData = (item = {}) => {
+    const reserved = new Set([
+      "id", "workspaceId", "collectionId", "schemaId", "schemaVersion", "recordType", "type", "kind", "parentId", "worldId",
+      "label", "name", "title", "tags", "data", "metadata", "createdAt", "updatedAt",
+    ]);
+    const data = item.data && typeof item.data === "object" ? { ...item.data } : {};
+    Object.entries(item || {}).forEach(([key, value]) => {
+      if (!reserved.has(key)) data[key] = value;
+    });
+    return data;
+  };
+
+  const structuredRecordsForScope = async ({ workspaceId = "workspace_global", collectionId = "", schemaId = "", worldId = "" } = {}) =>
+    byWorkspace(await listStore(STORES.structured), workspaceId)
+      .filter((record) => !collectionId || record.collectionId === collectionId)
+      .filter((record) => !schemaId || record.schemaId === schemaId)
+      .filter((record) => !worldId || record.worldId === worldId);
+
+  const buildStructuredKnowledgeStore = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
+    const now = nowIso();
+    const collectionId = payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "structured_default";
+    const schemaId = payload?.schemaId || config.schemaId || "structured/v1";
+    const schemaVersion = payload?.schemaVersion || config.schemaVersion || "1";
+    const worldId = payload?.worldId || config.worldId || "";
+    const replaceExisting = config.replaceExisting === true || config.replaceExisting === "true";
+    const records = structuredPayloadRecords(payload, config);
+    if (!records.length) throw new Error("Structured Knowledge Store: nessun record JSON da salvare");
+    if (replaceExisting) {
+      const existing = await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId });
+      await deleteRecords(STORES.structured, existing.map((record) => record.id));
+    }
+    const saved = [];
+    for (const item of records) {
+      const recordType = structuredRecordType(item, config);
+      const label = structuredRecordLabel(item);
+      const id = item.id || `sk_${safeId(collectionId)}_${safeId(schemaId)}_${safeId(recordType)}_${safeId(label || uniqueId("record"))}`;
+      const previous = await getRecord(STORES.structured, id).catch(() => null);
+      const record = {
+        id,
+        workspaceId,
+        collectionId,
+        schemaId,
+        schemaVersion,
+        recordType,
+        parentId: item.parentId || item.parent || config.parentId || "",
+        worldId: item.worldId || worldId,
+        label,
+        tags: Array.isArray(item.tags) ? item.tags : String(item.tags || "").split(/[,;\n]+/).map((tag) => tag.trim()).filter(Boolean),
+        data: structuredRecordData(item),
+        metadata: {
+          ...(item.metadata && typeof item.metadata === "object" ? item.metadata : {}),
+          nodeId: node?.id || "",
+          inputChannel: event?.channel || "",
+          sourceNodeId: event?.sourceNodeId || "",
+        },
+        status: item.status || "ready",
+        createdAt: previous?.createdAt || now,
+        updatedAt: now,
+      };
+      saved.push(await putRecord(STORES.structured, record));
+    }
+    const scopedRecords = await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId });
+    const typeCounts = scopedRecords.reduce((counts, record) => {
+      counts[record.recordType] = (counts[record.recordType] || 0) + 1;
+      return counts;
+    }, {});
+    return {
+      collectionId,
+      schemaId,
+      schemaVersion,
+      worldId,
+      records: saved,
+      recordCount: saved.length,
+      totalRecordCount: scopedRecords.length,
+      typeCounts,
+      context: {
+        collectionId,
+        schemaId,
+        worldId,
+        recordCount: scopedRecords.length,
+        typeCounts,
+        records: scopedRecords,
+      },
+    };
+  };
+
+  const worldTypeAliases = {
+    kingdom: "kingdom",
+    regno: "kingdom",
+    realm: "kingdom",
+    pack: "pack",
+    branco: "pack",
+    clan: "pack",
+    class: "class",
+    classe: "class",
+    role: "class",
+    personality: "personality",
+    personalita: "personality",
+    personalità: "personality",
+    name: "name",
+    nome: "name",
+    storyblock: "story_block",
+    "story-block": "story_block",
+    story_block: "story_block",
+    blocco_storia: "story_block",
+    story: "story",
+    storia: "story",
+    territory: "territory",
+    territorio: "territory",
+    law: "law",
+    legge: "law",
+  };
+
+  const normalizeWorldRecordType = (item = {}) => {
+    const raw = structuredRecordType(item, { recordType: "world_item" }).replace(/^worldbuilding[_.:-]/, "");
+    return worldTypeAliases[raw] || raw;
+  };
+
+  const worldPayloadRecords = (payload = {}, config = {}) => {
+    const explicit = structuredPayloadRecords(payload, config);
+    const world = payload?.world && typeof payload.world === "object" ? payload.world : parseJsonLike(config.worldJson || config.seedWorld || "", null);
+    if (!world || typeof world !== "object") return explicit;
+    const worldId = world.id || payload.worldId || config.worldId || "";
+    const records = [...explicit];
+    if (world.name || world.title || world.id) records.push({ ...world, type: "world", worldId, data: { ...(world.data || {}), description: world.description || "" } });
+    const appendTyped = (items = [], type = "") => structuredArray(items).forEach((item) => records.push({ ...item, type, worldId: item.worldId || worldId }));
+    appendTyped(world.kingdoms || world.regni, "kingdom");
+    appendTyped(world.packs || world.branchi || world.clans, "pack");
+    appendTyped(world.classes || world.classi || world.roles, "class");
+    appendTyped(world.personalities || world.personalita || world.personalità, "personality");
+    appendTyped(world.names || world.nomi, "name");
+    appendTyped(world.storyBlocks || world.story_blocks || world.blocchiStoria, "story_block");
+    appendTyped(world.stories || world.storie, "story");
+    return records;
+  };
+
+  const validateWorldRecords = (records = []) => {
+    const warnings = [];
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const byLabelType = new Map(records.map((record) => [`${record.recordType}::${normalizeEntityToken(record.label || record.id)}`, record]));
+    const findEndpoint = (idOrLabel = "", type = "") => {
+      if (!idOrLabel) return null;
+      if (byId.has(idOrLabel)) return byId.get(idOrLabel);
+      const key = `${type}::${normalizeEntityToken(idOrLabel)}`;
+      return byLabelType.get(key) || null;
+    };
+    records.filter((record) => record.recordType === "pack").forEach((record) => {
+      const kingdomRef = record.data?.kingdomId || record.data?.kingdom || record.parentId;
+      if (!findEndpoint(kingdomRef, "kingdom")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "pack-missing-kingdom", ref: kingdomRef || "" });
+    });
+    records.filter((record) => record.recordType === "story").forEach((record) => {
+      const blockRefs = structuredArray(record.data?.blocks || record.data?.storyBlocks);
+      blockRefs.forEach((block) => {
+        const blockRef = typeof block === "string" ? block : block.id || block.blockId || block.type || "";
+        if (blockRef && !findEndpoint(blockRef, "story_block")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "story-missing-block", ref: blockRef });
+      });
+    });
+    return warnings;
+  };
+
+  const worldGraphFromRecords = (records = []) => {
+    const entities = records.map((record) => ({
+      id: record.id,
+      label: record.label || record.id,
+      entityType: record.recordType,
+      recordType: record.recordType,
+      worldId: record.worldId || "",
+    }));
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const byTypeLabel = new Map(records.map((record) => [`${record.recordType}::${normalizeEntityToken(record.label || record.id)}`, record]));
+    const resolve = (value = "", type = "") => byId.get(value) || byTypeLabel.get(`${type}::${normalizeEntityToken(value)}`) || null;
+    const relations = [];
+    const addRelation = (source, relationType, target) => {
+      if (!source?.id || !target?.id || source.id === target.id) return;
+      relations.push({
+        id: `worldrel_${safeId(relationType)}_${safeId(source.id)}_${safeId(target.id)}`,
+        sourceEntityId: source.id,
+        targetEntityId: target.id,
+        sourceLabel: source.label || source.id,
+        targetLabel: target.label || target.id,
+        relationType,
+      });
+    };
+    records.forEach((record) => {
+      if (record.parentId) addRelation(record, "belongs_to", byId.get(record.parentId));
+      if (record.recordType === "pack") addRelation(record, "belongs_to", resolve(record.data?.kingdomId || record.data?.kingdom || "", "kingdom"));
+      if (record.recordType === "territory") addRelation(record, "belongs_to", resolve(record.data?.packId || record.data?.pack || "", "pack"));
+      if (record.recordType === "law") addRelation(resolve(record.data?.packId || record.data?.pack || "", "pack") || record, "follows", record);
+      if (record.recordType === "story") {
+        structuredArray(record.data?.blocks || record.data?.storyBlocks).forEach((block) => {
+          const blockRef = typeof block === "string" ? block : block.id || block.blockId || block.type || "";
+          addRelation(record, "uses_block", resolve(blockRef, "story_block"));
+        });
+      }
+    });
+    return { entities, relations };
+  };
+
+  const buildWorldDatabase = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
+    const now = nowIso();
+    const collectionId = payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "worldbuilding";
+    const schemaId = "worldbuilding/v1";
+    const schemaVersion = payload?.schemaVersion || config.schemaVersion || "1";
+    const worldId = payload?.worldId || payload?.world?.id || config.worldId || `world_${safeId(payload?.world?.name || config.worldName || collectionId)}`;
+    const rawRecords = worldPayloadRecords(payload, config);
+    if (!rawRecords.length) throw new Error("World Database: nessun record worldbuilding da salvare");
+    const normalizedRecords = rawRecords.map((item) => {
+      const recordType = normalizeWorldRecordType(item);
+      const label = structuredRecordLabel(item);
+      return {
+        ...item,
+        recordType,
+        type: recordType,
+        worldId: item.worldId || worldId,
+        parentId: item.parentId || item.kingdomId || item.packId || "",
+        id: item.id || `world_${safeId(worldId)}_${safeId(recordType)}_${safeId(label || uniqueId(recordType))}`,
+      };
+    });
+    const savedResult = await buildStructuredKnowledgeStore({
+      workspaceId,
+      node,
+      payload: { records: normalizedRecords, collectionId, schemaId, schemaVersion, worldId },
+      event,
+      config: { ...config, collectionId, schemaId, schemaVersion, worldId },
+    });
+    const scopedRecords = await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId });
+    const validation = validateWorldRecords(scopedRecords);
+    const graph = worldGraphFromRecords(scopedRecords);
+    const world = {
+      id: worldId,
+      collectionId,
+      schemaId,
+      schemaVersion,
+      recordCount: scopedRecords.length,
+      typeCounts: savedResult.typeCounts,
+      validation,
+      updatedAt: now,
+    };
+    return {
+      worldId,
+      collectionId,
+      schemaId,
+      schemaVersion,
+      world,
+      records: savedResult.records,
+      recordCount: savedResult.recordCount,
+      totalRecordCount: savedResult.totalRecordCount,
+      typeCounts: savedResult.typeCounts,
+      validation,
+      graph,
+      context: {
+        world,
+        records: scopedRecords,
+        graph,
+      },
+    };
   };
 
   const createDocument = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
@@ -10317,6 +10616,104 @@ window.TrackerLensKnowledgeRuntime = (() => {
             },
           });
           outputChannel = nodeOutput(node, config, "knowledge.events.updated");
+        } else if (subtype === "structured-knowledge-store") {
+          result = await buildStructuredKnowledgeStore({ workspaceId: this.workspaceId, node, payload, event, config });
+          await this.bus.emit("structured.collection.updated", {
+            collectionId: result.collectionId,
+            schemaId: result.schemaId,
+            schemaVersion: result.schemaVersion,
+            worldId: result.worldId,
+            records: result.records,
+            recordCount: result.recordCount,
+            totalRecordCount: result.totalRecordCount,
+            typeCounts: result.typeCounts,
+            context: result.context,
+          }, {
+            workspaceId: this.workspaceId,
+            eventType: "structured_collection_updated",
+            sourceNodeId: node.id,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          outputChannel = nodeOutput(node, config, "structured.record.created");
+        } else if (subtype === "world-database") {
+          result = await buildWorldDatabase({ workspaceId: this.workspaceId, node, payload, event, config });
+          await this.bus.emit("structured.collection.updated", {
+            collectionId: result.collectionId,
+            schemaId: result.schemaId,
+            schemaVersion: result.schemaVersion,
+            worldId: result.worldId,
+            records: result.records,
+            recordCount: result.recordCount,
+            totalRecordCount: result.totalRecordCount,
+            typeCounts: result.typeCounts,
+            context: result.context,
+          }, {
+            workspaceId: this.workspaceId,
+            eventType: "structured_collection_updated",
+            sourceNodeId: node.id,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          await this.bus.emit("world.database.updated", {
+            worldId: result.worldId,
+            collectionId: result.collectionId,
+            schemaId: result.schemaId,
+            world: result.world,
+            records: result.records,
+            recordCount: result.recordCount,
+            totalRecordCount: result.totalRecordCount,
+            typeCounts: result.typeCounts,
+            validation: result.validation,
+            graph: result.graph,
+            context: result.context,
+          }, {
+            workspaceId: this.workspaceId,
+            eventType: "world_database_updated",
+            sourceNodeId: node.id,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          await this.bus.emit("knowledge.graph.context", {
+            worldId: result.worldId,
+            collectionId: result.collectionId,
+            entities: result.graph?.entities || [],
+            relations: result.graph?.relations || [],
+            entityCount: result.graph?.entities?.length || 0,
+            relationCount: result.graph?.relations?.length || 0,
+            context: result.context,
+          }, {
+            workspaceId: this.workspaceId,
+            eventType: "world_graph_context",
+            sourceNodeId: node.id,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          outputChannel = nodeOutput(node, config, "world.database.updated");
         } else if (subtype === "embedding-generator" || subtype === "vector-memory") {
           result = await createEmbeddings({ workspaceId: this.workspaceId, node, payload, event, config });
           outputChannel = nodeOutput(node, config, "knowledge.embedding.created");
@@ -10801,6 +11198,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     createDocument,
     createChunks,
     createEmbeddings,
+    buildStructuredKnowledgeStore,
+    buildWorldDatabase,
     search,
     queryGraph,
     debugNormalizeEventSentence,

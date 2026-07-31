@@ -4483,6 +4483,88 @@ const loadKnowledgeInspectorEvents = async (node = {}, { force = false } = {}) =
   if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
 };
 
+const isStructuredKnowledgeStoreNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && ["structured-knowledge-store", "world-database"].includes(nodeSubtype(node));
+
+const structuredKnowledgeRecordsForNode = async (node = {}) => {
+  const records = await readKnowledgeInspectorStore(knowledgeTableName("TL_STRUCTURED_KNOWLEDGE", "tl_structured_knowledge"));
+  const workspaceId = node.workspaceId || state.filters.workspaceId || "workspace_global";
+  const config = nodeRuntimeConfig(node);
+  const collectionId = String(config.collectionId || "").trim();
+  const schemaId = nodeSubtype(node) === "world-database" ? "worldbuilding/v1" : String(config.schemaId || "").trim();
+  const worldId = String(config.worldId || "").trim();
+  return (records || [])
+    .filter((entry) => (entry.workspaceId || "workspace_global") === workspaceId)
+    .filter((entry) => !collectionId || entry.collectionId === collectionId)
+    .filter((entry) => !schemaId || entry.schemaId === schemaId)
+    .filter((entry) => !worldId || entry.worldId === worldId)
+    .sort((a, b) =>
+      String(a.schemaId || "").localeCompare(String(b.schemaId || "")) ||
+      String(a.worldId || "").localeCompare(String(b.worldId || "")) ||
+      String(a.recordType || "").localeCompare(String(b.recordType || "")) ||
+      String(a.label || a.id || "").localeCompare(String(b.label || b.id || ""))
+    );
+};
+
+const summarizeStructuredKnowledgeRecords = (records = []) => {
+  const typeCounts = {};
+  const schemaCounts = {};
+  const worldCounts = {};
+  records.forEach((record) => {
+    const type = String(record.recordType || "record");
+    const schema = String(record.schemaId || "structured/v1");
+    const world = String(record.worldId || "none");
+    typeCounts[type] = (typeCounts[type] || 0) + 1;
+    schemaCounts[schema] = (schemaCounts[schema] || 0) + 1;
+    worldCounts[world] = (worldCounts[world] || 0) + 1;
+  });
+  return { recordCount: records.length, typeCounts, schemaCounts, worldCounts };
+};
+
+const loadStructuredKnowledgeInspector = async (node = {}, { force = false } = {}) => {
+  if (!node?.id || !isStructuredKnowledgeStoreNode(node)) return;
+  state.knowledgeInspectorStructured = state.knowledgeInspectorStructured || {};
+  const cached = state.knowledgeInspectorStructured[node.id];
+  if (!force && cached && (cached.loading || Date.now() - Number(cached.loadedAt || 0) < 2500)) return;
+  state.knowledgeInspectorStructured = {
+    ...state.knowledgeInspectorStructured,
+    [node.id]: {
+      ...(cached || {}),
+      loading: true,
+      error: "",
+    },
+  };
+  try {
+    const records = await structuredKnowledgeRecordsForNode(node);
+    state.knowledgeInspectorStructured = {
+      ...state.knowledgeInspectorStructured,
+      [node.id]: {
+        loading: false,
+        records,
+        summary: summarizeStructuredKnowledgeRecords(records),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: "",
+      },
+    };
+  } catch (error) {
+    state.knowledgeInspectorStructured = {
+      ...state.knowledgeInspectorStructured,
+      [node.id]: {
+        loading: false,
+        records: [],
+        summary: summarizeStructuredKnowledgeRecords([]),
+        config: nodeRuntimeConfig(node),
+        workspaceId: node.workspaceId || state.filters.workspaceId || "workspace_global",
+        loadedAt: Date.now(),
+        error: error?.message || "Structured Knowledge read failed",
+      },
+    };
+  }
+  if (selectedNode()?.id === node.id) mount({ preserveScroll: true });
+};
+
 const openKnowledgeDocumentsDialog = async (node = {}) => {
   const data = await knowledgeDocumentRecordsForNode(node).catch((error) => {
     console.warn("Knowledge documents unavailable", error);
@@ -5159,6 +5241,84 @@ const renderInspectorKnowledgeEvents = (node = {}) => {
         )
       )
       : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento eventi Knowledge..." : "Nessun evento trovato per questo scope.")
+  );
+};
+
+const renderInspectorStructuredKnowledge = (node = {}) => {
+  if (!isStructuredKnowledgeStoreNode(node)) {
+    return _.section({ class: "tl-flow-detail-list" }, _.p({ class: "tl-flow-muted" }, "N/D"));
+  }
+  loadStructuredKnowledgeInspector(node);
+  const record = state.knowledgeInspectorStructured?.[node.id] || {
+    loading: true,
+    records: [],
+    summary: summarizeStructuredKnowledgeRecords([]),
+    config: nodeRuntimeConfig(node),
+  };
+  const records = record.records || [];
+  const summary = record.summary || summarizeStructuredKnowledgeRecords(records);
+  const config = record.config || nodeRuntimeConfig(node);
+  const countsText = (counts = {}) =>
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 10)
+      .map(([key, count]) => `${key}:${count}`)
+      .join(", ") || "N/D";
+  const exportPayload = {
+    nodeId: node.id,
+    subtype: nodeSubtype(node),
+    workspaceId: record.workspaceId || node.workspaceId || state.filters.workspaceId || "workspace_global",
+    collectionId: String(config.collectionId || "").trim(),
+    schemaId: nodeSubtype(node) === "world-database" ? "worldbuilding/v1" : String(config.schemaId || "").trim(),
+    worldId: String(config.worldId || "").trim(),
+    summary,
+    records,
+    exportedAt: new Date().toISOString(),
+  };
+  return _.section(
+    { class: "tl-flow-detail-list" },
+    _.h3(nodeSubtype(node) === "world-database" ? "World Database Debug" : "Structured Knowledge Debug"),
+    ...[
+      ["Records", record.loading ? "loading..." : summary.recordCount || 0],
+      ["Types", record.loading ? "loading..." : countsText(summary.typeCounts)],
+      ["Schemas", record.loading ? "loading..." : countsText(summary.schemaCounts)],
+      ["Worlds", record.loading ? "loading..." : countsText(summary.worldCounts)],
+      ["Workspace", exportPayload.workspaceId || "workspace_global"],
+      ["Collection", exportPayload.collectionId || "all"],
+      ["Schema", exportPayload.schemaId || "all"],
+      ["World", exportPayload.worldId || "all"],
+    ].map(([label, value]) => _.div({ class: "tl-flow-kg-stat-row" }, _.span(label), _.strong(String(value)))),
+    record.error ? _.p({ class: "tl-flow-muted" }, record.error) : null,
+    _.div(
+      { class: "is-wide" },
+      _.span("Actions"),
+      _.div(
+        { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
+        copyRuntimeButton(exportPayload, "Copy structured export"),
+        btn({
+          class: "is-ghost is-compact",
+          title: "Refresh structured records",
+          onclick: () => loadStructuredKnowledgeInspector(node, { force: true }),
+        }, icon("sync", "sm"), "Refresh")
+      )
+    ),
+    records.length
+      ? _.div(
+        { class: "is-wide" },
+        _.span("Records preview"),
+        _.div(
+          { class: "tl-flow-rag-source-list tl-flow-kg-list" },
+          ...records.slice(0, 20).map((item) =>
+            _.article(
+              { class: "tl-flow-rag-source tl-flow-kg-item" },
+              _.strong(`${item.label || item.id} · ${item.recordType || "record"}`),
+              _.span(`${item.schemaId || "structured/v1"} · ${item.collectionId || "collection"}${item.worldId ? ` · ${item.worldId}` : ""}`),
+              _.p([item.parentId ? `parent ${item.parentId}` : "", item.id || ""].filter(Boolean).join(" · "))
+            )
+          )
+        )
+      )
+      : _.p({ class: "tl-flow-muted" }, record.loading ? "Caricamento record strutturati..." : "Nessun record strutturato trovato per questo scope.")
   );
 };
 
@@ -5944,6 +6104,7 @@ const invalidateClearUiStateForNodes = (nodes = []) => {
     "knowledgeInspectorDocuments",
     "knowledgeInspectorDictionaries",
     "knowledgeInspectorEvents",
+    "knowledgeInspectorStructured",
     "agentToolDebug",
   ].forEach((key) => {
     state[key] = { ...(state[key] || {}) };
@@ -8351,6 +8512,9 @@ const renderInspector = () => {
       : []),
     ...(isKnowledgeEventBuilderNode(node)
       ? [{ id: "knowledge-event-debug", title: "Knowledge Event Debug", content: renderInspectorKnowledgeEvents(node) }]
+      : []),
+    ...(isStructuredKnowledgeStoreNode(node)
+      ? [{ id: "structured-knowledge-debug", title: nodeSubtype(node) === "world-database" ? "World Database Debug" : "Structured Knowledge Debug", content: renderInspectorStructuredKnowledge(node) }]
       : []),
     ...(nodeCategory(node) === "knowledge"
       ? [{ id: "knowledge-graph-debug", title: "Knowledge Graph Debug", content: renderInspectorKnowledgeGraph(node) }]

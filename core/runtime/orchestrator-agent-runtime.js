@@ -283,6 +283,31 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
         }),
       ];
     }
+    if (["structured-knowledge-store", "world-database"].includes(subtype)) {
+      return [
+        makeReadTool({
+          name: "listRecords",
+          label: "List Records",
+          purpose: "Return structured records by schema, type, collection, world or query.",
+          inputSchema: toolInputSchema({ query: { type: "string" }, recordType: { type: "string" }, collectionId: { type: "string" }, worldId: { type: "string" } }),
+          outputs: { records: "array", typeCounts: "object" },
+        }),
+        makeReadTool({
+          name: "getWorldSummary",
+          label: "Get World Summary",
+          purpose: "Return worldbuilding record counts, validation warnings and main world records.",
+          inputSchema: toolInputSchema({ worldId: { type: "string" }, collectionId: { type: "string" } }),
+          outputs: { world: "object", records: "array", validation: "array" },
+        }),
+        makeReadTool({
+          name: "exportWorldGraph",
+          label: "Export World Graph",
+          purpose: "Return graph-shaped entities and relations derived from structured worldbuilding records.",
+          inputSchema: toolInputSchema({ worldId: { type: "string" }, collectionId: { type: "string" } }),
+          outputs: { entities: "array", relations: "array" },
+        }),
+      ];
+    }
     if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
       return [
         makeReadTool({

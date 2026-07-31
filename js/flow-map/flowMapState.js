@@ -168,6 +168,7 @@ const state = {
   knowledgeInspectorDocuments: {},
   knowledgeInspectorDictionaries: {},
   knowledgeInspectorEvents: {},
+  knowledgeInspectorStructured: {},
   agentToolDebug: {},
   knowledgeUploadProgress: {},
   aiProcessing: {},
@@ -787,6 +788,7 @@ const cleanupWorkspaceRuntimeData = async (workspaceId = "") => {
   state.knowledgeInspectorDocuments = {};
   state.knowledgeInspectorDictionaries = {};
   state.knowledgeInspectorEvents = {};
+  state.knowledgeInspectorStructured = {};
   state.edgeRender = { graph: { nodes: [], dependencies: [] }, activity: { edgeActivity: new Map() } };
   setRuntimeSignal(state.runtime);
   console.info("[FlowMap repair] Workspace runtime cleanup", result);

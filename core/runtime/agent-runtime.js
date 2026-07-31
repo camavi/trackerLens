@@ -97,6 +97,13 @@ window.TrackerLensAgentRuntime = (() => {
         readTool({ name: "verifyEvent", label: "Verify Event", purpose: "Check whether a proposed event is supported by persisted evidence.", inputSchema: toolInputSchema({ claim: { type: "string" }, eventType: { type: "string" } }, ["claim"]), outputs: { supported: "boolean", evidence: "array", limitations: "array" }, requiresEvidence: true }),
       ];
     }
+    if (["structured-knowledge-store", "world-database"].includes(subtype)) {
+      return [
+        readTool({ name: "listRecords", label: "List Records", purpose: "Return structured records by schema, type, collection, world or query.", inputSchema: toolInputSchema({ query: { type: "string" }, recordType: { type: "string" }, collectionId: { type: "string" }, worldId: { type: "string" } }), outputs: { records: "array", typeCounts: "object" } }),
+        readTool({ name: "getWorldSummary", label: "Get World Summary", purpose: "Return worldbuilding record counts, validation warnings and main world records.", inputSchema: toolInputSchema({ worldId: { type: "string" }, collectionId: { type: "string" } }), outputs: { world: "object", records: "array", validation: "array" } }),
+        readTool({ name: "exportWorldGraph", label: "Export World Graph", purpose: "Return graph-shaped entities and relations derived from structured worldbuilding records.", inputSchema: toolInputSchema({ worldId: { type: "string" }, collectionId: { type: "string" } }), outputs: { entities: "array", relations: "array" } }),
+      ];
+    }
     if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
       return [
         readTool({ name: "findEntities", label: "Find Entities", purpose: "Search graph entities by query, aliases and type.", inputSchema: toolInputSchema({ query: { type: "string" }, entityType: { type: "string" }, limit: { type: "number" } }, ["query"]), outputs: { entities: "array", evidence: "array" } }),
@@ -274,6 +281,7 @@ window.TrackerLensAgentRuntime = (() => {
     chunks: window.tlConfig?.TABLES?.TL_KNOWLEDGE_CHUNKS || "tl_knowledge_chunks",
     dictionary: "tl_knowledge_dictionary",
     events: "tl_knowledge_events",
+    structured: "tl_structured_knowledge",
     entities: "tl_knowledge_entities",
     relations: "tl_knowledge_relations",
   };
@@ -803,6 +811,84 @@ window.TrackerLensAgentRuntime = (() => {
     return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported event tool: ${tool}`], confidence: 0 });
   };
 
+  const structuredWorldGraph = (records = []) => {
+    const byId = new Map(records.map((record) => [record.id, record]));
+    const byTypeLabel = new Map(records.map((record) => [`${record.recordType}::${normalizeSearchText(record.label || record.id)}`, record]));
+    const resolve = (value = "", type = "") => byId.get(value) || byTypeLabel.get(`${type}::${normalizeSearchText(value)}`) || null;
+    const entities = records.map((record) => ({
+      id: record.id || "",
+      label: record.label || record.id || "",
+      entityType: record.recordType || "",
+      worldId: record.worldId || "",
+    }));
+    const relations = [];
+    const add = (source, relationType, target) => {
+      if (!source?.id || !target?.id || source.id === target.id) return;
+      relations.push({
+        sourceEntityId: source.id,
+        targetEntityId: target.id,
+        sourceLabel: source.label || source.id,
+        targetLabel: target.label || target.id,
+        relationType,
+      });
+    };
+    records.forEach((record) => {
+      if (record.parentId) add(record, "belongs_to", byId.get(record.parentId));
+      if (record.recordType === "pack") add(record, "belongs_to", resolve(record.data?.kingdomId || record.data?.kingdom || "", "kingdom"));
+      if (record.recordType === "story") {
+        const blocks = Array.isArray(record.data?.blocks) ? record.data.blocks : [];
+        blocks.forEach((block) => add(record, "uses_block", resolve(typeof block === "string" ? block : block.id || block.blockId || block.type || "", "story_block")));
+      }
+    });
+    return { entities, relations };
+  };
+
+  const runStructuredTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
+    const stores = knowledgeStores();
+    const config = nodeConfig(node);
+    const tokens = expandedQueryTokens(args.query || "");
+    const collectionId = String(args.collectionId || config.collectionId || "").trim();
+    const worldId = String(args.worldId || config.worldId || "").trim();
+    const recordType = normalizeSearchText(args.recordType || "");
+    const records = (await readKnowledgeStore(stores.structured || "tl_structured_knowledge"))
+      .filter((record) => (record.workspaceId || "workspace_global") === workspaceId)
+      .filter((record) => !collectionId || record.collectionId === collectionId)
+      .filter((record) => !worldId || record.worldId === worldId)
+      .filter((record) => !recordType || normalizeSearchText(record.recordType || "") === recordType)
+      .map((record) => {
+        const score = tokens.length
+          ? overlapScore([record.label, record.recordType, JSON.stringify(record.data || {})].join(" "), tokens)
+          : 1;
+        return { record, score };
+      })
+      .filter((item) => !tokens.length || item.score > 0)
+      .sort((a, b) => b.score - a.score || String(a.record.recordType || "").localeCompare(String(b.record.recordType || "")))
+      .map((item) => item.record);
+    const typeCounts = records.reduce((counts, record) => {
+      counts[record.recordType] = (counts[record.recordType] || 0) + 1;
+      return counts;
+    }, {});
+    if (tool === "listRecords") {
+      return toolEnvelope({ tool, node, items: records, confidence: records.length ? 0.9 : 0.2, debug: { typeCounts, collectionId, worldId } });
+    }
+    if (tool === "getWorldSummary") {
+      const graph = structuredWorldGraph(records);
+      return toolEnvelope({
+        tool,
+        node,
+        items: records.filter((record) => ["world", "kingdom", "pack", "story"].includes(record.recordType)),
+        answer: `${records.length} structured world record(s).`,
+        confidence: records.length ? 0.88 : 0.2,
+        debug: { typeCounts, graph },
+      });
+    }
+    if (tool === "exportWorldGraph") {
+      const graph = structuredWorldGraph(records);
+      return toolEnvelope({ tool, node, items: graph.entities, confidence: graph.entities.length ? 0.88 : 0.2, debug: { ...graph, typeCounts } });
+    }
+    return toolEnvelope({ ok: false, tool, node, status: "unsupported", limitations: [`Unsupported structured tool: ${tool}`], confidence: 0 });
+  };
+
   const relationSearchText = (relation = {}, source = null, target = null) => [
     relation.sourceLabel,
     relation.relationType,
@@ -1244,8 +1330,11 @@ window.TrackerLensAgentRuntime = (() => {
       if (["knowledge-dictionary-builder", "dictionary-builder"].includes(subtype)) {
       return runDictionaryTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
     }
-      if (["knowledge-event-builder", "event-builder"].includes(subtype)) {
+    if (["knowledge-event-builder", "event-builder"].includes(subtype)) {
       return runEventTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
+    }
+    if (["structured-knowledge-store", "world-database"].includes(subtype)) {
+      return runStructuredTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });
     }
     if (["graph-query", "knowledge-graph", "knowledge-reasoning-composer", "semantic-relation-enricher", "knowledge-graph-builder-agent", "entity-extractor"].includes(subtype)) {
       return runGraphTool({ workspaceId: effectiveWorkspaceId, node: target, tool: targetTool, args: args || {} });

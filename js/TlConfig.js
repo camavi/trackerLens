@@ -27,6 +27,7 @@ const tlConfig = {
     TL_KNOWLEDGE_RELATIONS: 'tl_knowledge_relations',
     TL_KNOWLEDGE_DICTIONARY: 'tl_knowledge_dictionary',
     TL_KNOWLEDGE_EVENTS: 'tl_knowledge_events',
+    TL_STRUCTURED_KNOWLEDGE: 'tl_structured_knowledge',
     TL_KNOWLEDGE_QUERIES: 'tl_knowledge_queries',
     TL_KNOWLEDGE_SOURCES: 'tl_knowledge_sources',
     TL_KNOWLEDGE_METRICS: 'tl_knowledge_metrics',

@@ -1834,6 +1834,32 @@ const configFieldDefinitions = (node = {}) => {
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.events.updated" },
       ]);
     }
+    if (subtype === "structured-knowledge-store") {
+      return [
+        { key: "schemaId", label: "Schema ID", placeholder: "structured/v1" },
+        { key: "schemaVersion", label: "Schema version", placeholder: "1" },
+        { key: "recordType", label: "Default record type", placeholder: "record, kingdom, pack, product..." },
+        { key: "collectionId", label: "Collection ID", placeholder: "structured_default" },
+        { key: "worldId", label: "World ID", placeholder: "optional" },
+        { key: "parentId", label: "Parent ID", placeholder: "optional" },
+        { key: "record", label: "Seed record", type: "textarea", placeholder: "{ \"type\": \"kingdom\", \"name\": \"Regno delle Tempeste\" }" },
+        { key: "records", label: "Seed records", type: "textarea", placeholder: "[{ \"type\": \"kingdom\", \"name\": \"Regno delle Tempeste\" }]" },
+        { key: "replaceExisting", label: "Replace scope records", type: "checkbox", defaultValue: false },
+        { key: "outputChannel", label: "Output channel", placeholder: "structured.record.created" },
+      ];
+    }
+    if (subtype === "world-database") {
+      return [
+        { key: "worldId", label: "World ID", placeholder: "world_storms" },
+        { key: "worldName", label: "World name", placeholder: "Mondo delle Tempeste" },
+        { key: "schemaVersion", label: "Schema version", placeholder: "1" },
+        { key: "collectionId", label: "Collection ID", placeholder: "worldbuilding" },
+        { key: "worldJson", label: "World JSON", type: "textarea", placeholder: "{ \"name\": \"...\", \"kingdoms\": [], \"packs\": [], \"storyBlocks\": [] }" },
+        { key: "records", label: "World records", type: "textarea", placeholder: "[{ \"type\": \"kingdom\", \"name\": \"Regno delle Tempeste\" }]" },
+        { key: "replaceExisting", label: "Replace world records", type: "checkbox", defaultValue: false },
+        { key: "outputChannel", label: "Output channel", placeholder: "world.database.updated" },
+      ];
+    }
     if (subtype === "knowledge-graph") {
       return [
         { key: "graphScope", label: "Graph scope", type: "select", options: ["workspace", "document", "collection"] },
@@ -3327,6 +3353,21 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? true) },
       { iconName: "folder", label: "Collection", value: config.collectionId || "" },
       { iconName: "hub", label: "Output", value: output || "knowledge.events.updated" },
+    ],
+    "structured-knowledge-store": [
+      { iconName: "schema", label: "Schema", value: config.schemaId || "structured/v1" },
+      { iconName: "category", label: "Type", value: config.recordType || "record" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "structured_default" },
+      { iconName: "public", label: "World", value: config.worldId || "" },
+      { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? false) },
+      { iconName: "hub", label: "Output", value: output || "structured.record.created" },
+    ],
+    "world-database": [
+      { iconName: "public", label: "World", value: config.worldId || config.worldName || "world" },
+      { iconName: "schema", label: "Schema", value: "worldbuilding/v1" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "worldbuilding" },
+      { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? false) },
+      { iconName: "hub", label: "Output", value: output || "world.database.updated" },
     ],
     "knowledge-graph": [
       { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },

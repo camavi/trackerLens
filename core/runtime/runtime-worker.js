@@ -37,10 +37,10 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js?v=agent-tool-links-1",
     "action-runtime.js?v=agent-tool-links-1",
     "storage-runtime.js?v=agent-tool-links-1",
-    "knowledge-runtime.js?v=entity-llm-json-salvage-2",
-    "agent-runtime.js?v=agent-tool-full-doc-prompt-1",
+    "knowledge-runtime.js?v=structured-world-store-1",
+    "agent-runtime.js?v=structured-world-store-1",
     "ai-agent-runtime.js?v=agent-trigger-policy-1",
-    "orchestrator-agent-runtime.js?v=agent-tool-links-1"
+    "orchestrator-agent-runtime.js?v=structured-world-store-1"
   );
 };
 
