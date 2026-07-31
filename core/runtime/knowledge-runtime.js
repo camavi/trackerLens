@@ -2421,6 +2421,36 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
   };
 
+  const unwrapStructuredPayload = (payload = {}, config = {}) => {
+    const candidates = [
+      payload?.value,
+      payload?.json,
+      payload?.payload,
+      payload?.data,
+      payload?.body,
+      payload,
+      config.json,
+      config.payloadJson,
+      config.payload,
+      config.manualJson,
+    ];
+    const isRuntimeEnvelope = (item = null) => item && typeof item === "object" && Boolean(item.__test || item.runId || item.nodeId || item.sourceNodeId || item.channel);
+    const hasStructuredSignal = (item = null) => item && typeof item === "object" && !Array.isArray(item) && Boolean(
+      item.world || item.records || item.record || item.items || item.kingdoms || item.regni || item.packs || item.branchi ||
+      item.storyBlocks || item.stories || item.schemaId || item.recordType || item.type || item.kind ||
+      (!isRuntimeEnvelope(item) && (item.name || item.title))
+    );
+    let firstObject = null;
+    for (const candidate of candidates) {
+      const parsed = parseJsonLike(candidate, candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        if (!firstObject) firstObject = parsed;
+        if (hasStructuredSignal(parsed)) return parsed;
+      }
+    }
+    return firstObject || (payload && typeof payload === "object" ? payload : {});
+  };
+
   const structuredArray = (value) => {
     if (Array.isArray(value)) return value;
     if (value && typeof value === "object") return [value];
@@ -2428,13 +2458,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const structuredPayloadRecords = (payload = {}, config = {}) => {
+    const source = unwrapStructuredPayload(payload, config);
     const configRecords = parseJsonLike(config.records || config.seedRecords || "", null);
     const configRecord = parseJsonLike(config.record || config.seedRecord || "", null);
     return [
-      ...structuredArray(payload?.records),
-      ...structuredArray(payload?.record),
-      ...structuredArray(payload?.items),
-      ...structuredArray(payload?.data?.records),
+      ...structuredArray(source?.records),
+      ...structuredArray(source?.record),
+      ...structuredArray(source?.items),
+      ...structuredArray(source?.data?.records),
       ...structuredArray(configRecords),
       ...structuredArray(configRecord),
     ].filter((item) => item && typeof item === "object");
@@ -2569,10 +2600,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const worldPayloadRecords = (payload = {}, config = {}) => {
-    const explicit = structuredPayloadRecords(payload, config);
-    const world = payload?.world && typeof payload.world === "object" ? payload.world : parseJsonLike(config.worldJson || config.seedWorld || "", null);
+    const source = unwrapStructuredPayload(payload, config);
+    const explicit = structuredPayloadRecords(source, config);
+    const sourceLooksLikeWorld = source && typeof source === "object" && (
+      source.kingdoms || source.regni || source.packs || source.branchi || source.storyBlocks || source.stories || source.name || source.title
+    );
+    const world = source?.world && typeof source.world === "object"
+      ? source.world
+      : sourceLooksLikeWorld
+        ? source
+        : parseJsonLike(config.worldJson || config.seedWorld || "", null);
     if (!world || typeof world !== "object") return explicit;
-    const worldId = world.id || payload.worldId || config.worldId || "";
+    const worldId = world.id || source.worldId || config.worldId || "";
     const records = [...explicit];
     if (world.name || world.title || world.id) records.push({ ...world, type: "world", worldId, data: { ...(world.data || {}), description: world.description || "" } });
     const appendTyped = (items = [], type = "") => structuredArray(items).forEach((item) => records.push({ ...item, type, worldId: item.worldId || worldId }));
@@ -2650,11 +2689,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const buildWorldDatabase = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
     const now = nowIso();
-    const collectionId = payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "worldbuilding";
+    const source = unwrapStructuredPayload(payload, config);
+    const collectionId = source?.collectionId || source?.metadata?.collectionId || config.collectionId || "worldbuilding";
     const schemaId = "worldbuilding/v1";
-    const schemaVersion = payload?.schemaVersion || config.schemaVersion || "1";
-    const worldId = payload?.worldId || payload?.world?.id || config.worldId || `world_${safeId(payload?.world?.name || config.worldName || collectionId)}`;
-    const rawRecords = worldPayloadRecords(payload, config);
+    const schemaVersion = source?.schemaVersion || config.schemaVersion || "1";
+    const worldId = source?.worldId || source?.world?.id || source?.id || config.worldId || `world_${safeId(source?.world?.name || source?.name || config.worldName || collectionId)}`;
+    const rawRecords = worldPayloadRecords(source, config);
     if (!rawRecords.length) throw new Error("World Database: nessun record worldbuilding da salvare");
     const normalizedRecords = rawRecords.map((item) => {
       const recordType = normalizeWorldRecordType(item);
