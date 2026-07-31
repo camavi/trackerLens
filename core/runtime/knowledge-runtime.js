@@ -5163,7 +5163,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
       ? Math.floor(Number(config.maxEntities))
       : Number.POSITIVE_INFINITY;
-    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) >= 0
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0
       ? Math.floor(Number(config.maxRelations))
       : Number.POSITIVE_INFINITY;
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
@@ -5216,6 +5216,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Return ONLY one valid JSON object. The first character must be { and the last character must be }.",
           "Do not wrap JSON in markdown. Do not add prose before or after JSON.",
           "Do not invent labels or relations. Every evidence.quote must be copied exactly from one supplied chunk.",
+          "For every relation, source and target must be concrete labels, not entity types or placeholders. Never use target labels such as concept, creature, object, location, entity, person or thing unless that exact word is the evidence-backed label.",
+          "Every relation endpoint must also appear in entities in the same JSON response. If the target is a property, state, object or abstract idea, add it as a concept/object entity with its exact source-language label.",
+          "When no maxRelations is supplied, extract every explicit evidence-backed relation in the supplied chunks instead of only the top examples.",
           "If there are no valid entities or relations, return {\"entities\":[],\"relations\":[]}.",
           micro ? "For this micro pass, return only the most important entities and keep relations empty." : "",
           chunkPass ? "For this chunk pass, extract only from the single supplied chunk and prefer explicit relations between labels in that chunk." : "",
@@ -5233,14 +5236,39 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let lastModel = model;
       let totalUsage = {};
       const validatedPatch = (patch = {}) => {
-        const entities = (Array.isArray(patch?.entities) ? patch.entities : [])
+        const entityMap = new Map();
+        const addEntity = (candidate = null) => {
+          if (!candidate?.label) return;
+          const key = normalizeEntityToken(candidate.label);
+          if (!key) return;
+          const existing = entityMap.get(key);
+          if (!existing || Number(candidate.confidence || 0) > Number(existing.confidence || 0)) {
+            entityMap.set(key, candidate);
+          }
+        };
+        (Array.isArray(patch?.entities) ? patch.entities : [])
           .map((item) => normalizeAiEntityCandidate(item, chunks, config))
           .filter(Boolean)
-          .slice(0, maxEntities);
+          .forEach(addEntity);
         const relations = (Array.isArray(patch?.relations) ? patch.relations : [])
           .map((item) => normalizeAiRelationCandidate(item, chunks))
           .filter(Boolean)
           .slice(0, maxRelations);
+        relations.forEach((relation) => {
+          [
+            { label: relation.sourceLabel, role: "source" },
+            { label: relation.targetLabel, role: "target" },
+          ].forEach(({ label, role }) => {
+            addEntity(normalizeAiEntityCandidate({
+              label,
+              entityType: inferEntityType(label),
+              confidence: Math.max(0.5, Number(relation.confidence || 0.7) - 0.04),
+              evidence: relation.evidence,
+              explanation: `Endpoint ${role} from accepted LLM relation ${relation.relationType}.`,
+            }, chunks, config));
+          });
+        });
+        const entities = [...entityMap.values()].slice(0, maxEntities);
         return { entities, relations };
       };
       const repairEntityJson = async ({ text = "", promptMode = "" } = {}) => {
@@ -5281,6 +5309,62 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const validated = validatedPatch(repairPatch);
         if (!validated.entities.length && !validated.relations.length) return null;
         return { ...validated, promptMode: `${promptMode}-repair` };
+      };
+      const salvageEntityExtractionJson = (text = "") => {
+        const source = String(text || "");
+        const readArrayObjects = (key = "") => {
+          const keyIndex = source.search(new RegExp(`"${key}"\\s*:\\s*\\[`, "i"));
+          if (keyIndex < 0) return [];
+          const openIndex = source.indexOf("[", keyIndex);
+          if (openIndex < 0) return [];
+          const items = [];
+          let objectStart = -1;
+          let depth = 0;
+          let inString = false;
+          let escaped = false;
+          for (let index = openIndex + 1; index < source.length; index += 1) {
+            const char = source[index];
+            if (escaped) {
+              escaped = false;
+              continue;
+            }
+            if (char === "\\") {
+              escaped = true;
+              continue;
+            }
+            if (char === "\"") {
+              inString = !inString;
+              continue;
+            }
+            if (inString) continue;
+            if (char === "{") {
+              if (depth === 0) objectStart = index;
+              depth += 1;
+              continue;
+            }
+            if (char === "}") {
+              depth -= 1;
+              if (depth === 0 && objectStart >= 0) {
+                const rawObject = source.slice(objectStart, index + 1)
+                  .replace(/[“”]/g, "\"")
+                  .replace(/[‘’]/g, "'")
+                  .replace(/,\s*([}\]])/g, "$1");
+                try {
+                  items.push(JSON.parse(rawObject));
+                } catch {}
+                objectStart = -1;
+              }
+              continue;
+            }
+            if (char === "]" && depth === 0) break;
+          }
+          return items;
+        };
+        const patch = {
+          entities: readArrayObjects("entities"),
+          relations: readArrayObjects("relations"),
+        };
+        return patch.entities.length || patch.relations.length ? patch : null;
       };
       const runPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const micro = promptMode === "micro";
@@ -5348,6 +5432,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const patch = parseAiJsonObject(text);
         if (!patch) {
           lastError = "invalid-ai-json";
+          const salvagedPatch = salvageEntityExtractionJson(text);
+          if (salvagedPatch) {
+            const salvaged = validatedPatch(salvagedPatch);
+            if (salvaged.entities.length || salvaged.relations.length) {
+              if (requestDebug) {
+                Object.assign(requestDebug, {
+                  status: "complete",
+                  completedAt: nowIso(),
+                  httpStatus: 200,
+                  responseChars: String(text || "").length,
+                  responseText: text,
+                  jsonParsed: false,
+                  salvaged: true,
+                  parsedJson: salvagedPatch,
+                  proposedEntityCount: salvagedPatch.entities.length,
+                  proposedRelationCount: salvagedPatch.relations.length,
+                  acceptedEntityCount: salvaged.entities.length,
+                  acceptedRelationCount: salvaged.relations.length,
+                });
+                flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
+              }
+              return { entities: salvaged.entities, relations: salvaged.relations, error: "", promptMode: `${promptMode}-salvaged` };
+            }
+          }
           const repaired = await repairEntityJson({ text, promptMode });
           if (repaired) {
             if (requestDebug) {
@@ -5356,6 +5464,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 completedAt: nowIso(),
                 httpStatus: 200,
                 responseChars: String(text || "").length,
+                responseText: text,
                 jsonParsed: false,
                 repaired: true,
                 acceptedEntityCount: repaired.entities.length,
@@ -5371,6 +5480,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               completedAt: nowIso(),
               httpStatus: 200,
               responseChars: String(text || "").length,
+              responseText: text,
               jsonParsed: false,
               error: lastError,
               retryable: true,
@@ -5388,7 +5498,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
               completedAt: nowIso(),
               httpStatus: 200,
               responseChars: String(text || "").length,
+              responseText: text,
               jsonParsed: true,
+              parsedJson: patch,
               proposedEntityCount: Array.isArray(patch?.entities) ? patch.entities.length : 0,
               proposedRelationCount: Array.isArray(patch?.relations) ? patch.relations.length : 0,
               acceptedEntityCount: 0,
@@ -5406,7 +5518,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
             completedAt: nowIso(),
             httpStatus: 200,
             responseChars: String(text || "").length,
+            responseText: text,
             jsonParsed: true,
+            parsedJson: patch,
             proposedEntityCount: Array.isArray(patch?.entities) ? patch.entities.length : 0,
             proposedRelationCount: Array.isArray(patch?.relations) ? patch.relations.length : 0,
             acceptedEntityCount: entities.length,
@@ -5429,10 +5543,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const attemptUsable = maxRelations === 0
           ? attempt.entities.length >= minGlobalEntityCandidates
           : attempt.relations.length >= minGlobalEntityRelations && attempt.entities.length >= Math.min(minGlobalEntityCandidates, maxEntities);
-        if (attemptUsable) {
+        if (attemptUsable && mode !== "llm") {
           return { entities: attempt.entities, relations: attempt.relations, provider: provider.id || providerType || "provider", model: lastModel, usage: totalUsage, error: "", promptMode: attempt.promptMode || promptMode };
         }
         if (attempt.entities.length || attempt.relations.length) fallbackResult = attempt;
+        if (attemptUsable && mode === "llm") break;
         if (attempt.error && !attempt.retryable) break;
       }
       const chunkEntities = [];
@@ -5617,6 +5732,33 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return [...seen.values()].slice(0, maxSeeds);
   };
 
+  const findRelationEndpointEntity = (entities = [], label = "") => {
+    const wanted = normalizeEntityToken(label);
+    if (!wanted) return null;
+    const candidates = (entities || []).filter(Boolean).map((entity) => {
+      const labelKey = normalizeEntityToken(entity.label || "");
+      const aliasKeys = (entity.metadata?.aliases || entity.aliases || []).map((alias) => normalizeEntityToken(alias)).filter(Boolean);
+      const exact = labelKey === wanted || aliasKeys.includes(wanted);
+      const compatible = exact ||
+        (wanted.length > 3 && labelKey.includes(wanted)) ||
+        (labelKey.length > 3 && wanted.includes(labelKey)) ||
+        aliasKeys.some((aliasKey) => (wanted.length > 3 && aliasKey.includes(wanted)) || (aliasKey.length > 3 && wanted.includes(aliasKey)));
+      if (!compatible) return null;
+      return {
+        entity,
+        exact,
+        distance: Math.abs(labelKey.length - wanted.length),
+        confidence: Number(entity.confidence || 0),
+      };
+    }).filter(Boolean);
+    candidates.sort((left, right) =>
+      Number(right.exact) - Number(left.exact) ||
+      left.distance - right.distance ||
+      right.confidence - left.confidence
+    );
+    return candidates[0]?.entity || null;
+  };
+
   const createEntitiesAndRelations = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
     const inputChannel = String(event?.channel || "").trim();
     const allowDocumentInput = config.allowDocumentInput === true || String(config.allowDocumentInput || "").toLowerCase() === "true";
@@ -5685,7 +5827,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (!chunkId) return;
       aiRelationsByChunkId.set(chunkId, [...(aiRelationsByChunkId.get(chunkId) || []), candidate]);
     });
-    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) >= 0
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0
       ? Math.floor(Number(config.maxRelations))
       : Number.POSITIVE_INFINITY;
     const minHybridAiEntities = Number.isFinite(Number(config.minHybridAiEntities)) && Number(config.minHybridAiEntities) > 0
@@ -5706,7 +5848,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     let useRuleFallback = mode === "rules" ||
       (mode === "hybrid" && !rawAiEntityOutputUsable);
     let fallbackReason = useRuleFallback && mode === "hybrid" ? "sparse-ai-entity-output" : "";
-    const maxRelationsPerChunk = Number.isFinite(Number(config.maxRelationsPerChunk)) && Number(config.maxRelationsPerChunk) >= 0
+    const maxRelationsPerChunk = Number.isFinite(Number(config.maxRelationsPerChunk)) && Number(config.maxRelationsPerChunk) > 0
       ? Math.floor(Number(config.maxRelationsPerChunk))
       : Number.POSITIVE_INFINITY;
     const maxRelationsPerEntityPerChunk = Number.isFinite(Number(config.maxRelationsPerEntityPerChunk)) && Number(config.maxRelationsPerEntityPerChunk) > 0
@@ -5716,6 +5858,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? Number(config.maxRelationDistance)
       : Number.POSITIVE_INFINITY;
     const relationRecords = new Map();
+    const relationMaterialization = {
+      candidateCount: 0,
+      aiCandidateCount: 0,
+      createdCount: 0,
+      duplicateCount: 0,
+      missingEndpointCount: 0,
+      capSkippedCount: 0,
+      sameEndpointCount: 0,
+      dictionaryFilteredCount: 0,
+      missingEndpointSamples: [],
+      duplicateSamples: [],
+    };
     const entityOutputIndexById = new Map();
     for (let extractionPass = 0; extractionPass < 2; extractionPass += 1) {
       if (extractionPass === 1) {
@@ -5835,114 +5989,153 @@ window.TrackerLensKnowledgeRuntime = (() => {
           : [];
         const aiChunkRelations = (aiRelationsByChunkId.get(chunk.id || "") || [])
           .map((candidate) => {
-          const source = chunkEntities.find((entity) => normalizeEntityToken(entity.label) === normalizeEntityToken(candidate.sourceLabel));
-          const target = chunkEntities.find((entity) => normalizeEntityToken(entity.label) === normalizeEntityToken(candidate.targetLabel));
-          if (!source || !target || source.id === target.id) return null;
-          return {
-            source,
-            target,
-            confidence: candidate.confidence,
-            score: Number(candidate.confidence || 0) + 0.35,
-            narrativeRelationType: candidate.relationType,
-            ai: candidate,
-          };
+            const source = findRelationEndpointEntity(chunkEntities, candidate.sourceLabel) ||
+              findRelationEndpointEntity(entities, candidate.sourceLabel);
+            const target = findRelationEndpointEntity(chunkEntities, candidate.targetLabel) ||
+              findRelationEndpointEntity(entities, candidate.targetLabel);
+            if (!source || !target) {
+              relationMaterialization.missingEndpointCount += 1;
+              relationMaterialization.missingEndpointSamples.push({
+                chunkId: chunk.id || "",
+                sourceLabel: candidate.sourceLabel,
+                targetLabel: candidate.targetLabel,
+                relationType: candidate.relationType,
+                sourceFound: Boolean(source),
+                targetFound: Boolean(target),
+                quote: candidate.evidence?.quote || candidate.evidence?.text || "",
+              });
+              return null;
+            }
+            if (source.id === target.id) {
+              relationMaterialization.sameEndpointCount += 1;
+              return null;
+            }
+            return {
+              source,
+              target,
+              confidence: candidate.confidence,
+              score: Number(candidate.confidence || 0) + 0.35,
+              narrativeRelationType: candidate.relationType,
+              ai: candidate,
+            };
           })
           .filter(Boolean);
         const allSelectedRelationCandidates = [...aiChunkRelations, ...selectedRelationCandidates]
           .sort((left, right) => right.score - left.score || String(left.source.label || "").localeCompare(String(right.source.label || "")));
+        relationMaterialization.candidateCount += allSelectedRelationCandidates.length;
+        relationMaterialization.aiCandidateCount += aiChunkRelations.length;
         const chunkEntityRelationCounts = new Map();
         let chunkRelationCount = 0;
         for (const { source, target, confidence, ai } of allSelectedRelationCandidates) {
-        if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) break;
-        const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
-        const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
-        if (sourceLocalCount >= maxRelationsPerEntityPerChunk || targetLocalCount >= maxRelationsPerEntityPerChunk) continue;
-        const sourceRelationType = inferSourceRelationType(source, target);
-        const relationType = config.relationType ||
-          ai?.relationType ||
-          sourceRelationType ||
-          inferConservativeRelationType(source, target);
-        if (dictionaryDrivenExtraction && !relationTypeAllowedForDictionaryPass(relationType, source, target, false)) continue;
-        const oriented = orientRelationPair(source, target, relationType);
-        const normalizedPair = normalizeRelationPair(oriented.source || source, oriented.target || target, relationType);
-        const relationSource = normalizedPair.source || source;
-        const relationTarget = normalizedPair.target || target;
-        if (relationSource.id === relationTarget.id) continue;
-        const relationKey = [
-          chunk.documentId || payload?.documentId || workspaceId,
-          relationType,
-          relationSource.id,
-          relationTarget.id,
-        ].join("::");
-        const existingRelation = relationRecords.get(relationKey);
-        if (existingRelation) {
-          const chunkIds = new Set([...(existingRelation.metadata?.chunkIds || []), chunk.id || ""].filter(Boolean));
-          const occurrenceCount = Number(existingRelation.metadata?.occurrenceCount || 1) + 1;
-          const updatedRelation = {
-            ...existingRelation,
-            confidence: Math.max(Number(existingRelation.confidence || 0), Number(confidence || 0)),
+          if (relations.length >= maxRelations || chunkRelationCount >= maxRelationsPerChunk) {
+            relationMaterialization.capSkippedCount += 1;
+            break;
+          }
+          const sourceLocalCount = chunkEntityRelationCounts.get(source.id) || 0;
+          const targetLocalCount = chunkEntityRelationCounts.get(target.id) || 0;
+          if (sourceLocalCount >= maxRelationsPerEntityPerChunk || targetLocalCount >= maxRelationsPerEntityPerChunk) {
+            relationMaterialization.capSkippedCount += 1;
+            continue;
+          }
+          const sourceRelationType = inferSourceRelationType(source, target);
+          const relationType = config.relationType ||
+            ai?.relationType ||
+            sourceRelationType ||
+            inferConservativeRelationType(source, target);
+          if (dictionaryDrivenExtraction && !relationTypeAllowedForDictionaryPass(relationType, source, target, false)) {
+            relationMaterialization.dictionaryFilteredCount += 1;
+            continue;
+          }
+          const oriented = orientRelationPair(source, target, relationType);
+          const normalizedPair = normalizeRelationPair(oriented.source || source, oriented.target || target, relationType);
+          const relationSource = normalizedPair.source || source;
+          const relationTarget = normalizedPair.target || target;
+          if (relationSource.id === relationTarget.id) continue;
+          const relationKey = [
+            chunk.documentId || payload?.documentId || workspaceId,
+            relationType,
+            relationSource.id,
+            relationTarget.id,
+          ].join("::");
+          const existingRelation = relationRecords.get(relationKey);
+          if (existingRelation) {
+            relationMaterialization.duplicateCount += 1;
+            relationMaterialization.duplicateSamples.push({
+              source: relationSource.label,
+              relationType,
+              target: relationTarget.label,
+              chunkId: chunk.id || "",
+              quote: ai?.evidence?.quote || ai?.evidence?.text || "",
+            });
+            const chunkIds = new Set([...(existingRelation.metadata?.chunkIds || []), chunk.id || ""].filter(Boolean));
+            const occurrenceCount = Number(existingRelation.metadata?.occurrenceCount || 1) + 1;
+            const updatedRelation = {
+              ...existingRelation,
+              confidence: Math.max(Number(existingRelation.confidence || 0), Number(confidence || 0)),
+              metadata: {
+                ...(existingRelation.metadata || {}),
+                chunkIds: [...chunkIds],
+                occurrenceCount,
+                ai: existingRelation.metadata?.ai || (ai ? {
+                  relationType: ai.relationType || "",
+                  rawRelationType: ai.rawRelationType || ai.relationType || "",
+                  evidence: ai.evidence || null,
+                  explanation: ai.explanation || "",
+                  provider: aiResult.provider || "",
+                  model: aiResult.model || "",
+                } : undefined),
+              },
+              updatedAt: now,
+            };
+            relationRecords.set(relationKey, updatedRelation);
+            const relationIndex = relations.findIndex((relation) => relation.id === existingRelation.id);
+            if (relationIndex >= 0) relations[relationIndex] = await putRecord(STORES.relations, updatedRelation);
+            chunkRelationCount += 1;
+            chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
+            chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
+            continue;
+          }
+          const relationId = `krelation_${safeId(chunk.documentId || payload?.documentId || workspaceId)}_${safeId(relationType)}_${safeId(relationSource.normalized || relationSource.label)}_${safeId(relationTarget.normalized || relationTarget.label)}`;
+          const relation = {
+            id: relationId,
+            workspaceId,
+            documentId: chunk.documentId || "",
+            chunkId: chunk.id || "",
+            sourceEntityId: relationSource.id,
+            targetEntityId: relationTarget.id,
+            sourceLabel: relationSource.label,
+            targetLabel: relationTarget.label,
+            relationType,
+            confidence,
             metadata: {
-              ...(existingRelation.metadata || {}),
-              chunkIds: [...chunkIds],
-              occurrenceCount,
-              ai: existingRelation.metadata?.ai || (ai ? {
+              inputChannel: event?.channel || "",
+              nodeId: node?.id || "",
+              language,
+              collectionId: chunk.metadata?.collectionId || config.collectionId || "",
+              chunkIds: [chunk.id || ""].filter(Boolean),
+              occurrenceCount: 1,
+              ai: ai ? {
                 relationType: ai.relationType || "",
                 rawRelationType: ai.rawRelationType || ai.relationType || "",
                 evidence: ai.evidence || null,
                 explanation: ai.explanation || "",
                 provider: aiResult.provider || "",
                 model: aiResult.model || "",
-              } : undefined),
+              } : undefined,
             },
+            createdAt: now,
             updatedAt: now,
           };
-          relationRecords.set(relationKey, updatedRelation);
-          const relationIndex = relations.findIndex((relation) => relation.id === existingRelation.id);
-          if (relationIndex >= 0) relations[relationIndex] = await putRecord(STORES.relations, updatedRelation);
+          relationRecords.set(relationKey, relation);
+          relations.push(await putRecord(STORES.relations, relation));
+          relationMaterialization.createdCount += 1;
           chunkRelationCount += 1;
           chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
           chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
-          continue;
-        }
-        const relationId = `krelation_${safeId(chunk.documentId || payload?.documentId || workspaceId)}_${safeId(relationType)}_${safeId(relationSource.normalized || relationSource.label)}_${safeId(relationTarget.normalized || relationTarget.label)}`;
-        const relation = {
-          id: relationId,
-          workspaceId,
-          documentId: chunk.documentId || "",
-          chunkId: chunk.id || "",
-          sourceEntityId: relationSource.id,
-          targetEntityId: relationTarget.id,
-          sourceLabel: relationSource.label,
-          targetLabel: relationTarget.label,
-          relationType,
-          confidence,
-          metadata: {
-            inputChannel: event?.channel || "",
-            nodeId: node?.id || "",
-            language,
-            collectionId: chunk.metadata?.collectionId || config.collectionId || "",
-            chunkIds: [chunk.id || ""].filter(Boolean),
-            occurrenceCount: 1,
-            ai: ai ? {
-              relationType: ai.relationType || "",
-              rawRelationType: ai.rawRelationType || ai.relationType || "",
-              evidence: ai.evidence || null,
-              explanation: ai.explanation || "",
-              provider: aiResult.provider || "",
-              model: aiResult.model || "",
-            } : undefined,
-          },
-          createdAt: now,
-          updatedAt: now,
-        };
-        relationRecords.set(relationKey, relation);
-        relations.push(await putRecord(STORES.relations, relation));
-        chunkRelationCount += 1;
-        chunkEntityRelationCounts.set(source.id, sourceLocalCount + 1);
-        chunkEntityRelationCounts.set(target.id, targetLocalCount + 1);
         }
       }
     }
+    const aiRelationRecordCount = relations.filter((relation) => relation.metadata?.ai).length;
     return {
       documentId: validChunks[0]?.documentId || payload?.documentId || "",
       collectionId: validChunks[0]?.metadata?.collectionId || payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "",
@@ -5958,6 +6151,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         promptMode: aiResult.promptMode || "",
         entityCount: aiResult.entities?.length || 0,
         relationCount: aiResult.relations?.length || 0,
+        acceptedRelationRecordCount: aiRelationRecordCount,
+        droppedRelationCandidateCount: Math.max(0, (aiResult.relations?.length || 0) - aiRelationRecordCount),
+        relationMaterialization,
         minHybridEntities: minHybridAiEntities,
         minHybridRelations: minHybridAiRelations,
         hybridFallback: useRuleFallback,
