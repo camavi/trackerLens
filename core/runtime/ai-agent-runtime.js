@@ -244,14 +244,14 @@ window.TrackerLensAiAgentRuntime = (() => {
   const inputDataMode = (config = {}) =>
     String(config.inputDataMode || config.inputRequestMode || "latest").toLowerCase();
 
-  const compactJson = (value, max = 2600) => {
+  const compactJson = (value) => {
     let text = "";
     try {
       text = JSON.stringify(value ?? {}, null, 2);
     } catch {
       text = String(value ?? "");
     }
-    return text.length > max ? `${text.slice(0, max)}\n...` : text;
+    return text;
   };
 
   const buildRuntimeInputTrace = ({
@@ -325,7 +325,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       chunkId: result.chunkId || "",
       documentId: result.documentId || "",
       score: Number.isFinite(Number(result.score)) ? Number(result.score) : null,
-      text: String(result.text || "").slice(0, 1200),
+      text: String(result.text || ""),
       metadata: result.metadata || {},
     }));
     return {
@@ -362,18 +362,14 @@ window.TrackerLensAiAgentRuntime = (() => {
     const relations = Array.isArray(payload.relations) ? payload.relations : [];
     const events = Array.isArray(payload.events) ? payload.events : [];
     const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
-    const compactText = (value = "", max = 3600) => {
-      const text = String(value || "").trim();
-      return text.length > max ? `${text.slice(0, max)}\n...` : text;
-    };
     return {
       query: String(payload.query || payload.question || "").trim(),
       queryId: payload.queryId || payload.id || "",
-      context: compactText(payload.context, 4200),
+      context: String(payload.context || "").trim(),
       resultCount: Number(payload.resultCount ?? entities.length) || 0,
       relationCount: Number(payload.relationCount ?? relations.length) || 0,
       eventCount: Number(payload.eventCount ?? events.length) || 0,
-      entities: entities.slice(0, 16).map((entity) => ({
+      entities: entities.map((entity) => ({
         id: entity.id || "",
         label: entity.label || "",
         entityType: entity.entityType || "",
@@ -383,7 +379,7 @@ window.TrackerLensAiAgentRuntime = (() => {
         documentId: entity.documentId || "",
         chunkId: entity.chunkId || "",
       })),
-      relations: relations.slice(0, 32).map((relation) => ({
+      relations: relations.map((relation) => ({
         id: relation.id || "",
         sourceEntityId: relation.sourceEntityId || "",
         targetEntityId: relation.targetEntityId || "",
@@ -401,13 +397,13 @@ window.TrackerLensAiAgentRuntime = (() => {
         documentId: relation.documentId || "",
         chunkId: relation.chunkId || "",
       })),
-      events: events.slice(0, 24).map((item) => ({
+      events: events.map((item) => ({
         id: item.id || "",
         sequence: Number.isFinite(Number(item.sequence)) ? Number(item.sequence) : null,
         eventType: item.eventType || "",
         subject: item.subject || "",
-        objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
-        participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+        objects: Array.isArray(item.objects) ? item.objects : [],
+        participants: Array.isArray(item.participants) ? item.participants : [],
         roles: item.roles || {},
         subjectResolution: item.subjectResolution || null,
         polarity: item.polarity || "",
@@ -417,11 +413,11 @@ window.TrackerLensAiAgentRuntime = (() => {
         score: Number.isFinite(Number(item.score)) ? Number(item.score) : null,
         evidence: item.evidence?.quote || item.evidence?.text || "",
       })),
-      evidence: evidence.slice(0, 4).map((item, index) => ({
+      evidence: evidence.map((item, index) => ({
         index: item.index || index + 1,
         chunkId: item.chunkId || "",
         documentId: item.documentId || "",
-        text: compactText(item.text, 520),
+        text: String(item.text || "").trim(),
         metadata: item.metadata || {},
       })),
       reasoningPlan: payload.reasoningPlan || null,
@@ -437,14 +433,14 @@ window.TrackerLensAiAgentRuntime = (() => {
     const reasoningPlan = graphContext.reasoningPlan || null;
     const primaryEvidenceText = String(reasoningPlan?.primaryEvidenceText || "").trim();
     const reasoningLines = reasoningPlan?.requiredFacts?.length
-      ? reasoningPlan.requiredFacts.slice(0, 12).map((fact, index) => {
+      ? reasoningPlan.requiredFacts.map((fact, index) => {
         if (fact.kind === "event") {
           const patient = fact.roles?.patient?.length ? ` patient=${fact.roles.patient.join(", ")}` : "";
           const destination = fact.roles?.destination?.length ? ` destination=${fact.roles.destination.join(", ")}` : "";
-          const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence).slice(0, 360)}` : "";
+          const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence)}` : "";
           return `[F${index + 1}] seq=${fact.sequence ?? ""} ${fact.subject || "event"} -${fact.eventType}-> ${(fact.objects || []).join(", ") || "context"}${patient}${destination}${evidence}`;
         }
-        const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence).slice(0, 260)}` : "";
+        const evidence = fact.evidence ? `\n  evidence: ${String(fact.evidence)}` : "";
         return `[F${index + 1}] ${fact.source || "source"} -${fact.relationType || "related_to"}-> ${fact.target || "target"}${evidence}`;
       }).join("\n")
       : "";
@@ -454,21 +450,21 @@ window.TrackerLensAiAgentRuntime = (() => {
     const reasoningInstructions = reasoningPlan?.responseInstructions?.length
       ? reasoningPlan.responseInstructions.map((item) => `- ${item}`).join("\n")
       : "";
-    const relationLines = reasoningPlan ? "" : (graphContext.relations || []).slice(0, 16).map((relation, index) => {
+    const relationLines = reasoningPlan ? "" : (graphContext.relations || []).map((relation, index) => {
       const flags = [
         relation.direct ? "direct" : "",
         relation.semantic ? "semantic" : "",
         relation.method ? `method=${relation.method}` : "",
         relation.originalType ? `original=${relation.originalType}` : "",
       ].filter(Boolean).join(" ");
-      const evidence = relation.evidence ? `\n  evidence: ${String(relation.evidence).slice(0, 360)}` : "";
-      const explanation = relation.explanation ? `\n  explanation: ${String(relation.explanation).slice(0, 180)}` : "";
+      const evidence = relation.evidence ? `\n  evidence: ${String(relation.evidence)}` : "";
+      const explanation = relation.explanation ? `\n  explanation: ${String(relation.explanation)}` : "";
       return `[R${index + 1}${flags ? ` ${flags}` : ""}] ${relation.sourceLabel || relation.sourceEntityId} -${relation.relationType}-> ${relation.targetLabel || relation.targetEntityId}${evidence}${explanation}`;
     }).join("\n");
     const evidenceLines = reasoningPlan && primaryEvidenceText ? "" : (graphContext.evidence || []).map((source, index) =>
-      `[${index + 1}] document=${source.documentId || ""} chunk=${source.chunkId || ""}\n${String(source.text || "").slice(0, 520)}`
+      `[${index + 1}] document=${source.documentId || ""} chunk=${source.chunkId || ""}\n${String(source.text || "")}`
     ).join("\n\n");
-    const eventLines = reasoningPlan ? "" : (graphContext.events || []).slice(0, 16).map((item, index) => {
+    const eventLines = reasoningPlan ? "" : (graphContext.events || []).map((item, index) => {
       const sequence = item.sequence !== null && item.sequence !== undefined ? ` seq=${item.sequence}` : "";
       const score = item.score !== null && item.score !== undefined ? ` score=${Number(item.score || 0).toFixed(2)}` : "";
       const objects = (item.objects || []).join(", ") || "context";
@@ -479,14 +475,14 @@ window.TrackerLensAiAgentRuntime = (() => {
       const resolution = item.subjectResolution?.method
         ? `\n  subjectResolution: ${item.subjectResolution.method} confidence=${Number(item.subjectResolution.confidence || 0).toFixed(2)}`
         : "";
-      const evidence = item.evidence ? `\n  evidence: ${String(item.evidence).slice(0, 360)}` : "";
+      const evidence = item.evidence ? `\n  evidence: ${String(item.evidence)}` : "";
       return `[EV${index + 1}${sequence}${score}${flags ? ` ${flags}` : ""}] ${item.subject || "event"} -${item.eventType}-> ${objects}${roles}${resolution}${evidence}`;
     }).join("\n");
     return [
       "Knowledge Graph context:",
       graphContext.query ? `Query: ${graphContext.query}` : "",
       reasoningPlan ? `Reasoning intent: ${reasoningPlan.intent || "fact"}` : "",
-      primaryEvidenceText ? `Primary evidence text:\n${primaryEvidenceText.slice(0, 3600)}` : "",
+      primaryEvidenceText ? `Primary evidence text:\n${primaryEvidenceText}` : "",
       reasoningLines ? `Reasoning required facts:\n${reasoningLines}` : "",
       reasoningInstructions ? `Reasoning answer instructions:\n${reasoningInstructions}` : "",
       reasoningBoundaries ? `Reasoning boundaries:\n${reasoningBoundaries}` : "",
@@ -498,10 +494,9 @@ window.TrackerLensAiAgentRuntime = (() => {
     ].filter(Boolean).join("\n\n");
   };
 
-  const compactTextValue = (value = "", max = 900) => {
+  const compactTextValue = (value = "") => {
     const text = String(value || "").trim();
-    if (!text) return "";
-    return text.length > max ? `${text.slice(0, max)}\n...` : text;
+    return text || "";
   };
 
   const resultAnswerText = (result = {}) => {
@@ -510,7 +505,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     if (typeof result.response === "string" && result.response.trim()) return result.response.trim();
     if (result.response !== undefined && result.response !== null) {
       if (typeof result.response === "object" && !Array.isArray(result.response) && !Object.values(result.response).some((value) => String(value || "").trim())) return "";
-      return compactJson(result.response, 1200);
+      return compactJson(result.response);
     }
     if (typeof result.summary === "string" && result.summary.trim()) return result.summary.trim();
     return "";
@@ -546,8 +541,8 @@ window.TrackerLensAiAgentRuntime = (() => {
     sequence: Number.isFinite(Number(item.sequence)) ? Number(item.sequence) : null,
     type: item.eventType || item.type || "",
     subject: item.subject || "",
-    objects: Array.isArray(item.objects) ? item.objects.slice(0, 8) : [],
-    participants: Array.isArray(item.participants) ? item.participants.slice(0, 10) : [],
+    objects: Array.isArray(item.objects) ? item.objects : [],
+    participants: Array.isArray(item.participants) ? item.participants : [],
     roles: item.roles || {},
     subjectResolution: item.subjectResolution || null,
     polarity: item.polarity || "",
@@ -562,7 +557,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     index: item.index || index + 1,
     documentId: item.documentId || "",
     chunkId: item.chunkId || "",
-    text: compactTextValue(item.text, 520),
+    text: compactTextValue(item.text),
   });
 
   const buildCleanAiPayload = ({ result = {}, config = {} } = {}) => {
@@ -600,15 +595,15 @@ window.TrackerLensAiAgentRuntime = (() => {
             id: graphContext.reasoningPlan.id || "",
             intent: graphContext.reasoningPlan.intent || "",
             status: graphContext.reasoningPlan.status || "",
-            primaryEvidenceText: compactTextValue(graphContext.reasoningPlan.primaryEvidenceText || "", 2200),
-            requiredFacts: (graphContext.reasoningPlan.requiredFacts || []).slice(0, 12),
-            responseInstructions: (graphContext.reasoningPlan.responseInstructions || []).slice(0, 6),
-            excludedContext: (graphContext.reasoningPlan.excludedContext || []).slice(0, 8),
+            primaryEvidenceText: compactTextValue(graphContext.reasoningPlan.primaryEvidenceText || ""),
+            requiredFacts: graphContext.reasoningPlan.requiredFacts || [],
+            responseInstructions: graphContext.reasoningPlan.responseInstructions || [],
+            excludedContext: graphContext.reasoningPlan.excludedContext || [],
           } : null,
-          entities: (graphContext.entities || []).slice(0, graphContext.reasoningPlan ? 4 : 10).map(cleanEntity),
-          relations: (graphContext.relations || []).slice(0, graphContext.reasoningPlan ? 4 : 16).map(cleanRelation),
-          events: (graphContext.events || []).slice(0, graphContext.reasoningPlan ? 6 : 16).map(cleanEvent),
-          evidence: (graphContext.evidence || []).slice(0, graphContext.reasoningPlan ? 2 : 4).map(cleanEvidence),
+          entities: (graphContext.entities || []).map(cleanEntity),
+          relations: (graphContext.relations || []).map(cleanRelation),
+          events: (graphContext.events || []).map(cleanEvent),
+          evidence: (graphContext.evidence || []).map(cleanEvidence),
         },
       };
     }
@@ -622,12 +617,12 @@ window.TrackerLensAiAgentRuntime = (() => {
           queryId: ragContext.queryId || "",
           resultCount: ragContext.resultCount ?? 0,
           scope: ragContext.scope || {},
-          sources: (ragContext.sources || []).slice(0, 6).map((source, index) => ({
+          sources: (ragContext.sources || []).map((source, index) => ({
             index: source.index || index + 1,
             score: Number.isFinite(Number(source.score)) ? Number(source.score) : null,
             documentId: source.documentId || "",
             chunkId: source.chunkId || "",
-            text: compactTextValue(source.text, 520),
+            text: compactTextValue(source.text),
           })),
         },
       };
@@ -680,13 +675,14 @@ window.TrackerLensAiAgentRuntime = (() => {
       calls.push({ nodeId: manifest.nodeId, nodeLabel: manifest.label || manifest.nodeId, relation: manifest.relation || "", tool: tool.name, args });
       return true;
     };
-    const limit = Math.max(1, Math.min(8, Number(config.connectedToolLimit || 6)));
-    if (!ragContext && !graphContext) pushTool(["searchChunks"], { query, limit: 6 });
-    pushTool(["getTimeline", "findEvents"], { query, limit: 10 });
-    pushTool(["defineTerm"], { term: query, query, limit: 8 });
-    pushTool(["findRelations", "findEntities"], { query, limit: 10 });
-    pushTool(["getGraphEvidence"], { query, limit: 8 });
-    if (!calls.some((call) => call.tool === "searchChunks")) pushTool(["searchChunks"], { query, limit: 6 });
+    const configuredLimit = Number(config.connectedToolLimit || 0);
+    const limit = Number.isFinite(configuredLimit) && configuredLimit > 0 ? Math.floor(configuredLimit) : Number.POSITIVE_INFINITY;
+    if (!ragContext && !graphContext) pushTool(["searchChunks"], { query });
+    pushTool(["getTimeline", "findEvents"], { query });
+    pushTool(["defineTerm"], { term: query, query });
+    pushTool(["findRelations", "findEntities"], { query });
+    pushTool(["getGraphEvidence"], { query });
+    if (!calls.some((call) => call.tool === "searchChunks")) pushTool(["searchChunks"], { query });
     return calls.slice(0, limit);
   };
 
@@ -712,7 +708,8 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const validatePlannedToolCalls = ({ plan = {}, manifests = [], query = "", config = {} } = {}) => {
     const manifestByNode = new Map((manifests || []).map((manifest) => [manifest.nodeId, manifest]));
-    const limit = Math.max(1, Math.min(8, Number(config.connectedToolLimit || config.plannerToolLimit || 6)));
+    const configuredLimit = Number(config.connectedToolLimit || config.plannerToolLimit || 0);
+    const limit = Number.isFinite(configuredLimit) && configuredLimit > 0 ? Math.floor(configuredLimit) : Number.POSITIVE_INFINITY;
     const steps = Array.isArray(plan?.steps) ? plan.steps : Array.isArray(plan?.toolCalls) ? plan.toolCalls : [];
     const calls = [];
     for (const step of steps) {
@@ -731,7 +728,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           query,
           ...args,
         },
-        plannedReason: String(step.reason || step.purpose || "").slice(0, 240),
+        plannedReason: String(step.reason || step.purpose || ""),
       });
       if (calls.length >= limit) break;
     }
@@ -759,11 +756,13 @@ window.TrackerLensAiAgentRuntime = (() => {
         },
         inputChannel: event?.channel || "",
         availableTools,
-        maxSteps: Math.max(1, Math.min(8, Number(config.connectedToolLimit || config.plannerToolLimit || 6))),
+        ...(Number.isFinite(Number(config.connectedToolLimit || config.plannerToolLimit)) && Number(config.connectedToolLimit || config.plannerToolLimit) > 0
+          ? { maxSteps: Math.floor(Number(config.connectedToolLimit || config.plannerToolLimit)) }
+          : {}),
       }),
     ].join("\n\n");
     try {
-      const ai = await callProviderText({ provider, model, prompt, maxTokens: Math.max(180, Math.min(700, Number(config.plannerMaxTokens || 420))) });
+      const ai = await callProviderText({ provider, model, prompt, maxTokens: Math.max(1, Math.floor(Number(config.plannerMaxTokens || config.maxTokens || 420))) });
       const plan = parseAiText(ai.text || "");
       const calls = validatePlannedToolCalls({ plan, manifests, query, config });
       return { calls, plan, usage: ai.usage || {}, error: calls.length ? "" : "empty-plan" };
@@ -810,8 +809,8 @@ window.TrackerLensAiAgentRuntime = (() => {
           confidence: result?.confidence ?? null,
           limitations: result?.limitations || [],
           itemCount: Array.isArray(result?.items) ? result.items.length : 0,
-          evidence: (result?.evidence || []).slice(0, 6),
-          items: (result?.items || []).slice(0, 8),
+          evidence: result?.evidence || [],
+          items: result?.items || [],
           answer: result?.answer || "",
           usage: result?.usage || {},
           debug: result?.debug || {},
@@ -846,7 +845,9 @@ window.TrackerLensAiAgentRuntime = (() => {
           args: {
             documentId: scopedDocumentId,
             collectionId: payload.collectionId || payload.metadata?.collectionId || "",
-            maxChars: Math.max(1200, Math.min(12000, Number(config.connectedToolDocumentChars || config.maxDocumentChars || 6000))),
+            maxChars: Number.isFinite(Number(config.connectedToolDocumentChars || config.maxDocumentChars)) && Number(config.connectedToolDocumentChars || config.maxDocumentChars) > 0
+              ? Math.floor(Number(config.connectedToolDocumentChars || config.maxDocumentChars))
+              : 0,
           },
           plannedReason: "Full-document read on the same connected Document tool for source verification.",
         });
@@ -859,21 +860,16 @@ window.TrackerLensAiAgentRuntime = (() => {
     const observations = toolContext?.observations || [];
     if (!observations.length) return "";
     const planText = toolContext?.plan
-      ? `Planner intent: ${String(toolContext.plan.intent || "").slice(0, 160)}\nPlanner verification: ${String(toolContext.plan.verification || "").slice(0, 240)}`
+      ? `Planner intent: ${String(toolContext.plan.intent || "")}\nPlanner verification: ${String(toolContext.plan.verification || "")}`
       : toolContext?.plannerError
         ? `Planner fallback: ${toolContext.plannerError}`
         : "";
     const lines = observations.map((observation, index) => {
-      const evidenceTextLimit = observation.tool === "getFullDocument"
-        ? Math.max(1200, Math.min(12000, Number(observation.debug?.returnedChars || config.connectedToolDocumentChars || config.maxDocumentChars || 6000)))
-        : 900;
       const evidence = (observation.evidence || [])
-        .slice(0, 4)
-        .map((item, evidenceIndex) => `  [E${index + 1}.${evidenceIndex + 1}] ${item.sourceType || "evidence"} doc=${item.documentId || ""} chunk=${item.chunkId || ""}\n  ${String(item.text || "").slice(0, evidenceTextLimit)}`)
+        .map((item, evidenceIndex) => `  [E${index + 1}.${evidenceIndex + 1}] ${item.sourceType || "evidence"} doc=${item.documentId || ""} chunk=${item.chunkId || ""}\n  ${String(item.text || "")}`)
         .join("\n");
       const limitations = observation.limitations?.length ? `\n  limitations: ${observation.limitations.join("; ")}` : "";
-      const answerLimit = observation.tool === "getFullDocument" ? 1200 : 500;
-      const answer = observation.answer ? `\n  answer: ${String(observation.answer).slice(0, answerLimit)}` : "";
+      const answer = observation.answer ? `\n  answer: ${String(observation.answer)}` : "";
       const debug = observation.debug && Object.keys(observation.debug).length
         ? [
           `documents=${observation.debug.documentCount ?? "N/D"}`,
@@ -947,7 +943,10 @@ window.TrackerLensAiAgentRuntime = (() => {
   const collectInputDataContext = async ({ node, event, workspaceId, config = {}, runtime = {} } = {}) => {
     const mode = inputDataMode(config);
     if (mode === "off" || mode === "none") return null;
-    const historyLimit = Math.max(1, Math.min(50, Number(config.inputHistoryLimit || 5)));
+    const configuredHistoryLimit = Number(config.inputHistoryLimit || 0);
+    const historyLimit = Number.isFinite(configuredHistoryLimit) && configuredHistoryLimit > 0
+      ? Math.floor(configuredHistoryLimit)
+      : Number.POSITIVE_INFINITY;
     const dependencyInputs = (runtime.dependencies || [])
       .filter((dependency) => dependency.targetNodeId === node.id)
       .filter((dependency) => String(dependency.metadata?.linkType || dependency.mapping?.linkType || "data") !== "tool-access")
@@ -983,7 +982,7 @@ window.TrackerLensAiAgentRuntime = (() => {
 
   const fallbackResponse = ({ node, payload, event, reason = "", ragContext = null, graphContext = null }) => {
     const subtype = nodeSubtype(node);
-    const keys = payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload).slice(0, 12) : [];
+      const keys = payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [];
     return {
       provider: "fallback",
       model: "local-rule",
@@ -995,7 +994,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       reason,
       ragContext,
       graphContext,
-      payloadPreview: keys.length ? Object.fromEntries(keys.slice(0, 6).map((key) => [key, payload[key]])) : clonePayload(payload),
+      payloadPreview: clonePayload(payload),
     };
   };
 
@@ -1107,7 +1106,7 @@ window.TrackerLensAiAgentRuntime = (() => {
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
+      throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`);
     }
     const data = await response.json();
     const choice = data.choices?.[0] || {};
@@ -1121,8 +1120,9 @@ window.TrackerLensAiAgentRuntime = (() => {
         "Answer in the same language as the user's question.",
         "",
         "Notes:",
-        String(message.reasoning_content || "").slice(-2800),
+        String(message.reasoning_content || ""),
       ].join("\n");
+      const repairMaxTokens = Math.max(1, Math.floor(Number(maxTokens || 800)));
       const repairResponse = await postAiJson({
         url: `${endpoint}/chat/completions`,
         headers: { "Content-Type": "application/json" },
@@ -1130,7 +1130,7 @@ window.TrackerLensAiAgentRuntime = (() => {
           model: resolvedModel,
           messages: [{ role: "user", content: repairPrompt }],
           temperature: 0.1,
-          max_tokens: Math.max(180, Math.min(480, Math.floor(Number(maxTokens || 800) / 2))),
+          max_tokens: repairMaxTokens,
         },
       }).catch(() => null);
       if (repairResponse?.ok) {
@@ -1177,10 +1177,10 @@ window.TrackerLensAiAgentRuntime = (() => {
     "If the text is already complete, write only the natural final continuation or ending.",
     "",
     "Original task:",
-    String(originalPrompt || "").slice(0, 3600),
+    String(originalPrompt || ""),
     "",
     `Current output to continue (attempt ${attempt}):`,
-    String(generatedText || "").slice(-3600),
+    String(generatedText || ""),
   ].join("\n");
 
   const memoryScopeForPersistence = (config = {}, subtype = "") => {
@@ -1710,7 +1710,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       });
       const configMaxTokens = Number(config.maxTokens || 0);
       const providerMaxTokens = Number(provider?.maxTokens || 0);
-      const maxTokens = Math.max(128, Math.min(32000, Number(configMaxTokens || providerMaxTokens || 800)));
+      const maxTokens = Math.max(1, Math.floor(Number(configMaxTokens || providerMaxTokens || 800)));
       const maxContinuationCalls = Math.max(0, Number(config.maxContinuationCalls ?? config.continuationCalls ?? 10));
       steps = await this.recordStep({
         node,
@@ -2064,7 +2064,7 @@ window.TrackerLensAiAgentRuntime = (() => {
             kind: "runtime-response",
             name: `${node.label || node.id} response`,
             text: resultText,
-            summary: resultText.slice(0, 240),
+            summary: resultText,
             tags: [subtype || "agent", "runtime-response", channel].filter(Boolean),
             weight: subtype === "memory" ? 1.2 : 1,
           });

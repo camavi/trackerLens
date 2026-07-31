@@ -230,7 +230,7 @@ const buildRuntimeViewModel = (data, queryMs = 0) => {
         placeholder: true,
       }],
     providers: data.providers.length
-      ? data.providers.slice(0, 12).map((item) => ({
+      ? data.providers.map((item) => ({
         id: item.id,
         name: item.name,
         provider: item.provider,
@@ -247,20 +247,19 @@ const buildRuntimeViewModel = (data, queryMs = 0) => {
       }))
       : [{ id: "", name: "Nessun provider configurato", provider: "custom", model: "tl_ai_providers", endpoint: "", healthPath: "", state: "Idle", latency: "n/d", status: "warn", icon: "dns", local: false, placeholder: true }],
     jobs: data.jobs.length
-      ? data.jobs.slice(0, 50).map((item) => ({ id: item.id, agent: item.agent, task: item.task, state: sourceLabel(item.status), start: timeLabel(item.startedAt), duration: durationLabel(item.durationMs), tokens: item.tokens ? formatNumber(item.tokens) : "-", status: statusTone(item.status), raw: item.raw, result: item.result, provider: item.provider, model: item.model, prompt: item.prompt, memoryContext: item.memoryContext }))
+      ? data.jobs.map((item) => ({ id: item.id, agent: item.agent, task: item.task, state: sourceLabel(item.status), start: timeLabel(item.startedAt), duration: durationLabel(item.durationMs), tokens: item.tokens ? formatNumber(item.tokens) : "-", status: statusTone(item.status), raw: item.raw, result: item.result, provider: item.provider, model: item.model, prompt: item.prompt, memoryContext: item.memoryContext }))
       : [{ id: "-", agent: "Runtime AI", task: "Nessun job reale in tl_ai_jobs", state: "Idle", start: "Mai", duration: "-", tokens: "-", status: "warn", raw: null }],
     logs: data.logs.length
-      ? data.logs.slice(0, 80).map((item) => ({ id: item.id, time: timeLabel(item.time), source: item.source, message: item.message, status: statusTone(item.status), raw: item.raw }))
+      ? data.logs.map((item) => ({ id: item.id, time: timeLabel(item.time), source: item.source, message: item.message, status: statusTone(item.status), raw: item.raw }))
       : [{ id: "-", time: "-", source: "AI Runtime", message: "Nessun log reale in tl_ai_logs", status: "warn", raw: null }],
     memory: data.memory.length
-      ? data.memory.slice(0, 50).map((item) => ({ id: item.id, name: item.name, meta: item.meta || "Context locale", count: `${formatNumber(item.count)} items`, icon: item.icon || "database", scope: item.scope || "workspace", text: item.text || "", raw: item.raw }))
+      ? data.memory.map((item) => ({ id: item.id, name: item.name, meta: item.meta || "Context locale", count: `${formatNumber(item.count)} items`, icon: item.icon || "database", scope: item.scope || "workspace", text: item.text || "", raw: item.raw }))
       : [{ id: "", name: "Memoria AI vuota", meta: "tl_ai_memory", count: "0 items", icon: "database", scope: "workspace", text: "", raw: null }],
     prompts: buildPrompts(data.promptFlows),
     workspaceActivity: data.pages.length
       ? data.pages
         .slice()
         .sort((a, b) => (b.boxes.length + b.connections.length) - (a.boxes.length + a.connections.length))
-        .slice(0, 5)
         .map((page) => [page.name, Math.max(10, Math.round(((page.boxes.length + page.connections.length) / workspaceMax) * 100)), formatNumber(page.boxes.length + page.connections.length)])
       : [["Nessun workspace", 0, "0"]],
   };
@@ -818,7 +817,7 @@ const openProviderListDialog = () => {
 
 const renderProviders = () =>
   {
-    const visibleProviders = providers.map(providerOf).filter((provider) => provider.placeholder || providerMatches(provider, providerListSearchQuery)).slice(0, 8);
+    const visibleProviders = providers.map(providerOf).filter((provider) => provider.placeholder || providerMatches(provider, providerListSearchQuery));
     return _.aside(
       { class: "tl-ai-providers" },
       _.Row({ justify: "space-between", align: "center" }, _.h3("AI Models & Providers"), btn({ class: "tl-ai-ghost-btn", onclick: probeLocalAiProviders }, icon("radar", "sm"), "Probe Local")),
@@ -863,7 +862,7 @@ const savePromptFromForm = async (form, close, current = null) => {
     ...(current?.id ? { id: current.id, createdAt: current.raw?.createdAt } : {}),
     name,
     title: name,
-    description: promptFormValue(form, "description") || prompt.slice(0, 120),
+    description: promptFormValue(form, "description") || prompt,
     prompt,
     category: promptFormValue(form, "category") || "Generale",
     status: "active",
@@ -1087,7 +1086,7 @@ const openPromptListDialog = () => {
 };
 
 const renderPrompts = () => {
-  const visiblePrompts = filteredPrompts().slice(0, 8);
+  const visiblePrompts = filteredPrompts();
   const categories = promptCategories();
   return _.section(
     { class: "tl-ai-prompts" },
@@ -1173,10 +1172,9 @@ const openJsonDialog = ({ title, subtitle, iconName = "data_object", record = nu
   dialog.open();
 };
 
-const renderJobRows = (query = "", limit = 12) => jobs
+const renderJobRows = (query = "") => jobs
   .map(jobOf)
-  .filter((job) => itemMatches(job, query, ["id", "agent", "task", "state", "provider", "model"]))
-  .slice(0, limit);
+  .filter((job) => itemMatches(job, query, ["id", "agent", "task", "state", "provider", "model"]));
 
 const openJobsDialog = () => {
   const renderList = (query = "") => _.div(
@@ -1185,7 +1183,7 @@ const openJobsDialog = () => {
       { class: "tl-ai-table" },
       _.thead(_.tr(_.th("Job ID"), _.th("Agente"), _.th("Task"), _.th("Stato"), _.th("Provider"), _.th("Tokens"), _.th("Azioni"))),
       _.tbody(
-        ...renderJobRows(query, 100).map((job) =>
+        ...renderJobRows(query).map((job) =>
           _.tr(
             { class: `is-${job.status}` },
             _.td(job.id),
@@ -1235,7 +1233,7 @@ const renderJobsTable = () =>
         { class: "tl-ai-table" },
         _.thead(_.tr(_.th("Job ID"), _.th("Agente"), _.th("Task"), _.th("Stato"), _.th("Iniziato"), _.th("Durata"), _.th("Tokens"), _.th("Azioni"))),
         _.tbody(
-          ...renderJobRows(jobListSearchQuery, 12).map((job) =>
+          ...renderJobRows(jobListSearchQuery).map((job) =>
             _.tr(
               { class: `is-${job.status}` },
               _.td(job.id),
@@ -1254,15 +1252,14 @@ const renderJobsTable = () =>
     btn({ class: "tl-ai-link-btn", onclick: openJobsDialog }, "Visualizza tutti i job", icon("arrow_forward", "sm"))
   );
 
-const renderLogRows = (query = "", limit = 12) => logs
+const renderLogRows = (query = "") => logs
   .map(logOf)
-  .filter((log) => itemMatches(log, query, ["time", "source", "message", "status"]))
-  .slice(0, limit);
+  .filter((log) => itemMatches(log, query, ["time", "source", "message", "status"]));
 
 const openLogsDialog = () => {
   const renderList = (query = "") => _.div(
     { class: "tl-ai-log-list tl-ai-dialog-log-list" },
-    ...renderLogRows(query, 100).map((log) =>
+    ...renderLogRows(query).map((log) =>
       _.div({ class: `tl-ai-log is-${log.status}` }, _.time(log.time), _.span({ class: "tl-ai-log-icon" }, icon(log.status === "error" ? "report" : log.status === "warn" ? "warning" : "psychology", "sm")), _.div(_.strong(log.source), _.p(log.message)), btn({ "aria-label": "Dettagli log", onclick: () => openJsonDialog({ title: log.source, subtitle: log.time, iconName: "receipt_long", record: log.raw || log }) }, icon("data_object", "sm")))
     )
   );
@@ -1297,22 +1294,21 @@ const renderLogs = () =>
     _.Row({ justify: "space-between", align: "center" }, _.h3("AI Logs (Live)"), _.span({ class: "tl-ai-live-chip" }, dot("online"), "Live")),
     _.div(
       { class: "tl-ai-log-list" },
-      ...renderLogRows(logListSearchQuery, 12).map((log) =>
+      ...renderLogRows(logListSearchQuery).map((log) =>
         _.div({ class: `tl-ai-log is-${log.status}` }, _.time(log.time), _.span({ class: "tl-ai-log-icon" }, icon(log.status === "error" ? "report" : log.status === "warn" ? "warning" : "psychology", "sm")), _.div(_.strong(log.source), _.p(log.message)))
       )
     ),
     btn({ class: "tl-ai-link-btn", onclick: openLogsDialog }, "Visualizza tutti i log", icon("arrow_forward", "sm"))
   );
 
-const renderMemoryRows = (query = "", limit = 8) => memory
+const renderMemoryRows = (query = "") => memory
   .map(memoryOf)
-  .filter((item) => itemMatches(item, query, ["name", "meta", "scope", "text"]))
-  .slice(0, limit);
+  .filter((item) => itemMatches(item, query, ["name", "meta", "scope", "text"]));
 
 const openMemoryDialog = () => {
   const renderList = (query = "") => _.div(
     { class: "tl-ai-memory-scroll" },
-    ...renderMemoryRows(query, 100).map((item) =>
+    ...renderMemoryRows(query).map((item) =>
       _.div({ class: "tl-ai-memory-row" }, _.span(icon(item.icon, "sm")), _.div(_.strong(item.name), _.p(item.meta)), _.em(item.count), _.small(item.scope || "workspace"), btn({ "aria-label": "Dettagli memoria", onclick: () => openJsonDialog({ title: item.name, subtitle: item.scope, iconName: "database", record: item.raw || item }) }, icon("data_object", "sm")))
     )
   );
@@ -1345,7 +1341,7 @@ const renderMemory = () =>
   _.aside(
     { class: "tl-ai-memory" },
     _.Row({ justify: "space-between", align: "center" }, _.h3("AI Memory (Context)"), btn({ class: "tl-ai-link-btn", onclick: openMemoryDialog }, "Vedi tutto")),
-    ...renderMemoryRows(memoryListSearchQuery, 8).map((item) =>
+    ...renderMemoryRows(memoryListSearchQuery).map((item) =>
       _.div({ class: "tl-ai-memory-row" }, _.span(icon(item.icon, "sm")), _.div(_.strong(item.name), _.p(item.meta)), _.em(item.count), _.small(item.scope || "workspace"))
     )
   );
@@ -1358,7 +1354,7 @@ const renderAnalytics = () =>
     _.Card(
       { class: "tl-ai-analytics-card" },
       _.h3("Distribuzione per Tipo"),
-      _.div({ class: "tl-ai-donut-row" }, renderDonut("is-multi", metrics[1]?.value || "0", "Jobs"), _.div(...metrics.slice(0, 5).map((item) => _.p(`${item.label} ${item.value}`))))
+      _.div({ class: "tl-ai-donut-row" }, renderDonut("is-multi", metrics[1]?.value || "0", "Jobs"), _.div(...metrics.map((item) => _.p(`${item.label} ${item.value}`))))
     ),
     _.Card(
       { class: "tl-ai-analytics-card is-performance" },
@@ -1375,7 +1371,7 @@ const renderAnalytics = () =>
     _.Card(
       { class: "tl-ai-analytics-card" },
       _.h3("Storage AI"),
-      _.div({ class: "tl-ai-donut-row" }, renderDonut("is-storage", memory.length, "Blocchi"), _.div(...memory.map(memoryOf).slice(0, 4).map((item) => _.p(`${item.name} ${item.count}`))))
+      _.div({ class: "tl-ai-donut-row" }, renderDonut("is-storage", memory.length, "Blocchi"), _.div(...memory.map(memoryOf).map((item) => _.p(`${item.name} ${item.count}`))))
     ),
     _.Card(
       { class: "tl-ai-analytics-card" },

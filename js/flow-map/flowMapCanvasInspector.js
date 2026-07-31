@@ -1531,7 +1531,7 @@ const updateAiAgentRuntimeDialogView = async (entry = {}) => {
 };
 
 const refreshOpenAiAgentRuntimeDialog = (event = {}) => {
-  const nodeId = event.sourceNodeId || event.meta?.aiAgentRuntime || event.payload?.agentId || "";
+  const nodeId = event.sourceNodeId || event.meta?.aiAgentRuntime || event.meta?.knowledgeRuntime || event.payload?.agentId || event.payload?.nodeId || "";
   if (!nodeId) return;
   const entry = aiAgentRuntimeDialogViews.get(nodeId);
   if (!entry || entry.raf) return;
@@ -1545,7 +1545,7 @@ const aiAgentRuntimeResultSummary = (job = null) => {
   const raw = job?.raw || {};
   const result = raw.result && typeof raw.result === "object" ? raw.result : {};
   const response = result.response && typeof result.response === "object" ? result.response : null;
-  const text = result.text || response?.summary || response?.answer || response?.text || response?.message || job?.message || raw.error || "";
+  const text = result.text || response?.summary || response?.answer || response?.text || response?.message || result.preview || job?.message || raw.error || "";
   if (text) return String(text).trim();
   return "";
 };
@@ -1558,11 +1558,6 @@ const aiAgentRuntimeOutputMeta = (job = null, text = "") => {
   const chars = String(text || "").length;
   const tokens = Number(raw.tokens || job?.tokens || usage.totalTokens || usage.total_tokens || 0);
   return { chars, tokens, finishReason };
-};
-
-const aiAgentRuntimePreviewText = (text = "", max = 1400) => {
-  const value = String(text || "").trim();
-  return value.length > max ? `${value.slice(0, max).trimEnd()}\n...` : value;
 };
 
 const openAiAgentRuntimeFullOutputDialog = ({ node = {}, text = "", meta = {} } = {}) => {
@@ -1629,6 +1624,31 @@ const aiAgentRuntimeTraceData = (job = null) => {
   };
 };
 
+const aiAgentRuntimeFullTraceData = (job = null) => {
+  const raw = job?.raw || {};
+  const result = raw.result && typeof raw.result === "object" ? raw.result : {};
+  return {
+    id: job?.id || raw.id || "",
+    workspaceId: job?.workspaceId || raw.workspaceId || "",
+    runId: job?.runId || raw.runId || "",
+    nodeId: job?.agentId || raw.agentId || raw.runtimeNodeId || "",
+    nodeLabel: job?.agent || raw.agent || "",
+    task: job?.task || raw.task || "",
+    status: raw.runtimeStatus || job?.status || raw.status || "",
+    provider: job?.provider || raw.provider || result.provider || "",
+    model: job?.model || raw.model || result.model || "",
+    durationMs: job?.durationMs || raw.durationMs || 0,
+    tokens: job?.tokens || raw.tokens || 0,
+    currentStep: raw.currentStep || null,
+    steps: Array.isArray(raw.steps) ? raw.steps : [],
+    inputTrace: aiAgentRuntimeTraceData(job),
+    result,
+    error: raw.error || result.error || "",
+    updatedAt: job?.updatedAt || raw.updatedAt || "",
+    raw,
+  };
+};
+
 const aiAgentRuntimeJsonText = (value = null) => {
   try {
     return JSON.stringify(value ?? null, null, 2);
@@ -1664,13 +1684,13 @@ const openAiAgentRuntimePromptDialog = ({ node = {}, job = null } = {}) => {
 };
 
 const openAiAgentRuntimeTraceDialog = ({ node = {}, job = null } = {}) => {
-  const trace = aiAgentRuntimeTraceData(job);
+  const trace = aiAgentRuntimeFullTraceData(job);
   const traceText = aiAgentRuntimeJsonText(trace);
   const dialog = _.Dialog({
     class: "tl-ai-agent-runtime-trace-dialog",
     panelClass: "tl-ai-agent-runtime-trace-panel",
     size: "lg",
-    title: "Input Trace",
+    title: "Full Runtime Trace",
     subtitle: node.label || node.id,
     icon: "account_tree",
     closeButton: true,
@@ -1697,6 +1717,23 @@ const aiAgentRuntimeExecutionSummary = (job = null, steps = []) => {
   const model = raw.model || job?.model || result.model || "";
   const duration = raw.durationMs || job?.durationMs || result.latencyMs || 0;
   const tokens = raw.tokens || job?.tokens || result.usage?.totalTokens || 0;
+  if (Array.isArray(result.debug) || result.counts || result.preview) {
+    const counts = result.counts || {};
+    const countText = Object.entries(counts)
+      .filter(([, value]) => Number.isFinite(Number(value)))
+      .map(([key, value]) => `${key}=${value}`)
+      .join(", ");
+    return [
+      `Processed ${raw.task || job?.task || "knowledge runtime event"}.`,
+      provider || model ? `Provider: ${[provider, model].filter(Boolean).join(" · ")}.` : "",
+      result.promptMode ? `Prompt mode: ${result.promptMode}.` : "",
+      result.fallbackReason ? `Fallback: ${result.fallbackReason}.` : "",
+      result.error ? `Runtime warning: ${result.error}.` : "",
+      countText ? `Output counts: ${countText}.` : "",
+      duration ? `Duration: ${duration}ms.` : "",
+      tokens ? `Token usage: ${tokens}.` : "",
+    ].filter(Boolean).join(" ");
+  }
   const toolStep = steps.find((step) => step?.type === "connected_tools");
   const outputStep = [...steps].reverse().find((step) => step?.type === "emit");
   const toolCalls = toolStep?.payload?.calls?.length || 0;
@@ -1750,19 +1787,18 @@ const renderAiAgentRuntimeStep = (step = {}, index = 0, { open = false } = {}) =
       { class: "tl-ai-agent-runtime-step-main" },
       step.summary ? _.p(step.summary) : null,
       step.detail ? _.small(step.detail) : null,
-      payload ? _.pre({ class: "tl-ai-agent-runtime-payload" }, JSON.stringify(payload, null, 2).slice(0, 1600)) : null
+      payload ? _.pre({ class: "tl-ai-agent-runtime-payload" }, JSON.stringify(payload, null, 2)) : null
     )
   );
 };
 
 const renderAiAgentRuntimeOutput = ({ node = {}, job = null, text = "" } = {}) => {
   const meta = aiAgentRuntimeOutputMeta(job, text);
-  const truncated = String(text || "").length > 1400;
   return _.div(
     { class: "tl-ai-agent-runtime-output" },
     _.div(
       { class: "tl-ai-agent-runtime-output-head" },
-      _.h4("Agent Output"),
+      _.h4(node.type === "aiAgent" ? "Agent Output" : "Runtime Output"),
       _.div(
         { class: "tl-ai-agent-runtime-output-actions" },
         _.span({ class: `tl-ai-agent-runtime-pill is-${meta.finishReason === "length" ? "warn" : "complete"}` }, meta.finishReason ? `finish: ${meta.finishReason}` : "output"),
@@ -1779,8 +1815,7 @@ const renderAiAgentRuntimeOutput = ({ node = {}, job = null, text = "" } = {}) =
     meta.finishReason === "length"
       ? _.div({ class: "tl-ai-agent-runtime-output-warning" }, icon("warning_amber", "sm"), _.span("Output stopped by max tokens. Increase Max Tokens to continue longer generations."))
       : null,
-    _.p(aiAgentRuntimePreviewText(text)),
-    truncated ? _.small("Preview truncated in this panel. Open Full Output to read everything.") : null
+    _.p(String(text || ""))
   );
 };
 
@@ -1808,9 +1843,9 @@ const renderAiAgentRuntimeInputTrace = ({ node = {}, job = null } = {}) => {
         }, icon("article", "sm"), "Full Prompt"),
         btn({
           class: "is-ghost is-compact",
-          title: "Open full runtime input trace",
+          title: "Open full runtime trace with every prompt attempt, step and result",
           onclick: () => openAiAgentRuntimeTraceDialog({ node, job }),
-        }, icon("account_tree", "sm"), "Full Trace")
+        }, icon("account_tree", "sm"), "Full Runtime")
       )
     ),
     _.div(
@@ -1824,7 +1859,7 @@ const renderAiAgentRuntimeInputTrace = ({ node = {}, job = null } = {}) => {
       _.span(icon("memory", "sm"), _.strong("memory"), hasMemory ? `${trace.memoryChars || String(trace.memoryContext || "").length} chars` : "none"),
       _.span(icon("history", "sm"), _.strong("history"), inputDataChannels ? `${inputDataChannels} channel${inputDataChannels === 1 ? "" : "s"}` : "none"),
       _.span(icon("construction", "sm"), _.strong("tools"), toolObservations ? `${toolObservations} observation${toolObservations === 1 ? "" : "s"}` : "none"),
-      trace.objective ? _.span({ class: "is-wide" }, icon("flag", "sm"), _.strong("objective"), String(trace.objective).slice(0, 220)) : null
+      trace.objective ? _.span({ class: "is-wide" }, icon("flag", "sm"), _.strong("objective"), String(trace.objective)) : null
     )
   );
 };
@@ -1854,7 +1889,7 @@ const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
         { class: "tl-ai-agent-runtime-current" },
         _.strong(["complete", "completed"].includes(String(status).toLowerCase()) ? "Run Summary" : "Current Run"),
         _.p(aiAgentRuntimeExecutionSummary(latest, steps) || raw.currentStep?.summary || "Runtime job recorded."),
-        raw.error ? _.pre({ class: "tl-ai-agent-runtime-error" }, String(raw.error).slice(0, 1800)) : null
+        raw.error ? _.pre({ class: "tl-ai-agent-runtime-error" }, String(raw.error)) : null
       )
       : _.div(
         { class: "tl-ai-agent-runtime-empty" },
@@ -1904,7 +1939,7 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
     class: "tl-ai-agent-runtime-view-dialog",
     panelClass: "tl-ai-agent-runtime-view-panel",
     size: "lg",
-    title: "Agent Runtime",
+    title: node.type === "aiAgent" ? "Agent Runtime" : "Knowledge Runtime",
     subtitle: node.label || node.id,
     icon: "terminal",
     closeButton: true,
@@ -1928,6 +1963,18 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
   });
   dialog.open();
 };
+
+const renderKnowledgeRuntimeButton = (node = {}) =>
+  btn({
+    class: "tl-flow-embedded-map-view-btn",
+    title: "View Knowledge LLM runtime timeline",
+    onPointerDown: stopNodeControlEvent,
+    onclick: (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openAiAgentRuntimeDialog(node);
+    },
+  }, icon("terminal", "sm"), "View Runtime");
 
 const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   if (isAgentBridgeNode(node)) {
@@ -2111,6 +2158,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       btn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Entity Extractor graph records for this scope",
@@ -2129,6 +2177,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       btn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Semantic Relation Enricher records for this scope",
@@ -2147,6 +2196,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       btn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Graph Builder Agent records for this scope",
@@ -2165,6 +2215,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       renderKnowledgeGraphQueryScope(node),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
@@ -2174,6 +2225,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       btn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Knowledge Dictionary records for this scope",
@@ -2192,6 +2244,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
+      renderKnowledgeRuntimeButton(node),
       btn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Knowledge Event records for this scope",
@@ -2209,6 +2262,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   return [
     _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
     _.p(view.description),
+    isKnowledgeLlmRuntimeNode(node) ? renderKnowledgeRuntimeButton(node) : null,
     renderInlineNodeSettings(node),
     ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
   ];
@@ -3663,6 +3717,20 @@ const isKnowledgeSemanticRelationEnricherNode = (node = {}) =>
 
 const isKnowledgeGraphBuilderAgentNode = (node = {}) =>
   nodeCategory(node) === "knowledge" && nodeSubtype(node) === "knowledge-graph-builder-agent";
+
+const KNOWLEDGE_LLM_RUNTIME_SUBTYPES = new Set([
+  "entity-extractor",
+  "knowledge-dictionary-builder",
+  "knowledge-event-builder",
+  "semantic-relation-enricher",
+  "knowledge-graph-builder-agent",
+  "knowledge-mechanism-cue-agent",
+  "graph-query",
+  "knowledge-reasoning-composer",
+]);
+
+const isKnowledgeLlmRuntimeNode = (node = {}) =>
+  nodeCategory(node) === "knowledge" && KNOWLEDGE_LLM_RUNTIME_SUBTYPES.has(nodeSubtype(node));
 
 const knowledgeDictionaryTierRank = (tier = "") => {
   const ranks = { core: 0, typed: 1, context: 2, weak: 3 };

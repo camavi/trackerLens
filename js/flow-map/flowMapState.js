@@ -5,14 +5,11 @@ const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...child
 const dot = (className = "") => _.span({ class: `tl-flow-dot${className ? ` ${className}` : ""}` });
 const params = new URLSearchParams(window.location.search);
 const defaultViewport = () => ({ zoom: 1, panX: 0, panY: 0 });
-const RUNTIME_EVENT_UI_LIMIT = 220;
-const RUNTIME_LOG_UI_LIMIT = 220;
 const FLOW_CANVAS_POSITION_MIN = -1000000;
 const FLOW_CANVAS_POSITION_MAX = 1000000;
 const FLOW_NODE_DEFAULT_WIDTH = 218;
 const FLOW_NODE_MIN_WIDTH = 160;
 const FLOW_NODE_MAX_WIDTH = 720;
-const RUNTIME_PAYLOAD_UI_BYTES = 24000;
 const flowMapRepairMode = () => String(params.get("repair") || "").trim().toLowerCase();
 const isFlowMapRecoveryMode = () => {
   const repair = flowMapRepairMode();
@@ -223,30 +220,16 @@ const stringifyRuntimeValue = (value = {}) => {
 };
 
 const summarizeRuntimePayloadForUi = (payload) => {
-  const text = stringifyRuntimeValue(payload);
-  if (text.length <= RUNTIME_PAYLOAD_UI_BYTES) return payload;
-  const summary = {
-    __truncatedForUi: true,
-    originalType: Array.isArray(payload) ? "array" : typeof payload,
-    originalBytes: text.length,
-    preview: text.slice(0, RUNTIME_PAYLOAD_UI_BYTES),
-  };
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    ["id", "documentId", "collectionId", "queryId", "title", "channel", "runId", "phase", "targetLabel", "inputChannel", "visualUntil"].forEach((key) => {
-      if (payload[key] !== undefined) summary[key] = payload[key];
-    });
-  }
-  return summary;
+  return payload;
 };
 
 const sanitizeRuntimeEventForUi = (event = {}) => {
   const payload = summarizeRuntimePayloadForUi(event.payload);
-  const truncated = payload?.__truncatedForUi === true;
   return {
     ...event,
     payload,
-    originalPayload: truncated ? event.payload : event.originalPayload,
-    payloadPreview: event.payloadPreview || stringifyRuntimeValue(event.payload).slice(0, 480),
+    originalPayload: event.originalPayload,
+    payloadPreview: event.payloadPreview || stringifyRuntimeValue(event.payload),
   };
 };
 
@@ -255,10 +238,10 @@ const sanitizeFlowLogForUi = (log = {}) => ({
   context: summarizeRuntimePayloadForUi(log.context || {}),
 });
 
-const recentRuntimeRecords = (records = [], limit = 200) =>
+const recentRuntimeRecords = (records = [], limit = 0) =>
   [...(records || [])]
     .sort((a, b) => Date.parse(b.createdAt || b.updatedAt || "") - Date.parse(a.createdAt || a.updatedAt || ""))
-    .slice(0, limit);
+    .slice(0, Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : Number.POSITIVE_INFINITY);
 
 state.viewport = params.get("workspaceId") ? loadStoredViewport(params.get("workspaceId")) || state.viewport : state.viewport;
 
@@ -962,7 +945,7 @@ const mergeOptimisticDependencies = (nodes = [], dependencies = []) => {
     stillPending.push(dependency);
   });
 
-  state.optimisticDependencies = stillPending.slice(0, 20);
+  state.optimisticDependencies = stillPending;
   return merged;
 };
 
@@ -1211,8 +1194,8 @@ const loadRuntime = async (options = {}) => {
     setRuntimeState({
       channels,
       flows,
-      events: recentRuntimeRecords(events, RUNTIME_EVENT_UI_LIMIT).map(sanitizeRuntimeEventForUi),
-      flowLogs: recentRuntimeRecords(flowLogs, RUNTIME_LOG_UI_LIMIT).map(sanitizeFlowLogForUi),
+      events: recentRuntimeRecords(events).map(sanitizeRuntimeEventForUi),
+      flowLogs: recentRuntimeRecords(flowLogs).map(sanitizeFlowLogForUi),
       nodes,
       dependencies: mergedDependencies,
     });
@@ -1300,7 +1283,7 @@ const mergeRuntimeEvent = (event = {}) => {
     return false;
   }
   const safeEvent = sanitizeRuntimeEventForUi(event);
-  state.runtime.events = [safeEvent, ...state.runtime.events].slice(0, RUNTIME_EVENT_UI_LIMIT);
+  state.runtime.events = [safeEvent, ...state.runtime.events];
   updateAiProcessingFromEvent(safeEvent);
   updatePreviewPayloads(safeEvent);
   state.runtime.channels = state.runtime.channels.map((channel) =>
@@ -1469,7 +1452,7 @@ const rebuildPreviewPayloadsFromEvents = () => {
 const mergeFlowLog = (log = {}) => {
   if (!log.id) return false;
   if ((state.runtime.flowLogs || []).some((item) => item.id === log.id)) return false;
-  state.runtime.flowLogs = [sanitizeFlowLogForUi(log), ...(state.runtime.flowLogs || [])].slice(0, RUNTIME_LOG_UI_LIMIT);
+  state.runtime.flowLogs = [sanitizeFlowLogForUi(log), ...(state.runtime.flowLogs || [])];
   setRuntimeSignal(state.runtime);
   return true;
 };

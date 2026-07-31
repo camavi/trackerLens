@@ -177,7 +177,7 @@ window.TrackerLensActionRuntime = (() => {
     }
     const text = await response.text().catch(() => "");
     if (!response.ok) {
-      const error = new Error(`HTTP ${response.status}${text ? `: ${text.slice(0, 180)}` : ""}`);
+      const error = new Error(`HTTP ${response.status}${text ? `: ${text}` : ""}`);
       error.runtimeRequest = {
         type: "fetch",
         errorKind: "http",
@@ -189,7 +189,7 @@ window.TrackerLensActionRuntime = (() => {
       };
       throw error;
     }
-    return { status: response.status, ok: true, endpoint: target, method, body: text.slice(0, 1000) };
+    return { status: response.status, ok: true, endpoint: target, method, body: text };
   };
 
   const telegramTarget = (config = {}) => {

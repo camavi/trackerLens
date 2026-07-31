@@ -144,7 +144,7 @@ window.TrackerLensAgentRuntime = (() => {
         ? declared
         : [];
     const source = declaredTools.length ? declaredTools : defaultAgentToolsForNode(node);
-    return source.map((tool) => normalizeAgentTool(tool, node)).filter(Boolean).slice(0, 24);
+    return source.map((tool) => normalizeAgentTool(tool, node)).filter(Boolean);
   };
 
   const portName = (port = "") =>
@@ -285,9 +285,9 @@ window.TrackerLensAgentRuntime = (() => {
     return [];
   };
 
-  const compactText = (value = "", max = 1200) => {
+  const compactText = (value = "", max = 0) => {
     const text = String(value || "").replace(/\s+/g, " ").trim();
-    if (!text || text.length <= max) return text;
+    if (!text || !Number.isFinite(Number(max)) || Number(max) <= 0 || text.length <= Number(max)) return text;
     return `${text.slice(0, Math.max(0, max)).trim()}...`;
   };
 
@@ -305,12 +305,12 @@ window.TrackerLensAgentRuntime = (() => {
 
   const queryTokens = (query = "") => {
     const stop = new Set(["the", "and", "that", "this", "with", "from", "come", "cosa", "che", "chi", "per", "con", "del", "della", "una", "uno", "que", "por", "para", "avec", "pour"]);
-    return [...new Set(normalizeSearchText(query).split(/\s+/).filter((token) => token.length >= 2 && !stop.has(token)))].slice(0, 32);
+    return [...new Set(normalizeSearchText(query).split(/\s+/).filter((token) => token.length >= 2 && !stop.has(token)))];
   };
 
   const expandedQueryTokens = (query = "") => {
     const tokens = queryTokens(query);
-    return tokens.slice(0, 48);
+    return tokens;
   };
 
   const scopedDocumentRecords = async ({ workspaceId = "", node = {}, args = {} } = {}) => {
@@ -362,8 +362,8 @@ window.TrackerLensAgentRuntime = (() => {
 
   const evidenceText = (value = null) => {
     if (!value) return "";
-    if (typeof value === "string") return compactText(value, 1200);
-    return compactText(value.quote || value.text || value.excerpt || value.sentence || "", 1200);
+    if (typeof value === "string") return compactText(value);
+    return compactText(value.quote || value.text || value.excerpt || value.sentence || "");
   };
 
   const entryMatchesNodeScope = ({ entry = {}, node = {}, config = {}, documentIds = null } = {}) => {
@@ -448,7 +448,7 @@ window.TrackerLensAgentRuntime = (() => {
       relation.sourceLabel,
       relation.relationType,
       relation.targetLabel,
-    ].filter(Boolean).join(" "), 1200),
+    ].filter(Boolean).join(" ")),
   });
 
   const toolEnvelope = ({ ok = true, tool = "", node = {}, status = "ready", answer = "", items = [], evidence = [], confidence = 0, limitations = [], usage = {}, debug = {} } = {}) => ({
@@ -471,9 +471,9 @@ window.TrackerLensAgentRuntime = (() => {
     const scopeDebug = {
       documentCount: documents.length,
       chunkCount: chunks.length,
-      documentIds: documents.map((document) => document.id || "").filter(Boolean).slice(0, 12),
-      chunkIds: chunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 12),
-      collectionIds: uniqueStrings(documents.map((document) => document.metadata?.collectionId || "").filter(Boolean)).slice(0, 8),
+      documentIds: documents.map((document) => document.id || "").filter(Boolean),
+      chunkIds: chunks.map((chunk) => chunk.id || "").filter(Boolean),
+      collectionIds: uniqueStrings(documents.map((document) => document.metadata?.collectionId || "").filter(Boolean)),
       argsDocumentId: args.documentId || "",
       argsCollectionId: args.collectionId || "",
       configDocumentId: nodeConfig(node).documentId || "",
@@ -501,7 +501,7 @@ window.TrackerLensAgentRuntime = (() => {
       });
     }
     if (tool === "getFullDocument") {
-      const maxChars = Math.max(1000, Math.min(120000, Number(args.maxChars || 24000)));
+      const maxChars = Number.isFinite(Number(args.maxChars)) && Number(args.maxChars) > 0 ? Math.floor(Number(args.maxChars)) : 0;
       const document = documents.find((item) => !args.documentId || item.id === args.documentId) || documents[documents.length - 1] || null;
       if (!document) {
         return toolEnvelope({ ok: false, tool, node, status: "empty", limitations: ["No scoped document found."], confidence: 0, debug: scopeDebug });
@@ -513,7 +513,7 @@ window.TrackerLensAgentRuntime = (() => {
       const storedText = String(document.text || "");
       const text = chunkText.length > storedText.length ? chunkText : storedText;
       const sourceMode = chunkText.length > storedText.length ? "chunks" : "document";
-      const clipped = text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
+      const clipped = maxChars > 0 && text.length > maxChars ? `${text.slice(0, maxChars).trim()}...` : text;
       return toolEnvelope({
         tool,
         node,
@@ -521,19 +521,19 @@ window.TrackerLensAgentRuntime = (() => {
         items: [{ documentId: document.id, title: document.title || "", text: clipped }],
         evidence: [{ sourceType: "document", documentId: document.id || "", chunkId: "", ordinal: null, text: clipped }],
         confidence: text ? 0.95 : 0.2,
-        limitations: text.length > maxChars ? [`Document truncated to ${maxChars} characters.`] : [],
+        limitations: maxChars > 0 && text.length > maxChars ? [`Document truncated by explicit maxChars=${maxChars}.`] : [],
         debug: {
           ...scopeDebug,
           selectedDocumentId: document.id || "",
           sourceMode,
           selectedChunkCount: documentChunks.length,
-          selectedChunkIds: documentChunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 24),
-          selectedOrdinals: documentChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
+          selectedChunkIds: documentChunks.map((chunk) => chunk.id || "").filter(Boolean),
+          selectedOrdinals: documentChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null),
           storedDocumentChars: storedText.length,
           reconstructedChunkChars: chunkText.length,
           fullDocumentChars: text.length,
           returnedChars: clipped.length,
-          truncated: text.length > maxChars,
+          truncated: maxChars > 0 && text.length > maxChars,
           maxChars,
         },
       });
@@ -543,7 +543,7 @@ window.TrackerLensAgentRuntime = (() => {
       if (!tokens.length) {
         return toolEnvelope({ ok: false, tool, node, status: "invalid", limitations: ["Missing query tokens."], confidence: 0, debug: scopeDebug });
       }
-      const limit = Math.max(1, Math.min(24, Number(args.limit || 6)));
+      const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : Number.POSITIVE_INFINITY;
       const candidates = chunks.length
         ? chunks
         : documents.map((document, index) => ({ id: `document_${document.id}`, documentId: document.id, ordinal: index, text: document.text || "", metadata: { title: document.title || "" } }));
@@ -557,7 +557,8 @@ window.TrackerLensAgentRuntime = (() => {
         .filter((item) => item.score > 0)
         .sort((a, b) => b.score - a.score || Number(a.chunk.ordinal ?? 0) - Number(b.chunk.ordinal ?? 0))
         .slice(0, limit);
-      const evidence = ranked.map((item) => evidenceFromChunk(item.chunk, compactText(item.chunk.text || "", Math.max(400, Math.min(2400, Number(args.maxChars || 900))))));
+      const maxChars = Number.isFinite(Number(args.maxChars)) && Number(args.maxChars) > 0 ? Math.floor(Number(args.maxChars)) : 0;
+      const evidence = ranked.map((item) => evidenceFromChunk(item.chunk, compactText(item.chunk.text || "", maxChars)));
       return toolEnvelope({
         tool,
         node,
@@ -567,7 +568,7 @@ window.TrackerLensAgentRuntime = (() => {
           ordinal: item.chunk.ordinal ?? item.chunk.index ?? null,
           score: item.score,
           matches: item.matches,
-          text: compactText(item.chunk.text || "", Math.max(400, Math.min(2400, Number(args.maxChars || 900)))),
+          text: compactText(item.chunk.text || "", maxChars),
         })),
         evidence,
         confidence: ranked.length ? Math.min(0.95, 0.45 + ranked[0].score * 0.08) : 0,
@@ -577,10 +578,10 @@ window.TrackerLensAgentRuntime = (() => {
           queryTokens: tokens,
           candidateCount: candidates.length,
           selectedChunkCount: ranked.length,
-          selectedChunkIds: ranked.map((item) => item.chunk.id || "").filter(Boolean).slice(0, 24),
-          selectedOrdinals: ranked.map((item) => item.chunk.ordinal ?? item.chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
-          selectedDocumentIds: uniqueStrings(ranked.map((item) => item.chunk.documentId || "").filter(Boolean)).slice(0, 12),
-          maxChars: Math.max(400, Math.min(2400, Number(args.maxChars || 900))),
+          selectedChunkIds: ranked.map((item) => item.chunk.id || "").filter(Boolean),
+          selectedOrdinals: ranked.map((item) => item.chunk.ordinal ?? item.chunk.index ?? null).filter((value) => value !== null),
+          selectedDocumentIds: uniqueStrings(ranked.map((item) => item.chunk.documentId || "").filter(Boolean)),
+          maxChars,
         },
       });
     }
@@ -611,9 +612,9 @@ window.TrackerLensAgentRuntime = (() => {
         debug: {
           ...scopeDebug,
           selectedChunkCount: windowChunks.length,
-          selectedChunkIds: windowChunks.map((chunk) => chunk.id || "").filter(Boolean).slice(0, 24),
-          selectedOrdinals: windowChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null).slice(0, 24),
-          selectedDocumentIds: uniqueStrings(windowChunks.map((chunk) => chunk.documentId || "").filter(Boolean)).slice(0, 12),
+          selectedChunkIds: windowChunks.map((chunk) => chunk.id || "").filter(Boolean),
+          selectedOrdinals: windowChunks.map((chunk) => chunk.ordinal ?? chunk.index ?? null).filter((value) => value !== null),
+          selectedDocumentIds: uniqueStrings(windowChunks.map((chunk) => chunk.documentId || "").filter(Boolean)),
         },
       });
     }
@@ -622,7 +623,7 @@ window.TrackerLensAgentRuntime = (() => {
 
   const runDictionaryTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
     const entries = await scopedKnowledgeRecords({ workspaceId, node, args, store: "dictionary" });
-    const limit = Math.max(1, Math.min(80, Number(args.limit || 12)));
+    const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : Number.POSITIVE_INFINITY;
     const term = String(args.term || args.query || "").trim();
     const tokens = expandedQueryTokens(term);
     const ranked = entries
@@ -659,7 +660,7 @@ window.TrackerLensAgentRuntime = (() => {
         relationCues: entry.relationCues || [],
         confidence: entry.confidence || 0,
         evidence: evidenceText(entry.evidence),
-        evidencePack: (entry.evidencePack || []).slice(0, 8),
+        evidencePack: entry.evidencePack || [],
         evidenceCount: Array.isArray(entry.evidencePack) ? entry.evidencePack.length : 0,
         score,
       }));
@@ -741,7 +742,7 @@ window.TrackerLensAgentRuntime = (() => {
   const runEventTool = async ({ workspaceId = "", node = {}, tool = "", args = {} } = {}) => {
     const events = (await scopedKnowledgeRecords({ workspaceId, node, args, store: "events" }))
       .sort((a, b) => Number(a.sequence ?? 0) - Number(b.sequence ?? 0));
-    const limit = Math.max(1, Math.min(80, Number(args.limit || 18)));
+    const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : Number.POSITIVE_INFINITY;
     if (tool === "getTimeline" || tool === "findEvents") {
       const hasFilter = Boolean(String(args.query || args.participant || args.eventType || "").trim());
       const ranked = hasFilter ? rankEvents(events, args) : events.map((event) => ({ event, score: Number(event.confidence || 0) }));
@@ -829,7 +830,7 @@ window.TrackerLensAgentRuntime = (() => {
       .filter((chunk) => relationChunkIds.has(chunk.id) || entityChunkIds.has(chunk.id));
     const entityById = new Map(entities.map((entity) => [entity.id, entity]));
     const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
-    const limit = Math.max(1, Math.min(80, Number(args.limit || 18)));
+    const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : Number.POSITIVE_INFINITY;
     if (tool === "findEntities") {
       const tokens = expandedQueryTokens(args.query || "");
       const entityType = normalizeSearchText(args.entityType || "");
@@ -863,7 +864,7 @@ window.TrackerLensAgentRuntime = (() => {
         })),
         evidence: ranked.map(({ entity }) => {
           const chunk = chunkById.get(entity.chunkId || "");
-          return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || "", 900));
+          return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || ""));
         }).filter((item) => item.text),
         confidence: ranked.length ? Math.min(0.95, 0.45 + Number(ranked[0].score || 0) * 0.07) : 0,
         limitations: ranked.length ? [] : ["No graph entities matched the request in this node scope."],
@@ -942,7 +943,7 @@ window.TrackerLensAgentRuntime = (() => {
       const relationEvidence = selectedRelations.map((relation) => evidenceFromRelation(relation, chunkById.get(relation.chunkId || ""))).filter((item) => item.text);
       const entityEvidence = selectedEntities.map((entity) => {
         const chunk = chunkById.get(entity.chunkId || "");
-        return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || "", 900));
+        return evidenceFromChunk(chunk || entity, evidenceText(entity.metadata?.ai?.evidence) || compactText(chunk?.text || entity.label || ""));
       }).filter((item) => item.text);
       const evidence = [...relationEvidence, ...entityEvidence].slice(0, limit);
       return toolEnvelope({
@@ -1092,7 +1093,7 @@ window.TrackerLensAgentRuntime = (() => {
       } : null,
       dependencies: inspected.dependencies || [],
       connectedTools: inspected.node ? await inspectConnectedTools({ workspaceId: effectiveWorkspaceId, nodeId }) : null,
-      recentEvents: (inspected.events || []).slice(0, 10),
+      recentEvents: inspected.events || [],
       impact: inspected.impact || null,
     };
   };
@@ -1261,18 +1262,19 @@ window.TrackerLensAgentRuntime = (() => {
     });
   };
 
-  const readLogs = async ({ workspaceId = "", nodeId = "", runId = "", limit = 30 } = {}) => {
+  const readLogs = async ({ workspaceId = "", nodeId = "", runId = "", limit = 0 } = {}) => {
+    const explicitLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : Number.POSITIVE_INFINITY;
     const snapshot = await buildSnapshot(workspaceId);
     const events = snapshot.runtime?.events || [];
     const flowLogs = snapshot.runtime?.flowLogs || [];
     const filteredEvents = events
       .filter((event) => !nodeId || event.sourceNodeId === nodeId || event.targetNodeId === nodeId)
       .filter((event) => !runId || event.runId === runId || event.payload?.runId === runId || event.meta?.runId === runId)
-      .slice(0, limit);
+      .slice(0, explicitLimit);
     const filteredLogs = flowLogs
       .filter((log) => !nodeId || log.nodeId === nodeId || log.sourceNodeId === nodeId || log.targetNodeId === nodeId)
       .filter((log) => !runId || log.runId === runId || log.context?.runId === runId)
-      .slice(0, limit);
+      .slice(0, explicitLimit);
     return {
       version: VERSION,
       readAt: nowIso(),
@@ -1292,7 +1294,7 @@ window.TrackerLensAgentRuntime = (() => {
       issues.push({ level: "error", type: "node", nodeId, message: "node not found" });
     }
 
-    issues.slice(0, 24).forEach((issue) => {
+    issues.forEach((issue) => {
       const dependency = dependencies.find((item) => item.id === issue.id || item.connectionId === issue.id) || null;
       const source = lookup.get(issue.sourceNodeId || dependency?.sourceNodeId || "");
       const target = lookup.get(issue.targetNodeId || dependency?.targetNodeId || "");
@@ -1420,7 +1422,6 @@ window.TrackerLensAgentRuntime = (() => {
     nodes
       .filter((node) => (!incomingFor(dependencies, node.id).length && !outgoingFor(dependencies, node.id).length))
       .filter((node) => !nodeId || node.id === nodeId)
-      .slice(0, 8)
       .forEach((node) => {
         fixes.push(makeFix({
           type: "inspect-isolated-node",
@@ -1552,7 +1553,7 @@ window.TrackerLensAgentRuntime = (() => {
     return {
       version: VERSION,
       suggestedAt: nowIso(),
-      fixes: dedupeFixes(fixes).slice(0, 20),
+      fixes: dedupeFixes(fixes),
       issueCount: issues.length,
     };
   };

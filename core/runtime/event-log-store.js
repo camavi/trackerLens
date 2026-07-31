@@ -13,8 +13,8 @@ window.TrackerLensEventLogStore = (() => {
     { name: STORES.flowLogs, columns: [{ name: "workspaceId" }, { name: "flowId" }, { name: "createdAt" }] },
   ];
   const DEFAULT_RETENTION = {
-    eventLimit: 500,
-    flowLogLimit: 300,
+    eventLimit: 0,
+    flowLogLimit: 0,
   };
   const SETTINGS_STORE = tableName("TL_SETTINGS", "tl_settings");
   const SETTINGS_RECORD_ID = "global";
@@ -131,16 +131,20 @@ window.TrackerLensEventLogStore = (() => {
         request.onerror = () => resolve({});
       });
       const storage = settings?.storage || {};
+      const eventLimit = Number(storage.runtimeEventLimit ?? DEFAULT_RETENTION.eventLimit);
+      const flowLogLimit = Number(storage.runtimeFlowLogLimit ?? DEFAULT_RETENTION.flowLogLimit);
       return {
-        eventLimit: Math.min(5000, Math.max(50, Number(storage.runtimeEventLimit || DEFAULT_RETENTION.eventLimit))),
-        flowLogLimit: Math.min(3000, Math.max(50, Number(storage.runtimeFlowLogLimit || DEFAULT_RETENTION.flowLogLimit))),
+        eventLimit: Number.isFinite(eventLimit) && eventLimit > 0 ? Math.floor(eventLimit) : 0,
+        flowLogLimit: Number.isFinite(flowLogLimit) && flowLogLimit > 0 ? Math.floor(flowLogLimit) : 0,
       };
     } finally {
       db.close();
     }
   };
 
-  const pruneByScope = async ({ storeName, workspaceId = "global", channel = "", limit = 500 }) => {
+  const pruneByScope = async ({ storeName, workspaceId = "global", channel = "", limit = 0 }) => {
+    const explicitLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 0;
+    if (!explicitLimit) return false;
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -152,7 +156,7 @@ window.TrackerLensEventLogStore = (() => {
             .filter((record) => record.workspaceId === workspaceId)
             .filter((record) => !channel || record.channel === channel)
             .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-          records.slice(limit).forEach((record) => store.delete(record.id));
+          records.slice(explicitLimit).forEach((record) => store.delete(record.id));
         };
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(event.target.error || new Error(`Errore cleanup ${storeName}`));
@@ -162,10 +166,10 @@ window.TrackerLensEventLogStore = (() => {
     }
   };
 
-  const cleanupEvents = ({ workspaceId = "global", channel = "", limit = 500 } = {}) =>
+  const cleanupEvents = ({ workspaceId = "global", channel = "", limit = 0 } = {}) =>
     pruneByScope({ storeName: STORES.events, workspaceId, channel, limit });
 
-  const cleanupFlowLogs = ({ workspaceId = "global", limit = 300 } = {}) =>
+  const cleanupFlowLogs = ({ workspaceId = "global", limit = 0 } = {}) =>
     pruneByScope({ storeName: STORES.flowLogs, workspaceId, limit });
 
   const applyRetentionPolicy = async (policy = null) => {

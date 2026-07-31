@@ -58,9 +58,9 @@ window.TrackerLensSandboxPolicy = (() => {
   const normalizeLimits = (manifest = {}) => {
     const limits = manifest.limits || manifest.runtime?.limits || {};
     return {
-      timeoutMs: Math.min(5000, Math.max(100, Number(limits.timeoutMs || limits.timeout || DEFAULT_POLICY.limits.timeoutMs))),
-      memoryMb: Math.min(64, Math.max(4, Number(limits.memoryMb || limits.memory || DEFAULT_POLICY.limits.memoryMb))),
-      maxPayloadKb: Math.min(1024, Math.max(16, Number(limits.maxPayloadKb || limits.maxPayload || DEFAULT_POLICY.limits.maxPayloadKb))),
+      timeoutMs: Math.max(1, Number(limits.timeoutMs || limits.timeout || DEFAULT_POLICY.limits.timeoutMs)),
+      memoryMb: Math.max(1, Number(limits.memoryMb || limits.memory || DEFAULT_POLICY.limits.memoryMb)),
+      maxPayloadKb: Math.max(1, Number(limits.maxPayloadKb || limits.maxPayload || DEFAULT_POLICY.limits.maxPayloadKb)),
     };
   };
 

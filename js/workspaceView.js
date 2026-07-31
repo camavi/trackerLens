@@ -572,12 +572,11 @@ const clonePayloadSnapshot = (payload) => {
 };
 
 const previewPayload = (payload) => {
-  const text = compactJson(payload);
-  return text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
+  return compactJson(payload);
 };
 
 const previewPayloadText = (text = "") =>
-  text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
+  text;
 
 const normalizePayloadText = (value, fallbackPayload) => {
   const text = String(value || "").trim();
@@ -717,7 +716,7 @@ const pushTrackerLog = (entry) => {
     payloadText,
   };
   workspaceViewState.trackerLog.unshift(logEntry);
-  workspaceViewState.trackerLog = workspaceViewState.trackerLog.slice(0, 30);
+  workspaceViewState.trackerLog = workspaceViewState.trackerLog;
   if (workspaceViewState.trackerLogPaused) {
     workspaceViewState.trackerLogPending += 1;
   }
@@ -810,7 +809,7 @@ const renderTrackerPulse = (stat) =>
 
 const renderPayloadFields = (payload) => {
   const entries = payload && typeof payload === "object" && !Array.isArray(payload)
-    ? Object.entries(payload).filter(([key]) => !key.startsWith("_")).slice(0, 8)
+    ? Object.entries(payload).filter(([key]) => !key.startsWith("_"))
     : [];
   if (!entries.length) return _.div({ class: "tl-monitor-empty-line" }, "Nessun campo payload leggibile");
 
@@ -820,7 +819,7 @@ const renderPayloadFields = (payload) => {
       _.div(
         { class: "tl-monitor-field" },
         _.span(payloadFieldLabel(key)),
-        _.strong(typeof value === "object" ? compactJson(value).slice(0, 80) : shortValue(value))
+        _.strong(typeof value === "object" ? compactJson(value) : shortValue(value))
       )
     )
   );
@@ -1406,7 +1405,7 @@ const emitTrackerEvent = (fromBoxId, channel = "default", payload = {}, payloadT
     fromBoxId,
     channel,
     hasBus: Boolean(runtimeEventBus()?.emit),
-    payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 12) : [],
+    payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
   });
   recordTrackerEvent(fromBoxId, channel, payload, payloadText);
 
@@ -1618,7 +1617,7 @@ const parseFeedPayload = (xmlText) => {
   const parseError = xml.querySelector("parsererror");
   if (parseError) throw new Error("Feed RSS/Atom non valido.");
 
-  const nodes = [...xml.querySelectorAll("item, entry")].slice(0, 10);
+  const nodes = [...xml.querySelectorAll("item, entry")];
   const items = nodes.map((node) => ({
     title: node.querySelector("title")?.textContent?.trim() || "",
     link: node.querySelector("link")?.getAttribute("href") || node.querySelector("link")?.textContent?.trim() || "",
@@ -1637,7 +1636,7 @@ const parseResponsePayload = async (response, source) => {
   const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text.slice(0, 180) || response.statusText}`);
+    throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
   }
 
   if (source === "rss" || contentType.includes("xml") || contentType.includes("rss") || contentType.includes("atom")) {
@@ -1804,7 +1803,7 @@ const startWebSocketTrackerRuntime = (box, tracker, emit) => {
         boxId: box.id,
         channel: tracker.outputChannel || trackerChannel(box),
         rawLength: String(event.data || "").length,
-        payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 12) : [],
+        payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
       });
       emit(payload, event.data);
     };

@@ -474,6 +474,14 @@ const renderSettingInput = (path, props = {}) =>
     },
   });
 
+const renderSettingNumber = (path, props = {}) =>
+  renderSettingInput(path, {
+    type: "number",
+    step: 1,
+    ...props,
+    onChange: () => saveSettings(true),
+  });
+
 const renderSelect = (label, value, options, onChange = null) =>
   _.Select({
     class: "tl-settings-select",
@@ -757,7 +765,7 @@ const renderAiProvider = () =>
     renderField("Modello predefinito", renderSettingInput("ai.model")),
     renderToggleRow("Local AI first", Boolean(settingsState.settings.ai.localFirst), (checked) => mutateSetting("ai.localFirst", Boolean(checked), { persist: true })),
     renderSettingRange("Temperatura", "ai.temperature", 0, 2, 0.01),
-    renderSettingRange("Token massimi", "ai.maxTokens", 256, 8192, 1),
+    renderField("Token massimi", renderSettingNumber("ai.maxTokens", { min: 1 })),
     btn({ class: "st-btn-primary", onclick: testAiConnection }, icon("radar", "sm"), "Testa Connessione")
   );
 
@@ -802,8 +810,8 @@ const renderStorage = () =>
     renderSettingSelect("Mantieni Logs", "storage.keepLogs", [option("7", "7 giorni"), option("30", "30 giorni"), option("90", "90 giorni")]),
     _.Grid(
       { cols: 2, gap: 12 },
-      renderField("Eventi runtime max", renderSettingInput("storage.runtimeEventLimit", { type: "number", min: 50, max: 5000 })),
-      renderField("Flow logs max", renderSettingInput("storage.runtimeFlowLogLimit", { type: "number", min: 50, max: 3000 }))
+      renderField("Eventi runtime max", renderSettingInput("storage.runtimeEventLimit", { type: "number", min: 0 })),
+      renderField("Flow logs max", renderSettingInput("storage.runtimeFlowLogLimit", { type: "number", min: 0 }))
     ),
     renderSettingToggle("Compressione Dati", "storage.compression"),
     renderSettingToggle("Cleanup automatico", "storage.autoCleanup"),

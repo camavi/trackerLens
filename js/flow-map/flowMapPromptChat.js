@@ -5003,7 +5003,7 @@ const flowPromptCallOpenAiCompatible = async ({ provider = {}, model = "", promp
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
-    throw new Error(`AI HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
+    throw new Error(`AI HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`);
   }
   const data = await response.json();
   return { text: data.choices?.[0]?.message?.content || "", model: resolvedModel, raw: data };

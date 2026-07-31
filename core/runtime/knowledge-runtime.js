@@ -322,10 +322,209 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return textOf(payload?.text || payload?.content || payload?.body || payload?.markdown || payload?.document || payload);
   };
 
-  const compactDebugText = (text = "", limit = 1000) =>
-    String(text || "").replace(/\s+/g, " ").trim().slice(0, limit);
+  const compactDebugText = (text = "", limit = 0) => {
+    const clean = String(text || "").replace(/\s+/g, " ").trim();
+    return Number(limit) > 0 ? clean.slice(0, Number(limit)) : clean;
+  };
 
-  const knowledgeLlmDebug = () => {};
+  const knowledgeRuntimeDebugStack = [];
+
+  const knowledgeRuntimeJsonPreview = (value) => {
+    try {
+      const text = JSON.stringify(value ?? null, null, 2);
+      return text;
+    } catch {
+      return String(value ?? "");
+    }
+  };
+
+  const knowledgeRuntimeResultSummary = (result = null) => {
+    if (!result || typeof result !== "object") return {};
+    return {
+      status: result.status || "",
+      documentId: result.documentId || "",
+      collectionId: result.collectionId || "",
+      provider: result.provider || result.ai?.provider || "",
+      model: result.model || result.ai?.model || "",
+      error: result.error || result.ai?.error || "",
+      fallbackReason: result.fallbackReason || result.ai?.fallbackReason || "",
+      promptMode: result.promptMode || result.ai?.promptMode || "",
+      counts: {
+        documents: result.document ? 1 : undefined,
+        chunks: result.chunkCount ?? result.chunks?.length,
+        dictionary: result.dictionaryCount ?? result.dictionaryEntries?.length,
+        events: result.eventCount ?? result.events?.length,
+        entities: result.entityCount ?? result.entities?.length,
+        relations: result.relationCount ?? result.relations?.length,
+        semanticRelations: result.semanticRelationCount ?? result.semanticRelations?.length,
+        graphEntities: result.graph?.entityCount ?? result.snapshot?.entityCount,
+        graphRelations: result.graph?.relationCount ?? result.snapshot?.relationCount,
+      },
+    };
+  };
+
+  const beginKnowledgeRuntimeDebug = (context = {}) => {
+    const entry = { ...context, entries: [] };
+    knowledgeRuntimeDebugStack.push(entry);
+    return entry;
+  };
+
+  const endKnowledgeRuntimeDebug = (entry = null) => {
+    const index = knowledgeRuntimeDebugStack.lastIndexOf(entry);
+    if (index >= 0) knowledgeRuntimeDebugStack.splice(index, 1);
+  };
+
+  const latestKnowledgeRuntimeDebugEntry = (entry = {}) =>
+    [...(entry.entries || [])].reverse().find((item) => item.type !== "node-input") ||
+    [...(entry.entries || [])].reverse()[0] ||
+    null;
+
+  const knowledgeLlmDebug = (type = "debug", payload = {}) => {
+    const active = knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1];
+    if (!active) return null;
+    const entry = {
+      type,
+      at: nowIso(),
+      ...payload,
+      prompt: payload?.prompt || payload?.promptPreview || "",
+      promptPreview: payload?.promptPreview || payload?.prompt || "",
+    };
+    active.entries.push(entry);
+    if (active.entries.length > 80) active.entries.splice(0, active.entries.length - 80);
+    flushKnowledgeRuntimeDebug(active, { status: "working" });
+    return entry;
+  };
+
+  const knowledgeRuntimeSteps = ({ inputStep = null, debugEntries = [], result = null, outputChannel = "", latencyMs = 0, error = null } = {}) => {
+    const steps = [];
+    if (inputStep) steps.push(inputStep);
+    debugEntries.filter((entry) => entry.type !== "node-input").forEach((entry, index) => {
+      const promptChars = Number(entry.promptChars || 0);
+      const maxTokens = Number(entry.maxTokens || 0);
+      const status = result || outputChannel || error ? "complete" : (entry.status || "working");
+      steps.push({
+        id: `knowledge_llm_${index + 1}`,
+        type: "llm",
+        label: [entry.type || "LLM request", entry.promptMode].filter(Boolean).join(" · "),
+        status,
+        summary: `${entry.promptMode || "request"} · ${[entry.providerType || entry.provider || "", entry.model || ""].filter(Boolean).join(" / ") || "provider"}`,
+        detail: [
+          entry.sentChunkCount || entry.sourceChunkCount ? `${entry.sentChunkCount || 0}/${entry.sourceChunkCount || 0} chunks` : "",
+          promptChars ? `${promptChars} prompt chars` : "",
+          maxTokens ? `${maxTokens} sent max tokens` : "",
+          entry.configuredMaxTokens ? `${entry.configuredMaxTokens} configured max tokens` : "",
+          Number.isFinite(Number(entry.acceptedEntityCount)) ? `${entry.acceptedEntityCount}/${entry.proposedEntityCount ?? "?"} entities accepted` : "",
+          Number.isFinite(Number(entry.acceptedRelationCount)) ? `${entry.acceptedRelationCount}/${entry.proposedRelationCount ?? "?"} relations accepted` : "",
+          entry.error ? `error=${entry.error}` : "",
+        ].filter(Boolean).join(" · "),
+        payload: entry,
+      });
+    });
+    if (result) {
+      const summary = knowledgeRuntimeResultSummary(result);
+      steps.push({
+        id: "knowledge_result",
+        type: "result",
+        label: "Validated result",
+        status: summary.error ? "warning" : "complete",
+        summary: [
+          summary.promptMode ? `promptMode=${summary.promptMode}` : "",
+          summary.fallbackReason ? `fallback=${summary.fallbackReason}` : "",
+          summary.error ? `error=${summary.error}` : "",
+        ].filter(Boolean).join(" · ") || "Runtime result created.",
+        payload: summary,
+      });
+    }
+    if (outputChannel) {
+      steps.push({
+        id: "knowledge_emit",
+        type: "emit",
+        label: "Emitted output",
+        status: "complete",
+        summary: `Output emitted on ${outputChannel}.`,
+        payload: { outputChannel, latencyMs },
+      });
+    }
+    if (error) {
+      steps.push({
+        id: "knowledge_error",
+        type: "error",
+        label: "Runtime error",
+        status: "error",
+        summary: error.message || String(error),
+      });
+    }
+    return steps;
+  };
+
+  const upsertKnowledgeRuntimeJob = async (record = {}) => {
+    if (!window.TrackerLensAiRuntimeStore?.upsertJob) return null;
+    try {
+      return await window.TrackerLensAiRuntimeStore.upsertJob(record);
+    } catch (error) {
+      console.warn("Knowledge runtime job non persistito", error);
+      return null;
+    }
+  };
+
+  const flushKnowledgeRuntimeDebug = (entry = {}, { status = "working" } = {}) => {
+    if (!entry?.jobId || !entry?.nodeId || !entry?.inputStep) return;
+    if (entry.flushTimer) clearTimeout(entry.flushTimer);
+    entry.flushTimer = setTimeout(() => {
+      entry.flushTimer = 0;
+      const latest = latestKnowledgeRuntimeDebugEntry(entry);
+      const steps = knowledgeRuntimeSteps({
+        inputStep: entry.inputStep,
+        debugEntries: entry.entries || [],
+      });
+      const currentStep = steps[steps.length - 1] || entry.inputStep;
+      const provider = latest?.provider || latest?.providerType || entry.provider || "";
+      const model = latest?.model || entry.model || "";
+      upsertKnowledgeRuntimeJob({
+        id: entry.jobId,
+        workspaceId: entry.workspaceId,
+        runId: entry.runId || "",
+        agentId: entry.nodeId,
+        runtimeNodeId: entry.nodeId,
+        agent: entry.nodeLabel || entry.nodeId,
+        task: entry.inputStep?.payload?.inputChannel || "knowledge runtime event",
+        status,
+        runtimeStatus: status,
+        currentStep,
+        steps,
+        provider,
+        model,
+        prompt: latest?.prompt || latest?.promptPreview || "",
+        inputTrace: entry.inputStep.payload || {},
+        result: {
+          status,
+          debug: entry.entries || [],
+        },
+        updatedAt: nowIso(),
+      }).catch(() => null);
+      entry.bus?.emit?.("knowledge.runtime.step", {
+        nodeId: entry.nodeId,
+        status,
+        step: currentStep,
+        promptMode: latest?.promptMode || "",
+        provider,
+        model,
+      }, {
+        workspaceId: entry.workspaceId,
+        eventType: "knowledge_runtime_step",
+        sourceNodeId: entry.nodeId,
+        status,
+        meta: {
+          knowledgeRuntime: entry.nodeId,
+          runtimeActivityVisual: true,
+          runId: entry.runId || "",
+          subtype: entry.subtype || "",
+          stepType: currentStep.type || "",
+          visualUntil: runtimeVisualUntil(),
+        },
+      }).catch(() => null);
+    }, 0);
+  };
 
   const splitConfigList = (value = "") =>
     Array.isArray(value)
@@ -572,10 +771,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const promptChunkTokenBudget = ({ maxChunkTokens = 0, maxChunkChars = 0, defaultChunkTokens = 400 } = {}) => {
     const explicitTokens = Number(maxChunkTokens || 0);
-    if (Number.isFinite(explicitTokens) && explicitTokens > 0) return Math.max(80, Math.floor(explicitTokens));
+    if (Number.isFinite(explicitTokens) && explicitTokens > 0) return Math.max(1, Math.floor(explicitTokens));
     const legacyChars = Number(maxChunkChars || 0);
-    if (Number.isFinite(legacyChars) && legacyChars > 0) return Math.max(80, Math.round(legacyChars / 4));
-    return Math.max(80, Math.floor(Number(defaultChunkTokens || 400)));
+    if (Number.isFinite(legacyChars) && legacyChars > 0) return Math.max(1, Math.round(legacyChars / 4));
+    return Math.max(0, Math.floor(Number(defaultChunkTokens || 0)));
   };
 
   const normalizeChunkStrategy = (strategy = "structured") => {
@@ -854,42 +1053,60 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const knowledgeContextSize = (config = {}, providerType = "", provider = {}) => {
     const explicit = Number(config.contextSize || config.contextWindow || config.contextTokens || config.nCtx || provider.contextSize || provider.nCtx || 0);
-    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    if (Number.isFinite(explicit) && explicit >= 1024) return explicit;
     return isLmStudioProvider(providerType, provider) ? 4096 : 8192;
   };
 
   const knowledgeCompletionLimit = ({ config = {}, providerType = "", provider = {}, requested = 900, min = 128, max = 1800 } = {}) => {
+    const hasExplicitWanted = config.maxTokens !== null && config.maxTokens !== undefined && config.maxTokens !== "";
     const wanted = knowledgeAiNumberConfig(config.maxTokens, requested);
-    const context = knowledgeContextSize(config, providerType, provider);
-    const explicitCompletionLimit = Number(config.completionTokenLimit || config.maxCompletionTokens || provider.completionTokenLimit || provider.maxCompletionTokens || 0);
-    const localCompletionRatio = Number(config.completionContextRatio || provider.completionContextRatio || 0.5);
-    const localLimit = isLmStudioProvider(providerType, provider)
-      ? Math.max(min, Math.min(max, Number.isFinite(explicitCompletionLimit) && explicitCompletionLimit > 0
-        ? explicitCompletionLimit
-        : Math.floor(context * Math.max(0.2, Math.min(0.75, localCompletionRatio)))))
-      : max;
-    return Math.max(min, Math.min(max, wanted, localLimit));
+    if (hasExplicitWanted) return Math.max(1, Math.floor(wanted));
+    const nodeCompletionLimit = Number(config.completionTokenLimit || config.maxCompletionTokens || 0);
+    const providerCompletionLimit = Number(provider.completionTokenLimit || provider.maxCompletionTokens || 0);
+    const explicitCompletionLimit = Number.isFinite(nodeCompletionLimit) && nodeCompletionLimit > 0
+      ? nodeCompletionLimit
+      : Number.isFinite(providerCompletionLimit) && providerCompletionLimit > 0
+        ? providerCompletionLimit
+        : 0;
+    const value = Number.isFinite(explicitCompletionLimit) && explicitCompletionLimit > 0
+      ? explicitCompletionLimit
+      : wanted;
+    return Math.max(1, Math.floor(value));
+  };
+
+  const knowledgeCompletionDebug = ({ config = {}, providerType = "", provider = {}, requested = 900, min = 128, max = 1800 } = {}) => {
+    const hasExplicitWanted = config.maxTokens !== null && config.maxTokens !== undefined && config.maxTokens !== "";
+    const wanted = knowledgeAiNumberConfig(config.maxTokens, requested);
+    const nodeCompletionLimit = hasExplicitWanted ? 0 : Number(config.completionTokenLimit || config.maxCompletionTokens || 0);
+    const providerCompletionLimit = Number(provider.completionTokenLimit || provider.maxCompletionTokens || 0);
+    const explicitCompletionLimit = Number.isFinite(nodeCompletionLimit) && nodeCompletionLimit > 0
+      ? nodeCompletionLimit
+      : !hasExplicitWanted && Number.isFinite(providerCompletionLimit) && providerCompletionLimit > 0
+        ? providerCompletionLimit
+        : 0;
+    const effectiveMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested, min, max });
+    return {
+      hasExplicitWanted,
+      userMaxTokensHonored: hasExplicitWanted,
+      wanted,
+      effectiveMaxTokens,
+      nodeCompletionLimit,
+      providerCompletionLimit,
+      explicitCompletionLimit,
+    };
   };
 
   const knowledgePromptBudget = ({ config = {}, providerType = "", provider = {}, chunksLength = 1, defaultChunkLimit = 8, defaultChunkChars = 1600, defaultChunkTokens = 0 } = {}) => {
-    const local = isLmStudioProvider(providerType, provider);
-    const rawChunkLimit = Math.max(1, Math.min(40, Number(config.maxChunks || defaultChunkLimit || chunksLength || 1)));
-    const rawChunkTokens = Math.max(80, Math.min(1200, promptChunkTokenBudget({
+    const explicitChunkLimit = Number(config.maxChunks || 0);
+    const rawChunkLimit = Number.isFinite(explicitChunkLimit) && explicitChunkLimit > 0
+      ? Math.floor(explicitChunkLimit)
+      : Math.max(1, Number(chunksLength || defaultChunkLimit || 1));
+    const rawChunkTokens = promptChunkTokenBudget({
       maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens || config.tokenBudget,
       maxChunkChars: config.maxChunkChars,
-      defaultChunkTokens: defaultChunkTokens || Math.round((Number(defaultChunkChars) || 1200) / 4),
-    })));
-    if (!local || config.allowLargeLocalContext === true || String(config.allowLargeLocalContext || "").toLowerCase() === "true") {
-      return { chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit), maxChunkTokens: rawChunkTokens, maxChunkChars: rawChunkTokens * 4 };
-    }
-    const context = knowledgeContextSize(config, providerType, provider);
-    const contextScale = context <= 4096 ? 1 : Math.min(2, Math.floor(context / 4096));
-    const localMaxChunkTokens = context <= 4096 ? 225 : 300;
-    return {
-      chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit, Math.max(1, contextScale * 2)),
-      maxChunkTokens: Math.min(rawChunkTokens, localMaxChunkTokens),
-      maxChunkChars: Math.min(rawChunkTokens, localMaxChunkTokens) * 4,
-    };
+      defaultChunkTokens,
+    });
+    return { chunkLimit: Math.min(rawChunkLimit, chunksLength || rawChunkLimit), maxChunkTokens: rawChunkTokens, maxChunkChars: rawChunkTokens > 0 ? rawChunkTokens * 4 : 0 };
   };
 
   const pickEmbeddingProvider = async (config = {}) => {
@@ -1010,7 +1227,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`Embedding HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
+      throw new Error(`Embedding HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`);
     }
     const data = await response.json();
     const vector = extractEmbeddingVector(data);
@@ -1567,14 +1784,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
           options: {
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            num_predict: Math.max(96, Math.min(600, knowledgeAiNumberConfig(config.maxTokens, 360))),
+            num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 360, min: 96 }),
           },
         }
         : {
           model,
           messages: [{ role: "user", content: prompt }],
           temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-          max_tokens: Math.max(96, Math.min(600, knowledgeAiNumberConfig(config.maxTokens, 360))),
+          max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 360, min: 96 }),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
         };
       knowledgeLlmDebug("graph-query-expansion:request", {
@@ -1584,7 +1801,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         model,
         promptChars: prompt.length,
         maxTokens: body.max_tokens || body.options?.num_predict || 0,
-        query: compactDebugText(query, 240),
+        query: compactDebugText(query),
         promptPreview: compactDebugText(prompt),
       });
       const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
@@ -1596,7 +1813,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
       const patch = parseAiJsonObject(text);
       const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
-      const tokens = graphQueryExpansionTokensFromValues(patch?.retrievalTerms || [], { stopWords, queryTokens }).slice(0, 32);
+      const tokens = graphQueryExpansionTokensFromValues(patch?.retrievalTerms || [], { stopWords, queryTokens });
       return {
         tokens,
         provider: provider.id || providerType || "provider",
@@ -1604,8 +1821,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         usage,
         error: patch ? "" : "invalid-ai-json",
         promptMode: "json",
-        intentHints: Array.isArray(patch?.intentHints) ? patch.intentHints.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6) : [],
-        rationale: String(patch?.rationale || "").slice(0, 240),
+        intentHints: Array.isArray(patch?.intentHints) ? patch.intentHints.map((item) => String(item || "").trim()).filter(Boolean) : [],
+        rationale: String(patch?.rationale || ""),
       };
     } catch (error) {
       return { tokens: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error", promptMode: "" };
@@ -1636,7 +1853,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!["llm", "hybrid"].includes(mode) || !(intent.process || intent.healing || intent.cause)) {
       return { terms: [], operationalTerms: [], transformationTerms: [], outcomeTerms: [], downrankTerms: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
     }
-    const chunkLimit = Math.max(6, Math.min(24, Number(config.mechanismCueChunkLimit || config.maxChunks || 24)));
+    const configuredMechanismChunkLimit = Number(config.mechanismCueChunkLimit || config.maxChunks || 0);
+    const chunkLimit = Number.isFinite(configuredMechanismChunkLimit) && configuredMechanismChunkLimit > 0
+      ? Math.floor(configuredMechanismChunkLimit)
+      : chunks.length;
     const candidateChunks = [...(Array.isArray(chunks) ? chunks : [])]
       .slice(0, chunkLimit)
       .sort((left, right) => Number(left.ordinal ?? left.index ?? 0) - Number(right.ordinal ?? right.index ?? 0))
@@ -1648,7 +1868,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           promptChunkTokenBudget({
             maxChunkTokens: config.mechanismCueChunkTokens || config.maxChunkTokens || config.aiChunkTokens,
             maxChunkChars: config.mechanismCueChunkChars || config.maxChunkChars,
-            defaultChunkTokens: 155,
+              defaultChunkTokens: 0,
           })
         ),
       }))
@@ -1666,7 +1886,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ...(item.participants || []),
         item.evidence?.quote || item.evidence?.text || "",
       ].join(" ")).join(" "),
-      (Array.isArray(relations) ? relations : []).slice(0, 80).map((item) => [
+      (Array.isArray(relations) ? relations : []).map((item) => [
         item.sourceLabel,
         item.targetLabel,
         item.relationType,
@@ -1732,17 +1952,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
         query,
         detectedIntent: intent,
         chunks: candidateChunks,
-        events: (Array.isArray(events) ? events : []).slice(0, 24).map((item) => ({
+        events: (Array.isArray(events) ? events : []).map((item) => ({
           sequence: item.sequence ?? null,
           subject: item.subject || "",
           eventType: item.eventType || "",
           objects: item.objects || [],
-          quote: String(item.evidence?.quote || item.evidence?.text || "").slice(0, 220),
+          quote: String(item.evidence?.quote || item.evidence?.text || ""),
         })),
       }),
     ].join("\n\n");
     const cueResultFromPatch = ({ patch = {}, usage = {}, promptMode = "json", model: resultModel = model, error = "" } = {}) => {
-      const normalizeCueList = (values = []) => graphMechanismCueTokensFromValues(values, { stopWords, queryTokens, sourceTokens }).slice(0, 36);
+      const normalizeCueList = (values = []) => graphMechanismCueTokensFromValues(values, { stopWords, queryTokens, sourceTokens });
       const operationalTerms = normalizeCueList(patch.operationalTerms || []);
       const transformationTerms = normalizeCueList(patch.transformationTerms || []);
       const outcomeTerms = normalizeCueList(patch.outcomeTerms || []);
@@ -1759,7 +1979,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         usage,
         error,
         promptMode,
-        rationale: String(patch.rationale || "").slice(0, 240),
+        rationale: String(patch.rationale || ""),
       };
     };
     try {
@@ -1776,14 +1996,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
           options: {
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            num_predict: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
+            num_predict: knowledgeCompletionLimit({ config: { ...config, maxTokens: config.mechanismCueMaxTokens || config.maxTokens }, providerType, provider, requested: 420, min: 160 }),
           },
         }
         : withJsonObjectResponseFormat({
           model,
           messages: [{ role: "user", content: prompt }],
           temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-          max_tokens: Math.max(160, Math.min(720, knowledgeAiNumberConfig(config.mechanismCueMaxTokens || config.maxTokens, 420))),
+          max_tokens: knowledgeCompletionLimit({ config: { ...config, maxTokens: config.mechanismCueMaxTokens || config.maxTokens }, providerType, provider, requested: 420, min: 160 }),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
         }, providerType, config);
       knowledgeLlmDebug("graph-mechanism-cues:request", {
@@ -1794,7 +2014,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         promptChars: prompt.length,
         chunkCount: candidateChunks.length,
         maxTokens: body.max_tokens || body.options?.num_predict || 0,
-        query: compactDebugText(query, 240),
+        query: compactDebugText(query),
         promptPreview: compactDebugText(prompt),
       });
       let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
@@ -1828,11 +2048,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
             downrankTerms: [],
             rationale: "",
           }),
-          JSON.stringify({ rawResponse: String(text || "").slice(0, 3000), chunks: candidateChunks, query }),
+          JSON.stringify({ rawResponse: String(text || ""), chunks: candidateChunks, query }),
         ].join("\n\n");
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 520, min: 1 });
         const repairBody = providerType === "ollama"
-          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: 520 } }
-          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: 520, top_p: 0.9 }, providerType, config);
+          ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
+          : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
         let repairResponse = await postChatJson({ url, body: repairBody, headers: headersForProvider(provider, config) });
         let repairErrorText = repairResponse.ok ? "" : await chatErrorText(repairResponse);
         if (!repairResponse.ok && providerType !== "ollama" && /json|format/i.test(repairErrorText)) {
@@ -1861,7 +2082,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             .map((item) => item.trim())
             .filter(Boolean)),
           { stopWords, queryTokens, sourceTokens }
-        ).slice(0, 36);
+        );
         if (salvagedTerms.length) {
           return cueResultFromPatch({
             patch: {
@@ -1908,7 +2129,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         : {};
     const cueList = (items = []) => graphQueryExpansionTokensFromValues(
       Array.isArray(items) ? items : String(items || "").split(/[\s,;]+/g)
-    ).slice(0, 48);
+    );
     const operationalTerms = cueList(cue.operationalTerms || cue.operationTerms || []);
     const transformationTerms = cueList(cue.transformationTerms || cue.transformTerms || []);
     const outcomeTerms = cueList(cue.outcomeTerms || cue.resultTerms || []);
@@ -1918,7 +2139,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ...operationalTerms,
       ...transformationTerms,
       ...outcomeTerms,
-    ]).slice(0, 64);
+    ]);
     return {
       terms,
       operationalTerms,
@@ -1930,7 +2151,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       usage: cue.usage && typeof cue.usage === "object" ? cue.usage : {},
       error: String(cue.error || value?.error || ""),
       promptMode: String(cue.promptMode || value?.promptMode || ""),
-      rationale: String(cue.rationale || value?.rationale || "").slice(0, 240),
+      rationale: String(cue.rationale || value?.rationale || ""),
       external,
       sourceNodeId: String(cue.sourceNodeId || value?.sourceNodeId || sourceNodeId || ""),
       id: String(value?.mechanismCueId || cue.id || value?.id || ""),
@@ -2373,7 +2594,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!cleanText || !cleanTerm) return { text: "", quote: "", startOffset: null, endOffset: null };
     const positions = entityLabelPositions(cleanText, cleanTerm);
     const position = positions[0] ?? cleanText.toLowerCase().indexOf(cleanTerm.toLowerCase());
-    if (position < 0) return { text: cleanText.slice(0, 240), quote: cleanTerm, startOffset: null, endOffset: null };
+    if (position < 0) return { text: cleanText, quote: cleanTerm, startOffset: null, endOffset: null };
     const start = Math.max(0, cleanText.lastIndexOf(".", position - 1) + 1, position - 140);
     const nextPeriod = cleanText.indexOf(".", position + cleanTerm.length);
     const end = Math.min(cleanText.length, nextPeriod >= 0 ? nextPeriod + 1 : position + cleanTerm.length + 140);
@@ -2759,8 +2980,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ai: {
         aliases,
         typeCandidates: [{ type, confidence, source: "llm-dictionary" }],
-        semanticHints: Array.isArray(item.semanticHints) ? item.semanticHints.map((hint) => String(hint || "").trim()).filter(Boolean).slice(0, 8) : [],
-        relationCues: Array.isArray(item.relationCues) ? item.relationCues.map((cue) => String(cue || "").trim()).filter(Boolean).slice(0, 8) : [],
+        semanticHints: Array.isArray(item.semanticHints) ? item.semanticHints.map((hint) => String(hint || "").trim()).filter(Boolean) : [],
+        relationCues: Array.isArray(item.relationCues) ? item.relationCues.map((cue) => String(cue || "").trim()).filter(Boolean) : [],
         confidence,
         evidence: quoteChunk && quote ? {
           text: quote,
@@ -2768,7 +2989,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           startOffset: String(termChunk.text || "").indexOf(quote),
           endOffset: String(termChunk.text || "").indexOf(quote) >= 0 ? String(termChunk.text || "").indexOf(quote) + quote.length : null,
         } : null,
-        explanation: String(item.explanation || "").slice(0, 240),
+        explanation: String(item.explanation || ""),
       },
     };
   };
@@ -2785,7 +3006,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = providerType === "ollama"
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
-    const maxTerms = Math.max(8, Math.min(120, Number(config.maxTerms || 60)));
+    const maxTerms = Number.isFinite(Number(config.maxTerms)) && Number(config.maxTerms) > 0
+      ? Math.floor(Number(config.maxTerms))
+      : Number.POSITIVE_INFINITY;
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
     const configuredMaxChunkTokens = promptBudget.maxChunkTokens;
@@ -2794,13 +3017,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
       configuredChunkLimit,
       Math.min(
         chunks.length,
-        Math.max(1, Math.min(40, Number(
+        Math.max(1, Number(
           config.maxChunkPasses ||
           config.llmChunkPasses ||
           config.chunkPassLimit ||
           config.maxLlmChunks ||
-          (localProvider ? Math.max(8, Math.min(24, chunks.length)) : chunks.length)
-        )))
+          chunks.length
+        ))
       )
     );
     const systemPrompt = knowledgeAiTextConfig(
@@ -2824,9 +3047,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const compact = promptMode === "compact";
         const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
-        const chunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const maxChunkTokens = chunkPass ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : compact ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens;
-        const maxEntries = chunkPass ? Math.min(12, maxTerms) : micro ? Math.min(8, maxTerms) : compact ? Math.min(16, maxTerms) : maxTerms;
+        const chunkLimit = chunkPass ? 1 : configuredChunkLimit;
+        const maxChunkTokens = configuredMaxChunkTokens;
+        const maxEntries = Number.isFinite(maxTerms) ? maxTerms : undefined;
         return [
           systemPrompt,
           promptTemplate,
@@ -2853,7 +3076,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               }],
             },
             language,
-            maxEntries,
+            ...(Number.isFinite(maxEntries) ? { maxEntries } : {}),
             chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({
               id: chunk.id || `chunk_${index + 1}`,
               ordinal: chunk.ordinal ?? chunk.index ?? index,
@@ -2878,7 +3101,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           attemptedChunkCount: attemptedChunkIds.size,
           productiveChunkCount: productiveChunkIds.size || coveredIds.length,
           coveredChunkCount: coveredIds.length,
-          coveredChunkIds: coveredIds.slice(0, 24),
+          coveredChunkIds: coveredIds,
         };
       };
       const validatedDictionaryPatch = (patch = {}, sourceChunks = chunks) =>
@@ -2938,9 +3161,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Schema: {\"entries\":[{\"term\":\"\",\"type\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term\",\"aliases\":[],\"semanticHints\":[],\"relationCues\":[],\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}]}",
           "Keep only entries, labels and quotes already present in the model output. Do not invent new entries, aliases or evidence.",
           "Input:",
-          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
+          rawText,
         ].join("\n\n");
-        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 1 });
         const repairBody = providerType === "ollama"
           ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
@@ -2966,13 +3189,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         return candidates.length ? { candidates, promptMode: `${promptMode}-repair` } : null;
       };
       const runDictionaryPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
-        const micro = promptMode === "micro";
-        const compact = promptMode === "compact";
         const chunkPass = promptMode === "chunk";
-        const sentChunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
+        const sentChunkLimit = chunkPass ? 1 : configuredChunkLimit;
         sourceChunks.slice(0, sentChunkLimit).forEach((chunk) => attemptedChunkIds.add(chunk.id || ""));
         const prompt = promptFor({ promptMode, sourceChunks });
-        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 640, max: 1800 });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 1 });
         const body = providerType === "ollama"
           ? {
             model,
@@ -3263,8 +3484,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const typeCandidates = (candidate.ai?.typeCandidates?.length
         ? (preferLocalType ? [...localTypeCandidates, ...aiTypeCandidates] : [...aiTypeCandidates, ...localTypeCandidates])
         : localTypeCandidates)
-        .filter((item, index, list) => item?.type && list.findIndex((candidateType) => candidateType?.type === item.type) === index)
-        .slice(0, 4);
+        .filter((item, index, list) => item?.type && list.findIndex((candidateType) => candidateType?.type === item.type) === index);
       const localConfidence = Math.min(0.95, 0.48 + Math.min(0.35, candidate.count / 20) + (candidate.source === "proper-noun" ? 0.12 : 0));
       const confidence = candidate.ai?.confidence && !preferLocalType
         ? Math.min(0.98, Number(candidate.ai.confidence || 0))
@@ -3298,7 +3518,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           nodeId: node?.id || "",
           inputChannel: event?.channel || "",
           occurrenceCount: candidate.count,
-          sourceChunkIds: [...candidate.chunkIds].filter(Boolean).slice(0, 12),
+          sourceChunkIds: [...candidate.chunkIds].filter(Boolean),
           mode,
           provider: aiResult.provider || "",
           model: aiResult.model || "",
@@ -3314,12 +3534,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const context = records.length
       ? [
         `Knowledge Dictionary (${language || "auto"}): ${records.length} terms`,
-        ...records.slice(0, 20).map((entry, index) =>
+        ...records.map((entry, index) =>
           `[D${index + 1}] ${entry.term} -> ${entry.typeCandidates?.[0]?.type || "term"} tier=${entry.tier || "weak"} seed=${entry.usableAsSeed ? "yes" : "no"} (${Number(entry.confidence || 0).toFixed(2)})`
         ),
       ].join("\n")
       : "Knowledge Dictionary: no terms";
-    const previewEntries = records.slice(0, Math.max(6, Number(config.previewTerms || 16))).map((entry) => ({
+    const outputEntries = records.map((entry) => ({
       id: entry.id,
       term: entry.term,
       lemma: entry.lemma,
@@ -3329,12 +3549,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       seedScore: entry.seedScore,
       confidence: entry.confidence,
       evidence: entry.evidence,
-      evidencePack: (entry.evidencePack || []).slice(0, 4),
+      evidencePack: entry.evidencePack || [],
       evidenceCount: Array.isArray(entry.evidencePack) ? entry.evidencePack.length : 0,
       source: {
         method: entry.source?.method || "",
         occurrenceCount: entry.source?.occurrenceCount || 0,
-        sourceChunkIds: (entry.source?.sourceChunkIds || []).slice(0, 4),
+        sourceChunkIds: entry.source?.sourceChunkIds || [],
       },
     }));
     return {
@@ -3365,12 +3585,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
           coveredChunkIds: [],
         },
       },
-      dictionaryEntries: previewEntries,
-      dictionaryEntryIds: records.slice(0, Math.max(10, Number(config.previewIds || 40))).map((entry) => entry.id),
-      dictionaryEntryIdsTruncated: records.length > Math.max(10, Number(config.previewIds || 40)),
+      dictionaryEntries: outputEntries,
+      dictionaryEntryIds: records.map((entry) => entry.id),
+      dictionaryEntryIdsTruncated: false,
       dictionaryCount: records.length,
-      previewCount: previewEntries.length,
-      previewTruncated: previewEntries.length < records.length,
+      previewCount: outputEntries.length,
+      previewTruncated: false,
       tierCounts: records.reduce((acc, entry) => {
         const tier = entry.tier || "weak";
         acc[tier] = (acc[tier] || 0) + 1;
@@ -3525,7 +3745,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const narrativeSubjectResolution = ({ subject = "", method = "unresolved", confidence = 0, sentence = "", sourceMention = "", participants = [] } = {}) => ({
     method,
     confidence: Math.max(0, Math.min(1, Number(confidence || 0))),
-    evidenceSpan: String(sentence || "").slice(0, 260),
+    evidenceSpan: String(sentence || ""),
     sourceMention: sourceMention || normalizeKnowledgeEventSubject(subject) || "",
     participants: normalizeKnowledgeEventActorList(participants),
   });
@@ -3778,6 +3998,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const knowledgeAiNumberConfig = (value, fallback = 0) => {
+    if (value === null || value === undefined || value === "") return fallback;
     const number = Number(value);
     return Number.isFinite(number) ? number : fallback;
   };
@@ -3881,7 +4102,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const knowledgeEventCandidateKey = (candidate = {}) => [
     candidate.chunkId || candidate.chunk?.id || "",
     normalizeKnowledgeEventType(candidate.eventType),
-    normalizeKnowledgeText(candidate.evidence?.quote || candidate.quote || "").slice(0, 180),
+    normalizeKnowledgeText(candidate.evidence?.quote || candidate.quote || ""),
   ].join("::");
 
   const normalizeAiKnowledgeEventTypeForEvidence = (eventType = "", quote = "") => {
@@ -3948,7 +4169,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const chunkLimit = chunkPass ? 1 : micro ? 1 : compact ? Math.min(2, promptBudget.chunkLimit, sourceChunks.length) : Math.min(promptBudget.chunkLimit, sourceChunks.length);
       const chunkTokens = chunkPass ? Math.min(225, promptBudget.maxChunkTokens) : micro ? Math.min(175, promptBudget.maxChunkTokens) : compact ? Math.min(250, promptBudget.maxChunkTokens) : promptBudget.maxChunkTokens;
       const termLimit = micro ? 12 : compact ? 24 : 60;
-      const eventLimit = chunkPass ? 8 : micro ? 6 : compact ? 14 : Math.max(1, Math.min(120, Number(config.maxEvents || 80)));
+      const eventLimit = Number.isFinite(Number(config.maxEvents)) && Number(config.maxEvents) > 0
+        ? Math.floor(Number(config.maxEvents))
+        : undefined;
       const schema = {
         events: [{
           eventType: "fills",
@@ -3975,7 +4198,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         "Keep subjects and objects in the source text language when possible.",
         "Prefer events that explain causality, preparation, action, transformation, healing, speech, asking/giving/receiving and conflict.",
         `Allowed eventType values: ${allowedTypes.join(", ")}`,
-        `Limits: events <= ${eventLimit}.`,
+        Number.isFinite(eventLimit) ? `Limits: events <= ${eventLimit}.` : "",
         chunkPass ? "For this chunk pass, extract only from the single supplied chunk." : "",
         "Schema:",
         JSON.stringify(schema),
@@ -4059,9 +4282,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Schema: {\"events\":[{\"eventType\":\"\",\"subject\":\"\",\"objects\":[],\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"rejectedCandidates\":[]}",
           "Keep only items already present in the model output. Do not invent new events, subjects, objects or quotes.",
           "Input:",
-          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
+          rawText,
         ].join("\n\n");
-        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 1 });
         const repairBody = providerType === "ollama"
           ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
@@ -4095,7 +4318,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         });
       const runEventPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
         const prompt = promptFor({ mode: promptMode, sourceChunks });
-        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 160, max: 1200 });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 });
         const body = providerType === "ollama"
           ? {
             model,
@@ -4196,7 +4419,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const llmEvents = [];
       const llmRejectedCandidates = [];
       const llmPromptModes = [];
-      const maxAcceptedEvents = Math.max(1, Math.min(120, Number(config.maxEvents || 80)));
+      const maxAcceptedEvents = Number.isFinite(Number(config.maxEvents)) && Number(config.maxEvents) > 0
+        ? Math.floor(Number(config.maxEvents))
+        : Number.POSITIVE_INFINITY;
       for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runEventPromptAttempt({ promptMode });
         if (Array.isArray(attempt.rejectedCandidates)) llmRejectedCandidates.push(...attempt.rejectedCandidates);
@@ -4209,7 +4434,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const chunkEvents = [];
       const chunkRejectedCandidates = [];
       const chunkPromptModes = [];
-      const chunkPassLimit = Math.min(chunks.length, Math.max(1, Math.min(40, Number(config.maxChunks || chunks.length || 8))));
+      const chunkPassLimit = Math.min(chunks.length, Math.max(1, Number(config.maxChunks || chunks.length || 1)));
       const shouldRunChunkPass = mode === "llm" || (mode === "hybrid" && llmEvents.length < Math.max(1, Math.min(8, Number(config.minHybridAiEvents || 4))));
       for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
         const attempt = await runEventPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
@@ -4226,7 +4451,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (combinedEvents.length) {
         return {
           events: combinedEvents.slice(0, maxAcceptedEvents),
-          rejectedCandidates: combinedRejectedCandidates.slice(0, 60),
+          rejectedCandidates: combinedRejectedCandidates,
           provider: provider.id || providerType || "provider",
           model: lastModel,
           usage: totalUsage,
@@ -4268,7 +4493,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((entry) => !collectionId || entry.collectionId === collectionId);
     const replaceExisting = config.replaceExisting !== false;
     if (replaceExisting && selectedDocumentId) await deleteKnowledgeEvents({ workspaceId, documentId: selectedDocumentId });
-    const maxEvents = Math.max(1, Math.min(240, Number(config.maxEvents || 80)));
+    const maxEvents = Number.isFinite(Number(config.maxEvents)) && Number(config.maxEvents) > 0
+      ? Math.floor(Number(config.maxEvents))
+      : Number.POSITIVE_INFINITY;
     const minConfidence = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.55)));
     const now = nowIso();
     const chunkById = new Map(scopedChunks.map((chunk) => [chunk.id, chunk]));
@@ -4313,7 +4540,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
               confidence,
               evidence: {
                 text: sentence,
-                quote: offsets.quote.slice(0, 520),
+                quote: offsets.quote,
                 startOffset: offsets.startOffset,
                 endOffset: offsets.endOffset,
               },
@@ -4340,7 +4567,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 ...candidateParticipants,
                 ...normalizeKnowledgeEventActorList(previousContext.recentParticipants || []),
                 ...normalizeKnowledgeEventActorList(previousContext.participants || []),
-              ].filter((item) => item && !isKnowledgePronounMention(item))).slice(0, 6),
+              ].filter((item) => item && !isKnowledgePronounMention(item))),
             };
           }
         }
@@ -4358,23 +4585,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       for (const item of (aiResult.events || []).slice(0, maxEvents * 2)) {
         const quote = String(item?.evidence?.quote || item?.quote || "").replace(/\s+/g, " ").trim();
         if (normalizeKnowledgeText(quote).length < 24) {
-          rejectedCandidates.push({ label: item?.eventType || item?.type || "", reason: "event-evidence-too-short", quote: quote.slice(0, 120) });
+          rejectedCandidates.push({ label: item?.eventType || item?.type || "", reason: "event-evidence-too-short", quote });
           continue;
         }
         const normalizedAiEvent = normalizeAiKnowledgeEventTypeForEvidence(item?.eventType || item?.type || "", quote);
         const eventType = normalizedAiEvent.eventType;
         if (!eventType) {
-          rejectedCandidates.push({ label: item?.eventType || "", reason: normalizedAiEvent.reason || "event-type-not-allowed", quote: quote.slice(0, 120) });
+          rejectedCandidates.push({ label: item?.eventType || "", reason: normalizedAiEvent.reason || "event-type-not-allowed", quote });
           continue;
         }
         const chunk = chunkById.get(item?.evidence?.chunkId || item?.chunkId || "") ||
           scopedChunks.find((candidateChunk) => quote && evidenceQuoteInChunk(candidateChunk, quote));
         if (!chunk || !evidenceQuoteInChunk(chunk, quote)) {
-          rejectedCandidates.push({ label: eventType, reason: "missing-event-evidence", quote: quote.slice(0, 120) });
+          rejectedCandidates.push({ label: eventType, reason: "missing-event-evidence", quote });
           continue;
         }
         if (!knowledgeEventQuoteHasCleanBoundary(chunk, quote)) {
-          rejectedCandidates.push({ label: eventType, reason: "event-evidence-boundary-cut", quote: quote.slice(0, 120) });
+          rejectedCandidates.push({ label: eventType, reason: "event-evidence-boundary-cut", quote });
           continue;
         }
         const confidence = Math.min(0.98, Number(item.confidence || 0));
@@ -4409,7 +4636,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           confidence,
           evidence: {
             text: quote,
-            quote: offsets.quote.slice(0, 520),
+            quote: offsets.quote,
             startOffset: offsets.startOffset,
             endOffset: offsets.endOffset,
           },
@@ -4420,7 +4647,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             promptMode: aiResult.promptMode || "",
             promptVersion: "knowledge-event-ai-v1",
           },
-          explanation: String(item.explanation || normalizedAiEvent.reason || "").slice(0, 260),
+          explanation: String(item.explanation || normalizedAiEvent.reason || ""),
         });
       }
     }
@@ -4527,25 +4754,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (records.length) records[records.length - 1].links.nextEventId = record.id;
       records.push(await putRecord(STORES.events, record));
     }
-    const previewLimit = Math.max(10, Number(config.previewEvents || 24));
-    const highValueEventTypes = new Set(["finds", "fills", "immerses", "transforms", "takes", "drinks", "heals", "speaks", "cannot_speak", "seeks", "has_property"]);
-    const previewSelection = unique([
-      ...records.slice(0, Math.min(8, previewLimit)).map((entry) => entry.id),
-      ...records.filter((entry) => highValueEventTypes.has(entry.eventType) && Number(entry.confidence || 0) >= 0.72).map((entry) => entry.id),
-    ])
-      .map((id) => records.find((entry) => entry.id === id))
-      .filter(Boolean)
-      .slice(0, previewLimit)
-      .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+      const highValueEventTypes = new Set(["finds", "fills", "immerses", "transforms", "takes", "drinks", "heals", "speaks", "cannot_speak", "seeks", "has_property"]);
+      const previewSelection = unique([
+        ...records.map((entry) => entry.id),
+        ...records.filter((entry) => highValueEventTypes.has(entry.eventType) && Number(entry.confidence || 0) >= 0.72).map((entry) => entry.id),
+      ])
+        .map((id) => records.find((entry) => entry.id === id))
+        .filter(Boolean)
+        .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
     const context = records.length
       ? [
         `Knowledge Events: ${records.length} ordered event(s)`,
         ...previewSelection.map((entry) =>
-          `[EV${entry.sequence}] ${entry.subject || "event"} -${entry.eventType}-> ${entry.objects.join(", ") || "context"} evidence="${String(entry.evidence?.quote || "").slice(0, 180)}"`
+          `[EV${entry.sequence}] ${entry.subject || "event"} -${entry.eventType}-> ${entry.objects.join(", ") || "context"} evidence="${String(entry.evidence?.quote || "")}"`
         ),
       ].join("\n")
       : "Knowledge Events: none";
-    const previewEvents = previewSelection.map((entry) => ({
+    const outputEvents = previewSelection.map((entry) => ({
       id: entry.id,
       sequence: entry.sequence,
       eventType: entry.eventType,
@@ -4567,9 +4792,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       collectionId,
       documentId: selectedDocumentId,
       eventCount: records.length,
-      events: previewEvents,
-      eventIds: records.slice(0, Math.max(10, Number(config.previewIds || 60))).map((entry) => entry.id),
-      eventIdsTruncated: records.length > Math.max(10, Number(config.previewIds || 60)),
+      events: outputEvents,
+      eventIds: records.map((entry) => entry.id),
+      eventIdsTruncated: false,
       extractionMode,
       provider: aiResult.provider || "",
       model: aiResult.model || "",
@@ -4842,7 +5067,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           startOffset: String(termChunk.text || "").indexOf(quote),
           endOffset: String(termChunk.text || "").indexOf(quote) >= 0 ? String(termChunk.text || "").indexOf(quote) + quote.length : null,
         } : dictionaryEvidenceFor(termChunk.text || "", cleanLabel),
-        explanation: String(item.explanation || "").slice(0, 240),
+        explanation: String(item.explanation || ""),
         proposedType: aiType,
       },
     }, languageConfig);
@@ -4919,7 +5144,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         startOffset: String(termChunk.text || "").indexOf(quote),
         endOffset: String(termChunk.text || "").indexOf(quote) >= 0 ? String(termChunk.text || "").indexOf(quote) + quote.length : null,
       } : dictionaryEvidenceFor(termChunk.text || "", sourceLabel),
-      explanation: String(item.explanation || "").slice(0, 240),
+      explanation: String(item.explanation || ""),
     };
   };
 
@@ -4935,8 +5160,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const model = providerType === "ollama"
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
-    const maxEntities = Math.max(8, Math.min(120, Number(config.maxEntities || 48)));
-    const maxRelations = Math.max(0, Math.min(160, Number(config.maxRelations || 64)));
+    const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
+      ? Math.floor(Number(config.maxEntities))
+      : Number.POSITIVE_INFINITY;
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) >= 0
+      ? Math.floor(Number(config.maxRelations))
+      : Number.POSITIVE_INFINITY;
     const promptBudget = knowledgePromptBudget({ config, providerType, provider, chunksLength: chunks.length, defaultChunkLimit: chunks.length || 8, defaultChunkChars: 1600 });
     const configuredChunkLimit = promptBudget.chunkLimit;
     const configuredMaxChunkTokens = promptBudget.maxChunkTokens;
@@ -4945,14 +5174,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
       configuredChunkLimit,
       Math.min(
         chunks.length,
-        Math.max(1, Math.min(40, Number(
+        Math.max(1, Number(
           config.maxChunkPasses ||
           config.llmChunkPasses ||
           config.chunkPassLimit ||
           config.maxLlmChunks ||
           config.maxChunks ||
-          (localProvider ? Math.max(8, Math.min(24, chunks.length)) : chunks.length)
-        )))
+          chunks.length
+        ))
       )
     );
     const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a Knowledge Entity Extractor. Extract only evidence-backed entities and explicit relations from local chunks, preserving source-language labels and narrative context.");
@@ -4972,8 +5201,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const chunkPass = promptMode === "chunk";
         const chunkLimit = chunkPass ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
         const maxChunkTokens = chunkPass ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : compact ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens;
-        const promptMaxEntities = chunkPass ? Math.min(16, maxEntities) : micro ? Math.min(10, maxEntities) : maxEntities;
-        const promptMaxRelations = micro ? 0 : chunkPass ? Math.min(12, maxRelations) : maxRelations;
+        const promptMaxEntities = Number.isFinite(maxEntities) ? maxEntities : undefined;
+        const promptMaxRelations = micro ? 0 : Number.isFinite(maxRelations) ? maxRelations : undefined;
         const schema = micro
           ? { entities: [{ label: "entity label", entityType: "proper-noun|role|location|object|concept|creature|source|symbol|technology|term", aliases: [], confidence: 0.0, evidence: { quote: "exact quote" }, explanation: "" }], relations: [] }
           : {
@@ -4992,8 +5221,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkPass ? "For this chunk pass, extract only from the single supplied chunk and prefer explicit relations between labels in that chunk." : "",
           JSON.stringify({
             schema,
-            maxEntities: promptMaxEntities,
-            maxRelations: promptMaxRelations,
+            ...(Number.isFinite(promptMaxEntities) ? { maxEntities: promptMaxEntities } : {}),
+            ...(Number.isFinite(promptMaxRelations) ? { maxRelations: promptMaxRelations } : {}),
             allowedRelationTypes: entityAiRelationVocabulary,
             dictionaryTerms: dictionaryEntries.slice(0, micro ? 20 : chunkPass ? 30 : 60).map((entry) => ({ term: entry.term, type: entry.typeCandidates?.[0]?.type || "", aliases: entry.aliases || [] })),
             chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({ id: chunk.id || `chunk_${index + 1}`, ordinal: chunk.ordinal ?? chunk.index ?? index, text: trimTextToEstimatedTokens(chunk.text || "", maxChunkTokens) })),
@@ -5025,9 +5254,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "If a relation does not fit one allowed relationType, omit it.",
           "Keep only items already present in the model output. Do not invent new labels, quotes or relations.",
           "Input:",
-          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
+          rawText,
         ].join("\n\n");
-        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 160, max: 1200 });
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 700, min: 1 });
         const repairBody = providerType === "ollama"
           ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
@@ -5057,11 +5286,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const prompt = promptFor({ promptMode, sourceChunks });
         const entityPromptChunkLimit = promptMode === "chunk" ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : promptMode === "compact" ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 640, max: 1800 });
+        const completionMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1100, min: 1 });
+        const completionDebug = knowledgeCompletionDebug({ config, providerType, provider, requested: 1100, min: 1 });
         const body = providerType === "ollama"
           ? { model, prompt, stream: false, format: "json", options: { temperature: knowledgeAiNumberConfig(config.temperature, 0.05), top_p: knowledgeAiNumberConfig(config.topP, 0.9), num_predict: completionMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: prompt }], temperature: knowledgeAiNumberConfig(config.temperature, 0.05), max_tokens: completionMaxTokens, top_p: knowledgeAiNumberConfig(config.topP, 0.9) }, providerType, config);
-        knowledgeLlmDebug("entity-extractor:request", {
+        const requestDebug = knowledgeLlmDebug("entity-extractor:request", {
+          status: "working",
           mode,
           promptMode,
           provider: provider.id || providerType || "",
@@ -5072,8 +5303,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
           sourceChunkIds: sourceChunks.slice(0, entityPromptChunkLimit).map((chunk) => chunk.id || ""),
           dictionaryTerms: dictionaryEntries.length,
           promptChars: prompt.length,
+          configuredMaxTokens: knowledgeAiNumberConfig(config.maxTokens, 0),
           maxTokens: body.max_tokens || body.options?.num_predict || 0,
-          promptPreview: compactDebugText(prompt),
+          completionDebug,
+          prompt,
+          sentChunks: sourceChunks.slice(0, entityPromptChunkLimit).map((chunk, index) => {
+            const rawText = String(chunk.text || "");
+            const sentText = trimTextToEstimatedTokens(rawText, promptMode === "chunk" ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : promptMode === "compact" ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens);
+            return {
+              id: chunk.id || `chunk_${index + 1}`,
+              ordinal: chunk.ordinal ?? chunk.index ?? index,
+              rawTextChars: rawText.length,
+              sentTextChars: sentText.length,
+              sentText,
+            };
+          }),
         });
         let response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
         let errorText = response.ok ? "" : await chatErrorText(response);
@@ -5085,6 +5329,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         if (!response.ok) {
           lastError = `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`;
+          if (requestDebug) {
+            Object.assign(requestDebug, {
+              status: "error",
+              completedAt: nowIso(),
+              httpStatus: response.status,
+              error: lastError,
+              retryable: response.status === 400 || /context|token|too large|size|json|format/i.test(errorText),
+            });
+            flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
+          }
           return { entities: [], relations: [], error: lastError, retryable: response.status === 400 || /context|token|too large|size|json|format/i.test(errorText) };
         }
         const data = await response.json();
@@ -5096,22 +5350,80 @@ window.TrackerLensKnowledgeRuntime = (() => {
           lastError = "invalid-ai-json";
           const repaired = await repairEntityJson({ text, promptMode });
           if (repaired) {
+            if (requestDebug) {
+              Object.assign(requestDebug, {
+                status: "complete",
+                completedAt: nowIso(),
+                httpStatus: 200,
+                responseChars: String(text || "").length,
+                jsonParsed: false,
+                repaired: true,
+                acceptedEntityCount: repaired.entities.length,
+                acceptedRelationCount: repaired.relations.length,
+              });
+              flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
+            }
             return { entities: repaired.entities, relations: repaired.relations, error: "", promptMode: repaired.promptMode };
+          }
+          if (requestDebug) {
+            Object.assign(requestDebug, {
+              status: "warning",
+              completedAt: nowIso(),
+              httpStatus: 200,
+              responseChars: String(text || "").length,
+              jsonParsed: false,
+              error: lastError,
+              retryable: true,
+            });
+            flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
           }
           return { entities: [], relations: [], error: lastError, retryable: true };
         }
         const { entities, relations } = validatedPatch(patch);
         if (!entities.length && !relations.length && !micro) {
           lastError = "no-valid-ai-entity-candidates";
+          if (requestDebug) {
+            Object.assign(requestDebug, {
+              status: "warning",
+              completedAt: nowIso(),
+              httpStatus: 200,
+              responseChars: String(text || "").length,
+              jsonParsed: true,
+              proposedEntityCount: Array.isArray(patch?.entities) ? patch.entities.length : 0,
+              proposedRelationCount: Array.isArray(patch?.relations) ? patch.relations.length : 0,
+              acceptedEntityCount: 0,
+              acceptedRelationCount: 0,
+              error: lastError,
+              retryable: true,
+            });
+            flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
+          }
           return { entities: [], relations: [], error: lastError, retryable: true };
+        }
+        if (requestDebug) {
+          Object.assign(requestDebug, {
+            status: "complete",
+            completedAt: nowIso(),
+            httpStatus: 200,
+            responseChars: String(text || "").length,
+            jsonParsed: true,
+            proposedEntityCount: Array.isArray(patch?.entities) ? patch.entities.length : 0,
+            proposedRelationCount: Array.isArray(patch?.relations) ? patch.relations.length : 0,
+            acceptedEntityCount: entities.length,
+            acceptedRelationCount: relations.length,
+            error: entities.length || relations.length ? "" : "no-valid-ai-entity-candidates",
+          });
+          flushKnowledgeRuntimeDebug(knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1], { status: "working" });
         }
         return { entities, relations, error: entities.length || relations.length ? "" : "no-valid-ai-entity-candidates", promptMode };
       };
       let fallbackResult = null;
+      const defaultMinGlobalEntityRelations = Math.max(2, Math.min(maxRelations || 2, Math.ceil(chunks.length * 1.5)));
+      const defaultMinGlobalEntityCandidates = Math.max(3, Math.min(maxEntities, Math.ceil(chunks.length * 2)));
       const minGlobalEntityRelations = maxRelations <= 0
         ? 0
-        : Math.max(3, Math.min(maxRelations, Number(config.minLlmEntityRelations || Math.max(8, Math.ceil(chunks.length * 0.75)))));
-      const minGlobalEntityCandidates = Math.max(6, Math.min(maxEntities, Number(config.minLlmEntityCandidates || Math.max(12, Math.ceil(chunks.length * 1.25)))));
+        : Math.max(1, Math.min(maxRelations, Number(config.minLlmEntityRelations || defaultMinGlobalEntityRelations)));
+      const minGlobalEntityCandidates = Math.max(1, Math.min(maxEntities, Number(config.minLlmEntityCandidates || defaultMinGlobalEntityCandidates)));
       for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
         const attempt = await runPromptAttempt({ promptMode });
         const attemptUsable = maxRelations === 0
@@ -5267,7 +5579,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }
       return true;
     });
-    return deduped.slice(0, Math.max(1, Math.min(80, Number(config.maxEntities || 24))));
+    const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
+      ? Math.floor(Number(config.maxEntities))
+      : Number.POSITIVE_INFINITY;
+    return deduped.slice(0, maxEntities);
   };
 
   const dictionarySeedsForDocument = async ({ workspaceId, documentId = "", collectionId = "", payload = {}, config = {} } = {}) => {
@@ -5276,7 +5591,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const tierOrder = { core: 3, typed: 2, context: 1, weak: 0 };
     const minTier = String(config.minDictionarySeedTier || "typed").toLowerCase();
     const minRank = tierOrder[minTier] ?? tierOrder.typed;
-    const maxSeeds = Math.max(1, Math.min(160, Number(config.maxDictionarySeeds || 48)));
+    const maxSeeds = Number.isFinite(Number(config.maxDictionarySeeds)) && Number(config.maxDictionarySeeds) > 0
+      ? Math.floor(Number(config.maxDictionarySeeds))
+      : Number.POSITIVE_INFINITY;
     const payloadEntries = Array.isArray(payload?.dictionaryEntries) ? payload.dictionaryEntries : [];
     const storedEntries = documentId
       ? byWorkspace(await listStore(STORES.dictionary), workspaceId)
@@ -5368,11 +5685,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (!chunkId) return;
       aiRelationsByChunkId.set(chunkId, [...(aiRelationsByChunkId.get(chunkId) || []), candidate]);
     });
-    const maxRelations = Math.max(0, Math.min(240, Number(config.maxRelations || (dictionaryDrivenExtraction ? 64 : 120))));
-    const minHybridAiEntities = Math.max(4, Math.min(Number(config.maxEntities || 48), Number(config.minHybridAiEntities || Math.max(12, Math.ceil(validChunks.length * 1.5)))));
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) >= 0
+      ? Math.floor(Number(config.maxRelations))
+      : Number.POSITIVE_INFINITY;
+    const minHybridAiEntities = Number.isFinite(Number(config.minHybridAiEntities)) && Number(config.minHybridAiEntities) > 0
+      ? Math.floor(Number(config.minHybridAiEntities))
+      : 0;
     const minHybridAiRelations = maxRelations <= 0
       ? 0
-      : Math.max(2, Math.min(maxRelations, Number(config.minHybridAiRelations || Math.max(8, Math.ceil(validChunks.length * 0.75)))));
+      : Number.isFinite(Number(config.minHybridAiRelations)) && Number(config.minHybridAiRelations) > 0
+        ? Math.floor(Number(config.minHybridAiRelations))
+        : 0;
     const aiEntityCount = (aiResult.entities || []).length;
     const aiRelationCount = (aiResult.relations || []).length;
     const rawAiEntityOutputUsable = hybridAiCountUsable({
@@ -5383,9 +5706,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     let useRuleFallback = mode === "rules" ||
       (mode === "hybrid" && !rawAiEntityOutputUsable);
     let fallbackReason = useRuleFallback && mode === "hybrid" ? "sparse-ai-entity-output" : "";
-    const maxRelationsPerChunk = Math.max(0, Math.min(40, Number(config.maxRelationsPerChunk || (dictionaryDrivenExtraction ? 6 : 12))));
-    const maxRelationsPerEntityPerChunk = Math.max(1, Math.min(12, Number(config.maxRelationsPerEntityPerChunk || (dictionaryDrivenExtraction ? 2 : 3))));
-    const maxRelationDistance = Math.max(120, Math.min(1200, Number(config.maxRelationDistance || (dictionaryDrivenExtraction ? 360 : 520))));
+    const maxRelationsPerChunk = Number.isFinite(Number(config.maxRelationsPerChunk)) && Number(config.maxRelationsPerChunk) >= 0
+      ? Math.floor(Number(config.maxRelationsPerChunk))
+      : Number.POSITIVE_INFINITY;
+    const maxRelationsPerEntityPerChunk = Number.isFinite(Number(config.maxRelationsPerEntityPerChunk)) && Number(config.maxRelationsPerEntityPerChunk) > 0
+      ? Math.floor(Number(config.maxRelationsPerEntityPerChunk))
+      : Number.POSITIVE_INFINITY;
+    const maxRelationDistance = Number.isFinite(Number(config.maxRelationDistance)) && Number(config.maxRelationDistance) > 0
+      ? Number(config.maxRelationDistance)
+      : Number.POSITIVE_INFINITY;
     const relationRecords = new Map();
     const entityOutputIndexById = new Map();
     for (let extractionPass = 0; extractionPass < 2; extractionPass += 1) {
@@ -5705,7 +6034,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const textSlice = fullText.slice(start, end).replace(/\s+/g, " ").trim();
     return {
       text: textSlice,
-      quote: textSlice.slice(0, 420),
+      quote: textSlice,
       startOffset: Number.isFinite(start) ? start : null,
       endOffset: Number.isFinite(end) ? end : null,
     };
@@ -5844,7 +6173,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!quote) return null;
     return {
       text: quote,
-      quote: quote.slice(0, 420),
+      quote,
       startOffset: start,
       endOffset: end,
     };
@@ -5949,7 +6278,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!quote) return null;
     return {
       text: quote,
-      quote: quote.slice(0, 420),
+      quote,
       startOffset: start,
       endOffset: end,
     };
@@ -5989,7 +6318,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!quote) return null;
     return {
       text: quote,
-      quote: quote.slice(0, 420),
+      quote,
       startOffset: start,
       endOffset: end,
     };
@@ -6143,7 +6472,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         target: oriented.target,
         confidence: Math.max(0.4, Math.min(0.98, Number(rule.confidence || 0.72))),
         evidence: semanticEvidenceForRelation(text, oriented.source, oriented.target),
-        explanation: String(rule.explanation || `custom rule: ${relationType}`).slice(0, 260),
+        explanation: String(rule.explanation || `custom rule: ${relationType}`),
         method: "custom-rule",
       };
     }
@@ -6364,7 +6693,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const chatErrorText = async (response = null) => {
     const text = await response?.text?.().catch(() => "");
     if (!text) return "";
-    return String(text || "").replace(/\s+/g, " ").trim().slice(0, 300);
+    return String(text || "").replace(/\s+/g, " ").trim();
   };
 
   const withOpenAiChatApiBase = (endpoint = "") => {
@@ -6491,7 +6820,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "Return strict JSON only: {\"relations\":[{\"candidateId\":\"...\",\"relationType\":\"helps\",\"confidence\":0.0,\"explanation\":\"short evidence reason\"}]}",
       "Use only the provided evidence text. Do not invent facts.",
       "Reject a candidate by omitting it from relations.",
-      JSON.stringify({ candidates: candidates.slice(0, 24) }, null, 2),
+      JSON.stringify({ candidates }, null, 2),
     ].join("\n\n");
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
@@ -6506,14 +6835,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
           options: {
             temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+            num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
           },
         }
         : {
           model,
           messages: [{ role: "user", content: prompt }],
           temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
-          max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+          max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
           top_p: knowledgeAiNumberConfig(config.topP, 0.9),
         };
       knowledgeLlmDebug("semantic-enricher:request", {
@@ -6558,8 +6887,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? requestedModel
       : await resolveOpenAiCompatibleModel({ provider, model: requestedModel });
     const allowedRelationTypes = [...builderAllowedRelationTypes(config)];
-    const maxEntities = Math.max(1, Math.min(120, Number(config.maxEntities || 40)));
-    const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
+    const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
+      ? Math.floor(Number(config.maxEntities))
+      : Number.POSITIVE_INFINITY;
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0
+      ? Math.floor(Number(config.maxRelations))
+      : Number.POSITIVE_INFINITY;
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
       "You are a Knowledge Graph Builder Agent. Build a verified, evidence-backed knowledge graph from local document chunks while preserving temporal order, causal roles and source-language labels."
@@ -6575,16 +6908,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const promptFor = ({ mode = "full" } = {}) => {
       const compact = mode === "compact";
       const micro = mode === "micro";
-      const chunkLimit = micro ? 1 : compact ? 1 : chunks.length;
+      const chunkLimit = chunks.length;
       const chunkTokens = micro
-        ? 130
+        ? promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 })
         : compact
-          ? 225
-          : promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 450 });
-      const entityLimit = micro ? 0 : compact ? 12 : 80;
-      const relationLimit = micro ? 0 : compact ? 12 : 80;
-      const effectiveMaxEntities = micro ? Math.min(maxEntities, 12) : compact ? Math.min(maxEntities, 20) : maxEntities;
-      const effectiveMaxRelations = micro ? Math.min(maxRelations, 8) : compact ? Math.min(maxRelations, 16) : maxRelations;
+          ? promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 })
+          : promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 });
+      const entityLimit = Number.POSITIVE_INFINITY;
+      const relationLimit = Number.POSITIVE_INFINITY;
+      const effectiveMaxEntities = maxEntities;
+      const effectiveMaxRelations = maxRelations;
+      const limitInstruction = [
+        Number.isFinite(effectiveMaxEntities) ? `entities <= ${effectiveMaxEntities}` : "",
+        Number.isFinite(effectiveMaxRelations) ? `relations <= ${effectiveMaxRelations}` : "",
+      ].filter(Boolean).join(", ");
       const compactSchema = {
         entities: [{ label: "", entityType: "proper-noun|technology|concept|object|location|source|term|symbol", confidence: 0.0, evidence: { chunkId: "", quote: "" } }],
         relations: [{ sourceLabel: "", targetLabel: "", relationType: allowedRelationTypes[0] || "mentions", confidence: 0.0, evidence: { chunkId: "", quote: "" }, explanation: "" }],
@@ -6599,8 +6936,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         "Prefer high-signal semantic relations over generic mentions/contains. For stories, prefer friend_of, helps, reveals, protects, opposes, healed_by, asks_for, gives_to, receives_from when explicit evidence supports them.",
         "Use mentions only for source/document/reference statements, not for ordinary character encounters.",
         `Allowed relationType values: ${allowedRelationTypes.join(", ")}`,
-        `Limits: entities <= ${effectiveMaxEntities}, relations <= ${effectiveMaxRelations}.`,
-        !micro && config.domainHint ? `Domain hint: ${String(config.domainHint).slice(0, compact ? 160 : 400)}` : "",
+        limitInstruction ? `Limits: ${limitInstruction}.` : "No Trackers Lens entity/relation cap is applied; return every supported graph fact.",
+        !micro && config.domainHint ? `Domain hint: ${String(config.domainHint)}` : "",
         "Schema:",
         JSON.stringify(compactSchema),
         JSON.stringify({
@@ -6636,9 +6973,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           `Allowed relationType values: ${allowedRelationTypes.join(", ")}`,
           "Keep only labels, relation types and evidence quotes already present in the model output. Do not invent new graph facts.",
           "Input:",
-          rawText.slice(0, isLmStudioProvider(providerType, provider) ? 2400 : 5000),
+          rawText,
         ].join("\n\n");
-        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 240, max: 1400 });
+        const repairMaxTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 });
         const repairBody = providerType === "ollama"
           ? { model, prompt: repairPrompt, stream: false, format: "json", options: { temperature: 0.01, top_p: 0.9, num_predict: repairMaxTokens } }
           : withJsonObjectResponseFormat({ model, messages: [{ role: "user", content: repairPrompt }], temperature: 0.01, max_tokens: repairMaxTokens, top_p: 0.9 }, providerType, config);
@@ -6673,14 +7010,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
             options: {
               temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
               top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-              num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
+              num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 1400, min: 1 }),
             },
           }
           : {
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-            max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 1400)),
+            max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 1400, min: 1 }),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
         const requestBody = providerType === "ollama"
@@ -7034,11 +7371,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return patterns.some((pattern) => pattern.test(normalized)) &&
         normalizedLabels.every((label) => new RegExp(`\\b${escapedRegExp(label)}\\b`).test(normalized));
     });
-    return String(found || "").replace(/\s+/g, " ").trim().slice(0, 420);
+    return String(found || "").replace(/\s+/g, " ").trim();
   };
 
   const graphBuilderEvidenceBetween = (text = "", source = {}, target = {}, radius = 180) =>
-    String(relationContextBetween(text, source, target, radius) || "").replace(/\s+/g, " ").trim().slice(0, 420);
+    String(relationContextBetween(text, source, target, radius) || "").replace(/\s+/g, " ").trim();
 
   const graphBuilderPersonBeforeTarget = (text = "", people = [], target = {}) => {
     const normalizedText = normalizeEntityToken(text);
@@ -7151,7 +7488,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .filter((chunk) => !looksLikeKnowledgeEnvelope(chunk.text || ""))
       .sort((left, right) => Date.parse(left.createdAt || "") - Date.parse(right.createdAt || ""));
     const payloadChunkIds = new Set((payload?.chunks || []).map((chunk) => chunk.id).filter(Boolean));
-    const maxChunks = Math.max(1, Math.min(24, Number(config.maxChunks || 6)));
+    const maxChunks = Number.isFinite(Number(config.maxChunks)) && Number(config.maxChunks) > 0 ? Math.floor(Number(config.maxChunks)) : Number.POSITIVE_INFINITY;
     const selectedChunks = (payloadChunkIds.size
       ? workspaceChunks.filter((chunk) => payloadChunkIds.has(chunk.id))
       : workspaceChunks
@@ -7193,8 +7530,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const proposalRelations = normalizedProposal.relations;
     const allowedRelationTypes = builderAllowedRelationTypes(config);
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.65)));
-    const maxEntities = Math.max(1, Math.min(120, Number(config.maxEntities || 40)));
-    const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
+    const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
+      ? Math.floor(Number(config.maxEntities))
+      : Number.POSITIVE_INFINITY;
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0
+      ? Math.floor(Number(config.maxRelations))
+      : Number.POSITIVE_INFINITY;
     const chunkById = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]));
     const fallbackChunk = selectedChunks[0];
     const entityByLabel = new Map(workspaceEntities.map((entity) => [normalizeEntityToken(entity.label || entity.normalized || ""), entity]));
@@ -7351,7 +7692,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           originalRelationType: String(item.originalRelationType || item.relationType || "ai-proposed"),
           occurrenceCount: 1,
           sourceChunkIds: [chunk.id].filter(Boolean),
-          explanation: String(item.explanation || "").slice(0, 260),
+          explanation: String(item.explanation || ""),
           normalizations: normalizedProposal.normalizations.filter((normalization) =>
             !normalization.sourceLabel ||
             normalizeEntityToken(normalization.sourceLabel) === normalizeEntityToken(item.sourceLabel || "")
@@ -7365,8 +7706,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const context = acceptedRelations.length
       ? [
         "AI Knowledge Graph Builder accepted relations:",
-        ...acceptedRelations.slice(0, 40).map((relation, index) =>
-          `[GB${index + 1}] ${relation.sourceLabel} -${relation.relationType}-> ${relation.targetLabel} confidence=${Number(relation.confidence || 0).toFixed(2)} evidence="${String(relation.evidence?.quote || "").slice(0, 180)}"`
+        ...acceptedRelations.map((relation, index) =>
+          `[GB${index + 1}] ${relation.sourceLabel} -${relation.relationType}-> ${relation.targetLabel} confidence=${Number(relation.confidence || 0).toFixed(2)} evidence="${String(relation.evidence?.quote || "")}"`
         ),
       ].join("\n")
       : "AI Knowledge Graph Builder accepted relations: none";
@@ -7427,13 +7768,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
       ? await deleteSemanticRelations({ workspaceId, collectionId, documentId, nodeId: node?.id || "" })
       : { relations: 0, ids: [] };
     const staleSemanticRelationIds = new Set(semanticCleanup.ids || []);
-    const maxRelations = Math.max(1, Math.min(160, Number(config.maxRelations || 48)));
+    const maxRelations = Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0
+      ? Math.floor(Number(config.maxRelations))
+      : Number.POSITIVE_INFINITY;
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.55)));
     const enrichmentMode = ["ai", "hybrid"].includes(String(config.enrichmentMode || "ai").toLowerCase())
       ? String(config.enrichmentMode || "ai").toLowerCase()
       : "rules";
     const now = nowIso();
-    const candidates = workspaceRelations.slice(0, Math.max(maxRelations * 2, 24)).map((relation) => {
+    const candidates = workspaceRelations.slice(0, Number.isFinite(maxRelations) ? maxRelations * 2 : Number.POSITIVE_INFINITY).map((relation) => {
       const source = entityById.get(relation.sourceEntityId);
       const target = entityById.get(relation.targetEntityId);
       const chunk = chunkById.get(relation.chunkId) || chunkById.get(relation.metadata?.chunkIds?.[0] || "");
@@ -7457,7 +7800,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         targetType: candidate.target.entityType,
         originalRelationType: candidate.relation.relationType,
         evidence: candidate.text,
-        chunkContext: String(candidate.chunk?.text || "").slice(0, 1800),
+        chunkContext: String(candidate.chunk?.text || ""),
       }));
     const aiResult = await callSemanticAi({ candidates: aiInput, config });
     if (aiResult.usage?.totalTokens) {
@@ -7482,7 +7825,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           target: oriented.target,
           confidence: Math.max(threshold, Math.min(0.95, Number(ai.confidence || 0.7))),
           evidence: candidate.evidence,
-          explanation: String(ai.explanation || "AI semantic classification").slice(0, 260),
+          explanation: String(ai.explanation || "AI semantic classification"),
           method: "ai-semantic",
           providerId: aiResult.provider,
           model: aiResult.model,
@@ -7506,7 +7849,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           ...inferSupplementalHealingRelationsForChunk({ chunk, entities: workspaceEntities, workspaceId, config }),
         ])
         .filter((item) => item.semantic && item.semantic.confidence >= threshold)
-        .slice(0, Math.max(0, maxRelations - semanticItems.length - ruleResults.length));
+        .slice(0, Number.isFinite(maxRelations) ? Math.max(0, maxRelations - semanticItems.length - ruleResults.length) : Number.POSITIVE_INFINITY);
       semanticItems.push(...ruleResults, ...supplementalRuleResults);
     }
     const existingSemanticKeys = new Set(byWorkspace(relationsAll, workspaceId)
@@ -7574,7 +7917,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const context = semanticRelations.length
       ? [
         "Semantic Knowledge Graph relations:",
-        ...semanticRelations.slice(0, 40).map((relation, index) =>
+        ...semanticRelations.map((relation, index) =>
           `[SR${index + 1}] ${relation.sourceLabel} -${relation.relationType}-> ${relation.targetLabel} confidence=${Number(relation.confidence || 0).toFixed(2)} method=${relation.extraction?.method || "rule"}${relation.metadata?.explanation ? ` evidence=${relation.metadata.explanation}` : ""}`
         ),
       ].join("\n")
@@ -7671,7 +8014,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         aliases: entity.metadata?.aliases || [],
       }))
       .sort((a, b) => b.degree - a.degree || String(a.label).localeCompare(String(b.label)))
-      .slice(0, Math.max(1, Math.min(50, Number(config.topEntities || 12))));
+      .slice(0, Number.isFinite(Number(config.topEntities)) && Number(config.topEntities) > 0 ? Math.floor(Number(config.topEntities)) : Number.POSITIVE_INFINITY);
     const snapshot = {
       id: uniqueId("kgraph"),
       workspaceId,
@@ -7684,7 +8027,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       relationCount: scopedRelations.length,
       semanticRelationCount,
       topEntities,
-      relations: scopedRelations.slice(0, Math.max(1, Math.min(240, Number(config.maxRelations || 120)))),
+      relations: scopedRelations.slice(0, Number.isFinite(Number(config.maxRelations)) && Number(config.maxRelations) > 0 ? Math.floor(Number(config.maxRelations)) : Number.POSITIVE_INFINITY),
       status: "ready",
       createdAt: nowIso(),
     };
@@ -7710,7 +8053,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const search = async ({ workspaceId, query = "", config = {}, allowedEmbeddingNodeIds = [] } = {}) => {
     const cleanQuery = String(query || config.query || "").trim();
     if (!cleanQuery) throw new Error("Query Knowledge vuota");
-    const topK = Math.max(1, Math.min(50, Number(config.topK || 5)));
+    const topK = Number.isFinite(Number(config.topK)) && Number(config.topK) > 0
+      ? Math.floor(Number(config.topK))
+      : chunks.length;
     const threshold = Math.max(0, Math.min(1, Number(config.similarityThreshold ?? 0.08)));
     const [embeddings, chunks] = await Promise.all([
       listStore(STORES.embeddings),
@@ -7814,9 +8159,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const aggregateDocuments = graphScope === "collection" || graphScope === "workspace" || graphScope === "all";
     const preferLatestDocument = payload?.preferLatestDocument === true || payload?.preferLatestDocument === "true" ||
       config.preferLatestDocument === true || config.preferLatestDocument === "true";
-    const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
-    const topK = Math.max(1, Math.min(80, Number(payload?.topK || config.topK || 12)));
-    const maxRelations = Math.max(1, Math.min(240, Number(payload?.maxRelations || config.maxRelations || 48)));
+    const depth = Number.isFinite(Number(payload?.depth || config.depth)) && Number(payload?.depth || config.depth) > 0
+      ? Math.floor(Number(payload?.depth || config.depth))
+      : 1;
+    const topK = Number.isFinite(Number(payload?.topK || config.topK)) && Number(payload?.topK || config.topK) > 0
+      ? Math.floor(Number(payload?.topK || config.topK))
+      : Number.POSITIVE_INFINITY;
+    const maxRelations = Number.isFinite(Number(payload?.maxRelations || config.maxRelations)) && Number(payload?.maxRelations || config.maxRelations) > 0
+      ? Math.floor(Number(payload?.maxRelations || config.maxRelations))
+      : Number.POSITIVE_INFINITY;
     const includeEvidence = payload?.includeEvidence !== false && config.includeEvidence !== false;
     const evidenceModeRaw = String(payload?.evidenceMode || config.evidenceMode || "balanced").toLowerCase().trim().replace(/[\s-]+/g, "_");
     const evidenceMode = ["focused", "balanced", "full_ordered", "debug_trace"].includes(evidenceModeRaw) ? evidenceModeRaw : "balanced";
@@ -8166,23 +8517,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       evidence: item.evidence,
       score,
     }));
-    const relationLines = relationsResult.slice(0, Math.min(40, maxRelations)).map((relation, index) => {
+    const relationLines = relationsResult.slice(0, maxRelations).map((relation, index) => {
       const source = entityById.get(relation.sourceEntityId);
       const target = entityById.get(relation.targetEntityId);
       const marker = relation.direct ? " direct" : "";
       const semantic = relation.metadata?.semantic ? " semantic" : "";
       const method = relation.extraction?.method ? ` method=${relation.extraction.method}` : "";
       const original = relation.metadata?.originalRelationType ? ` original=${relation.metadata.originalRelationType}` : "";
-      const explanation = relation.metadata?.explanation ? ` evidence=${String(relation.metadata.explanation).slice(0, 140)}` : "";
+      const explanation = relation.metadata?.explanation ? ` evidence=${String(relation.metadata.explanation)}` : "";
       const quote = relation.evidence?.quote || relation.metadata?.evidence?.quote || "";
-      const quoteText = quote ? ` quote="${String(quote).slice(0, 180)}"` : "";
+      const quoteText = quote ? ` quote="${String(quote)}"` : "";
       return `[R${index + 1}${marker}${semantic}] ${source?.label || relation.sourceEntityId} -${relation.relationType || "related_to"}-> ${target?.label || relation.targetEntityId}${method}${original}${explanation}${quoteText}`;
     });
-    const entityLines = entitiesResult.slice(0, 30).map((entity, index) =>
+    const entityLines = entitiesResult.map((entity, index) =>
       `[E${index + 1}${entity.matched ? " match" : ""}] ${entity.label || entity.id} (${entity.entityType || "entity"}, connections=${entity.connections || 0}, score=${Number(entity.score || 0).toFixed(2)})`
     );
     const eventLines = eventsResult.map((item, index) =>
-      `[EV${index + 1} seq=${item.sequence} score=${Number(item.score || 0).toFixed(2)}] ${item.subject || "event"} -${item.eventType}-> ${(item.objects || []).join(", ") || "context"} quote="${String(item.evidence?.quote || item.evidence?.text || "").slice(0, 220)}"`
+      `[EV${index + 1} seq=${item.sequence} score=${Number(item.score || 0).toFixed(2)}] ${item.subject || "event"} -${item.eventType}-> ${(item.objects || []).join(", ") || "context"} quote="${String(item.evidence?.quote || item.evidence?.text || "")}"`
     );
     const eventChainTerms = unique(eventsResult.flatMap((item) => [
       item.eventType,
@@ -8450,7 +8801,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         : "ranked-score",
     }));
     const evidenceSelectionReasonById = new Map(evidence.map((item) => [item.chunkId, item.selectionReason]));
-    const evidenceLines = evidence.map((item) => `[S${item.index} score=${Number(item.score || 0).toFixed(2)} reason=${item.selectionReason || "ranked"}] ${String(item.text || "").slice(0, 720)}`);
+    const evidenceLines = evidence.map((item) => `[S${item.index} score=${Number(item.score || 0).toFixed(2)} reason=${item.selectionReason || "ranked"}] ${String(item.text || "")}`);
     const selectedEvidenceChunkIds = new Set(evidence.map((item) => item.chunkId).filter(Boolean));
     const evidenceTrace = scopedChunks
       .map((chunk) => {
@@ -8515,14 +8866,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
           protectedKind: mechanismProtectedItem?.protectedKind || "",
           startsWithFragment,
           endsWithFragment,
-          textPreview: String(text).slice(0, 360),
+          text: String(text),
         };
       })
       .filter((item) => item.score > 0 || item.reasons.length)
       .sort((a, b) => Number(a.ordinal ?? 0) - Number(b.ordinal ?? 0))
-      .slice(0, Math.max(24, Math.min(120, Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit || 80))));
+      .slice(0, Number.isFinite(Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit)) && Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit) > 0 ? Math.floor(Number(payload?.debugEvidenceLimit || config.debugEvidenceLimit)) : Number.POSITIVE_INFINITY);
     const evidenceTraceLines = evidenceTrace.map((item) =>
-      `[C${item.ordinal ?? "?"}${item.selected ? " selected" : ""} score=${Number(item.score || 0).toFixed(2)}] reasons=${item.reasons.join(",") || "none"} kind=${item.protectedKind || "-"} query=${item.queryMatches.join("|") || "-"} source=${(item.sourceExpansionMatches || []).slice(0, 12).join("|") || "-"} seed=${item.seedMatches.join("|") || "-"} event=${item.eventMatches.slice(0, 12).join("|") || "-"} mechanism=${item.mechanismMatches.slice(0, 12).join("|") || "-"} downrank=${(item.downrankMatches || []).slice(0, 12).join("|") || "-"} danger=${Number(item.dangerCueScore || 0).toFixed(0)} operational=${item.operationalMatches.slice(0, 12).join("|") || "-"} outcome=${item.outcomeMatches.slice(0, 12).join("|") || "-"} text="${String(item.textPreview || "").replace(/\s+/g, " ").slice(0, 220)}"`
+      `[C${item.ordinal ?? "?"}${item.selected ? " selected" : ""} score=${Number(item.score || 0).toFixed(2)}] reasons=${item.reasons.join(",") || "none"} kind=${item.protectedKind || "-"} query=${item.queryMatches.join("|") || "-"} source=${(item.sourceExpansionMatches || []).join("|") || "-"} seed=${item.seedMatches.join("|") || "-"} event=${item.eventMatches.join("|") || "-"} mechanism=${item.mechanismMatches.join("|") || "-"} downrank=${(item.downrankMatches || []).join("|") || "-"} danger=${Number(item.dangerCueScore || 0).toFixed(0)} operational=${item.operationalMatches.join("|") || "-"} outcome=${item.outcomeMatches.join("|") || "-"} text="${String(item.text || "").replace(/\s+/g, " ")}"`
     );
     const rawContext = [
       `Knowledge Graph query: ${cleanQuery}`,
@@ -8536,8 +8887,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       evidenceLines.length ? `Evidence:\n${evidenceLines.join("\n\n")}` : "",
       evidenceTraceLines.length ? `Evidence trace:\n${evidenceTraceLines.join("\n")}` : "",
     ].filter(Boolean).join("\n\n");
-    const maxContextChars = Math.max(1200, Math.min(12000, Number(payload?.maxContextChars || config.maxContextChars || 5200)));
-    const context = rawContext.length > maxContextChars ? `${rawContext.slice(0, maxContextChars)}\n...` : rawContext;
+    const context = rawContext;
     const record = {
       id: uniqueId("kgquery"),
       workspaceId,
@@ -8637,7 +8987,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const cleanQuery = String(query || config.query || payload?.entity || payload?.label || "").trim();
     const collectionId = String(payload?.collectionId || payload?.metadata?.collectionId || config.collectionId || "").trim();
     const configuredDocumentId = String(payload?.documentId || config.documentId || "").trim();
-    const depth = Math.max(1, Math.min(3, Number(payload?.depth || config.depth || 1)));
+    const depth = Number.isFinite(Number(payload?.depth || config.depth)) && Number(payload?.depth || config.depth) > 0
+      ? Math.floor(Number(payload?.depth || config.depth))
+      : 1;
     const relationTypes = splitConfigList(payload?.relationTypes || config.relationTypes).map((item) => item.toLowerCase());
     const context = [
       `Knowledge Graph query: ${cleanQuery}`,
@@ -8946,6 +9298,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const evidenceSentenceBoundaryIndex = (text = "", maxChars = 1800) => {
+    if (!Number.isFinite(Number(maxChars)) || Number(maxChars) <= 0) return text.length;
     const limit = Math.max(120, Math.min(text.length, maxChars));
     const slice = text.slice(0, limit);
     const matches = [...slice.matchAll(/[.!?;:»”](?=\s|$)|\n(?=\s*[—«"A-ZÀ-Ý])/gu)];
@@ -8965,6 +9318,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const cleanReasoningEvidenceText = (text = "", { maxChars = 1800, trimLeading = true } = {}) => {
+    const limit = Number(maxChars);
     let value = String(text || "")
       .replace(/\r\n?/g, "\n")
       .replace(/[ \t]+/g, " ")
@@ -8991,8 +9345,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       deduped.push(paragraph);
     });
     value = deduped.join("\n\n").trim();
-    if (value.length > maxChars) {
-      const boundary = evidenceSentenceBoundaryIndex(value, maxChars);
+    if (Number.isFinite(limit) && limit > 0 && value.length > limit) {
+      const boundary = evidenceSentenceBoundaryIndex(value, limit);
       value = `${value.slice(0, boundary).trim()}\n...`;
     } else {
       const lastBoundary = Math.max(
@@ -9012,6 +9366,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const cleanReasoningEvidenceList = (items = [], { maxItems = 8, maxChars = 1800, preserveBlocks = false, trimLeading = true } = {}) => {
+    const itemLimit = Number(maxItems);
     const output = [];
     items
       .map((item) => cleanReasoningEvidenceText(item, { maxChars, trimLeading }))
@@ -9029,7 +9384,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         }
         output.push(item);
       });
-    return output.slice(0, maxItems);
+    return output.slice(0, Number.isFinite(itemLimit) && itemLimit > 0 ? Math.floor(itemLimit) : Number.POSITIVE_INFINITY);
   };
 
   const joinReasoningEvidenceBlocks = (items = [], options = {}) =>
@@ -9053,7 +9408,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const protectedEvidence = evidence
       .filter((item) => item.selectionReason === "mechanism-protected")
       .sort((left, right) => evidenceDocumentOrder(left) - evidenceDocumentOrder(right))
-      .slice(0, maxItems)
+      .slice(0, Number.isFinite(Number(maxItems)) && Number(maxItems) > 0 ? Math.floor(Number(maxItems)) : Number.POSITIVE_INFINITY)
       .map((item) => cleanReasoningEvidenceText(markEvidenceBoundaryFragments(trimMechanismSourceEvidence(reasoningEvidenceText(item))), { maxChars, trimLeading: false }))
       .filter(Boolean);
     const eventSnippets = eventFacts
@@ -9067,14 +9422,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const normalized = normalizeEntityToken(text);
         const tokenScore = tokens.reduce((score, token) => score + (token && normalized.includes(token) ? 4 : 0), 0);
         const eventScore = eventSnippets.reduce((score, snippet) => {
-          const compactSnippet = normalizeEntityToken(snippet).slice(0, 120);
+          const compactSnippet = normalizeEntityToken(snippet);
           return score + (compactSnippet && normalized.includes(compactSnippet) ? 10 : 0);
         }, 0);
         return { item, text, score: tokenScore + eventScore };
       })
       .filter((item) => item.score > 0)
       .sort((left, right) => right.score - left.score)
-      .slice(0, Math.max(0, maxItems - protectedEvidence.length))
+      .slice(0, Number.isFinite(Number(maxItems)) && Number(maxItems) > 0 ? Math.max(0, Math.floor(Number(maxItems)) - protectedEvidence.length) : Number.POSITIVE_INFINITY)
       .sort((left, right) => evidenceDocumentOrder(left.item) - evidenceDocumentOrder(right.item))
       .map((item) => cleanReasoningEvidenceText(markEvidenceBoundaryFragments(trimMechanismSourceEvidence(item.text)), { maxChars, trimLeading: false }))
       .filter(Boolean);
@@ -9128,7 +9483,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .replace(/\s*```$/i, "")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 500);
+      ;
     if (!answerFocus) return null;
     return {
       answerFocus,
@@ -9190,10 +9545,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
           question: localPlan.query || payload.query || "",
           intent: localPlan.intent || "",
           localPlan: {
-            requiredFacts: (localPlan.requiredFacts || []).slice(0, micro ? 3 : compact ? 6 : 14),
-            primaryEvidenceText: String(localPlan.primaryEvidenceText || "").slice(0, micro ? 1200 : compact ? 2200 : 3600),
+            requiredFacts: localPlan.requiredFacts || [],
+            primaryEvidenceText: String(localPlan.primaryEvidenceText || ""),
           },
-          evidencePool: evidencePool.slice(0, micro ? 2 : compact ? 4 : 8).map((item) => String(item || "").slice(0, micro ? 1200 : compact ? 1600 : 2200)),
+          evidencePool: evidencePool.map((item) => String(item || "")),
         }),
       ].join("\n\n");
     };
@@ -9216,14 +9571,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
             options: {
               temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
               top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-              num_predict: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+              num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
             },
           }
           : {
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-            max_tokens: Math.max(128, knowledgeAiNumberConfig(config.maxTokens, 900)),
+            max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
         knowledgeLlmDebug("reasoning-composer:request", {
@@ -9291,7 +9646,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         .slice(0, 8)
       : [];
     const cleanedSelectedEvidenceQuotes = cleanReasoningEvidenceList(selectedEvidenceQuotes, { maxItems: 8, maxChars: 1800 });
-    const answerFocus = String(patch?.answerFocus || "").replace(/\s+/g, " ").trim().slice(0, 500);
+    const answerFocus = String(patch?.answerFocus || "").replace(/\s+/g, " ").trim();
     const acceptedAnswerFocus = intent === "mechanism"
       ? (reasoningMechanismFocusSupported({ answerFocus, primaryEvidenceText: plan.primaryEvidenceText || "", selectedEvidenceQuotes: cleanedSelectedEvidenceQuotes }) ? answerFocus : "")
       : answerFocus;
@@ -9327,8 +9682,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const queryIntent = payload?.scope?.queryIntent || payload?.queryIntent || config.queryIntent || null;
     const intent = detectReasoningIntent(query, { ...config, queryIntent });
     const tokens = reasoningTokens(query);
-    const maxFacts = Math.max(1, Math.min(24, Number(config.maxFacts || payload?.maxFacts || (intent === "mechanism" ? 14 : 8))));
-    const maxEvents = Math.max(1, Math.min(30, Number(config.maxEvents || payload?.maxEvents || 12)));
+    const maxFacts = Number.isFinite(Number(config.maxFacts || payload?.maxFacts)) && Number(config.maxFacts || payload?.maxFacts) > 0
+      ? Math.floor(Number(config.maxFacts || payload?.maxFacts))
+      : Number.POSITIVE_INFINITY;
+    const maxEvents = Number.isFinite(Number(config.maxEvents || payload?.maxEvents)) && Number(config.maxEvents || payload?.maxEvents) > 0
+      ? Math.floor(Number(config.maxEvents || payload?.maxEvents))
+      : Number.POSITIVE_INFINITY;
     const includeBackground = config.includeBackground === true || config.includeBackground === "true" || payload?.includeBackground === true;
     const events = Array.isArray(payload?.events) ? payload.events : [];
     const relations = Array.isArray(payload?.relations) ? payload.relations : [];
@@ -9339,7 +9698,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           .map((item) => ({ item, score: scoreReasoningEvent(item, tokens, intent) }))
           .filter(({ item, score }) => score > 0 && sourceReasoningEventRelevant(item, tokens))
           .sort((a, b) => b.score - a.score)
-          .slice(0, Math.min(4, maxEvents))
+          .slice(0, maxEvents)
           .sort((a, b) => Number(a.item.sequence || 0) - Number(b.item.sequence || 0))
           .map(({ item }) => item)
         : intent === "danger"
@@ -9361,7 +9720,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .map((item, index) => reasoningFactFromEvent(item, index, events))
       .map((fact) => ({
         ...fact,
-        evidence: cleanReasoningEvidenceText(fact.evidence || "", { maxChars: intent === "mechanism" ? 1600 : 1200 }),
+        evidence: cleanReasoningEvidenceText(fact.evidence || "", { maxChars: 0 }),
       }));
     const rankedRelations = relations
       .map((item) => ({ item, score: scoreReasoningRelation(item, tokens, intent) }))
@@ -9376,7 +9735,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           .filter((index) => index >= 0 && index <= last));
         return sampleIndexes
           .map((index) => orderedEvidence[index])
-          .map((item) => cleanReasoningEvidenceText(markEvidenceBoundaryFragments(reasoningEvidenceText(item)), { maxChars: 700, trimLeading: false }))
+          .map((item) => cleanReasoningEvidenceText(markEvidenceBoundaryFragments(reasoningEvidenceText(item)), { maxChars: 0, trimLeading: false }))
           .filter(Boolean);
       })()
       : [];
@@ -9386,8 +9745,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       evidence: payload?.evidence || [],
       tokens,
       eventFacts,
-      maxItems: intent === "mechanism" ? 5 : intent === "source" ? 3 : 3,
-      maxChars: intent === "mechanism" ? 1600 : intent === "source" ? 1400 : 1400,
+      maxItems: 0,
+      maxChars: 0,
     });
     const hasOperationalSourceEvidence = intent === "mechanism" && reasoningMechanismOperationalEvidence(focusedSourceEvidence);
     const supportingRelations = (intent === "mechanism" && (eventFacts.length || hasOperationalSourceEvidence) ? [] : rankedRelations)
@@ -9398,7 +9757,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       .map(({ item }, index) => reasoningFactFromRelation(item, index))
       .map((fact) => ({
         ...fact,
-        evidence: cleanReasoningEvidenceText(fact.evidence || "", { maxChars: 1200 }),
+        evidence: cleanReasoningEvidenceText(fact.evidence || "", { maxChars: 0 }),
       }));
     const excludedContext = [];
     const responseInstructions = [
@@ -9406,11 +9765,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
     ].filter(Boolean);
     const eventEvidenceText = joinReasoningEvidenceBlocks(
       eventFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean),
-      { maxItems: Math.min(8, maxFacts), maxChars: intent === "mechanism" ? 1600 : 1200 }
+      { maxItems: 0, maxChars: 0 }
     );
     const relationEvidenceText = joinReasoningEvidenceBlocks(
       supportingRelations.map((fact) => String(fact.evidence || "").trim()).filter(Boolean),
-      { maxItems: Math.min(6, maxFacts), maxChars: 1200 }
+      { maxItems: 0, maxChars: 0 }
     );
     const sourceExcerptFacts = intent === "source" && focusedSourceEvidence
       ? [{
@@ -9428,11 +9787,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const primaryEvidenceText = intent === "mechanism"
       ? cleanReasoningEvidenceList(
         [...(llmMechanismCueFailed ? broadMechanismEvidenceItems : [focusedSourceEvidence]), eventEvidenceText, relationEvidenceText].filter(Boolean),
-        { maxItems: 8, maxChars: 2600, preserveBlocks: true, trimLeading: false }
+        { maxItems: 0, maxChars: 0, preserveBlocks: true, trimLeading: false }
       ).join("\n\n")
       : cleanReasoningEvidenceList(
         [focusedSourceEvidence, eventEvidenceText, relationEvidenceText].filter(Boolean),
-        { maxItems: 8, maxChars: 2200, preserveBlocks: true, trimLeading: false }
+        { maxItems: 0, maxChars: 0, preserveBlocks: true, trimLeading: false }
       ).join("\n\n");
     let plan = {
       id: uniqueId("kreason"),
@@ -9445,7 +9804,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       supportingRelations,
       excludedContext,
       responseInstructions,
-      evidenceQuotes: unique(requiredFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)).slice(0, 12),
+      evidenceQuotes: unique(requiredFacts.map((fact) => String(fact.evidence || "").trim()).filter(Boolean)),
       primaryEvidenceText,
       sourceQueryId: payload?.queryId || payload?.id || "",
       sourceNodeId: event?.sourceNodeId || "",
@@ -9466,10 +9825,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const eventLines = eventFacts.map((fact, index) => {
       const destination = fact.roles?.destination?.length ? ` destination=${fact.roles.destination.join(", ")}` : "";
       const patient = fact.roles?.patient?.length ? ` patient=${fact.roles.patient.join(", ")}` : "";
-      return `[F${index + 1}] seq=${fact.sequence ?? ""} ${fact.subject || "event"} -${fact.eventType}-> ${(fact.objects || []).join(", ") || "context"}${patient}${destination} evidence="${String(fact.evidence || "").slice(0, 220)}"`;
+      return `[F${index + 1}] seq=${fact.sequence ?? ""} ${fact.subject || "event"} -${fact.eventType}-> ${(fact.objects || []).join(", ") || "context"}${patient}${destination} evidence="${String(fact.evidence || "")}"`;
     });
     const relationLines = supportingRelations.map((fact, index) =>
-      `[R${index + 1}] ${fact.source || "source"} -${fact.relationType}-> ${fact.target || "target"} evidence="${String(fact.evidence || "").slice(0, 180)}"`
+      `[R${index + 1}] ${fact.source || "source"} -${fact.relationType}-> ${fact.target || "target"} evidence="${String(fact.evidence || "")}"`
     );
     const reasoningContext = [
       `Knowledge Reasoning Plan: ${intent}`,
@@ -9481,10 +9840,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       plan.ai?.answerFocusAccepted && plan.ai?.answerFocus ? `LLM reasoning focus:\n${plan.ai.answerFocus}` : "",
       plan.ai?.error ? `LLM reasoning note: ${plan.ai.error}` : "",
     ].filter(Boolean).join("\n\n");
-    const maxContextChars = Math.max(1200, Math.min(12000, Number(config.maxContextChars || payload?.maxContextChars || 4800)));
     const composedContext = [
       reasoningContext,
-      includeBackground && payload?.context ? `Source graph context:\n${String(payload.context).slice(0, maxContextChars)}` : "",
+      includeBackground && payload?.context ? `Source graph context:\n${String(payload.context)}` : "",
     ].filter(Boolean).join("\n\n");
     return {
       ...payload,
@@ -9492,7 +9850,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       queryId: payload?.queryId || payload?.id || "",
       query,
       reasoningPlan: plan,
-      context: composedContext.length > maxContextChars ? `${composedContext.slice(0, maxContextChars)}\n...` : composedContext,
+      context: composedContext,
       contextType: "knowledge-reasoning",
       status: plan.status,
       createdAt: plan.createdAt,
@@ -9620,6 +9978,60 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (this.executionKeys.has(executionKey)) return;
       this.executionKeys.add(executionKey);
       if (this.executionKeys.size > 500) this.executionKeys = new Set([...this.executionKeys].slice(-250));
+      const jobId = `knowledge_job_${safeId(node.id)}_${safeId(runId || event?.id || Date.now())}`;
+      const debugContext = beginKnowledgeRuntimeDebug({
+        workspaceId: this.workspaceId,
+        bus: this.bus,
+        nodeId: node.id,
+        nodeLabel: node.label || "",
+        subtype,
+        jobId,
+        runId,
+      });
+      const inputStep = {
+        id: "knowledge_input",
+        type: "received",
+        label: "Received input",
+        status: "complete",
+        summary: `Received ${event?.channel || "runtime event"}.`,
+        payload: {
+          inputChannel: event?.channel || "",
+          sourceNodeId: event?.sourceNodeId || "",
+          inputEventId: event?.id || "",
+          runId,
+          payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+          payloadCounts: {
+            chunks: Array.isArray(payload?.chunks) ? payload.chunks.length : 0,
+            dictionaryEntries: Array.isArray(payload?.dictionaryEntries) ? payload.dictionaryEntries.length : 0,
+            entities: Array.isArray(payload?.entities) ? payload.entities.length : 0,
+            relations: Array.isArray(payload?.relations) ? payload.relations.length : 0,
+            events: Array.isArray(payload?.events) ? payload.events.length : 0,
+          },
+          documentId: payload?.documentId || payload?.id || "",
+          collectionId: payload?.collectionId || payload?.metadata?.collectionId || "",
+        },
+      };
+      debugContext.inputStep = inputStep;
+      debugContext.provider = config.providerProfile || config.providerType || config.provider || "";
+      debugContext.model = config.model || "";
+      await upsertKnowledgeRuntimeJob({
+        id: jobId,
+        workspaceId: this.workspaceId,
+        runId,
+        agentId: node.id,
+        runtimeNodeId: node.id,
+        agent: node.label || node.id,
+        task: event?.channel || "knowledge runtime event",
+        status: "working",
+        runtimeStatus: "working",
+        currentStep: inputStep,
+        steps: [inputStep],
+        provider: config.providerProfile || config.providerType || config.provider || "",
+        model: config.model || "",
+        inputTrace: inputStep.payload,
+        result: null,
+        updatedAt: nowIso(),
+      });
       knowledgeLlmDebug("node-input", {
         workspaceId: this.workspaceId,
         nodeId: node.id,
@@ -9629,7 +10041,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         sourceNodeId: event?.sourceNodeId || "",
         eventId: event?.id || "",
         runId,
-        payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : [],
+        payloadKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
         payloadCounts: {
           chunks: Array.isArray(payload?.chunks) ? payload.chunks.length : 0,
           dictionaryEntries: Array.isArray(payload?.dictionaryEntries) ? payload.dictionaryEntries.length : 0,
@@ -9888,6 +10300,34 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 reason: "missing-query",
               },
             });
+            const latencyMs = Math.round(performance.now() - startedAt);
+            const skippedStep = {
+              id: "knowledge_skipped",
+              type: "skipped",
+              label: "Skipped",
+              status: "skipped",
+              summary: "Graph Query ignored the signal because no query was available.",
+              payload: { reason: "missing-query", inputChannel: event?.channel || "", latencyMs },
+            };
+            await upsertKnowledgeRuntimeJob({
+              id: jobId,
+              workspaceId: this.workspaceId,
+              runId,
+              agentId: node.id,
+              runtimeNodeId: node.id,
+              agent: node.label || node.id,
+              task: event?.channel || "knowledge runtime event",
+              status: "skipped",
+              runtimeStatus: "skipped",
+              currentStep: skippedStep,
+              steps: [inputStep, skippedStep],
+              provider: config.providerProfile || config.providerType || config.provider || "",
+              model: config.model || "",
+              durationMs: latencyMs,
+              inputTrace: inputStep.payload,
+              result: { status: "skipped", reason: "missing-query", debug: debugContext.entries },
+              updatedAt: nowIso(),
+            });
             return;
           }
           const allowGlobalGraphLookup = config.allowGlobalGraphLookup === true || config.allowGlobalGraphLookup === "true" ||
@@ -9932,6 +10372,34 @@ window.TrackerLensKnowledgeRuntime = (() => {
                 reason: "missing-query",
               },
             });
+            const latencyMs = Math.round(performance.now() - startedAt);
+            const skippedStep = {
+              id: "knowledge_skipped",
+              type: "skipped",
+              label: "Skipped",
+              status: "skipped",
+              summary: "RAG Search ignored the signal because no query was available.",
+              payload: { reason: "missing-query", inputChannel: event?.channel || "", latencyMs },
+            };
+            await upsertKnowledgeRuntimeJob({
+              id: jobId,
+              workspaceId: this.workspaceId,
+              runId,
+              agentId: node.id,
+              runtimeNodeId: node.id,
+              agent: node.label || node.id,
+              task: event?.channel || "knowledge runtime event",
+              status: "skipped",
+              runtimeStatus: "skipped",
+              currentStep: skippedStep,
+              steps: [inputStep, skippedStep],
+              provider: config.providerProfile || config.providerType || config.provider || "",
+              model: config.model || "",
+              durationMs: latencyMs,
+              inputTrace: inputStep.payload,
+              result: { status: "skipped", reason: "missing-query", debug: debugContext.entries },
+              updatedAt: nowIso(),
+            });
             return;
           }
           const embeddingNodeIds = assignedEmbeddingNodeIds(node, this.runtime);
@@ -9973,6 +10441,49 @@ window.TrackerLensKnowledgeRuntime = (() => {
             visualUntil: runtimeVisualUntil(),
           },
         });
+        const resultSummary = knowledgeRuntimeResultSummary(result);
+        const finalStatus = resultSummary.error
+          ? "warning"
+          : result?.status === "fallback"
+            ? "fallback"
+            : "complete";
+        const steps = knowledgeRuntimeSteps({
+          inputStep,
+          debugEntries: debugContext.entries,
+          result,
+          outputChannel,
+          latencyMs,
+        });
+        await upsertKnowledgeRuntimeJob({
+          id: jobId,
+          workspaceId: this.workspaceId,
+          runId,
+          agentId: node.id,
+          runtimeNodeId: node.id,
+          agent: node.label || node.id,
+          task: event?.channel || "knowledge runtime event",
+          status: finalStatus,
+          runtimeStatus: finalStatus,
+          currentStep: steps[steps.length - 1] || null,
+          steps,
+          provider: resultSummary.provider || config.providerProfile || config.providerType || config.provider || "",
+          model: resultSummary.model || config.model || "",
+          durationMs: latencyMs,
+          tokens: node.metadata?.tokenUsage?.lastTokens || result?.usage?.totalTokens || result?.ai?.usage?.totalTokens || 0,
+          prompt: (() => {
+            const promptEntry = debugContext.entries.find((entry) => entry.prompt || entry.promptPreview);
+            return promptEntry?.prompt || promptEntry?.promptPreview || "";
+          })(),
+          inputTrace: inputStep.payload,
+          result: {
+            ...resultSummary,
+            preview: knowledgeRuntimeJsonPreview(result),
+            fullResult: result,
+            debug: debugContext.entries,
+          },
+          error: resultSummary.error || "",
+          updatedAt: nowIso(),
+        });
         if (subtype === "knowledge-graph-builder-agent") {
           await emitKnowledgeRuntimeActivity({
             bus: this.bus,
@@ -9994,6 +10505,41 @@ window.TrackerLensKnowledgeRuntime = (() => {
           context: { outputChannel, inputChannel: event?.channel || "", latencyMs },
         });
       } catch (error) {
+        const latencyMs = Math.round(performance.now() - startedAt);
+        const steps = knowledgeRuntimeSteps({
+          inputStep,
+          debugEntries: debugContext.entries,
+          latencyMs,
+          error,
+        });
+        await upsertKnowledgeRuntimeJob({
+          id: jobId,
+          workspaceId: this.workspaceId,
+          runId,
+          agentId: node.id,
+          runtimeNodeId: node.id,
+          agent: node.label || node.id,
+          task: event?.channel || "knowledge runtime event",
+          status: "error",
+          runtimeStatus: "error",
+          currentStep: steps[steps.length - 1] || null,
+          steps,
+          provider: config.providerProfile || config.providerType || config.provider || "",
+          model: config.model || "",
+          durationMs: latencyMs,
+          tokens: node.metadata?.tokenUsage?.lastTokens || 0,
+          prompt: (() => {
+            const promptEntry = debugContext.entries.find((entry) => entry.prompt || entry.promptPreview);
+            return promptEntry?.prompt || promptEntry?.promptPreview || "";
+          })(),
+          inputTrace: inputStep.payload,
+          result: {
+            error: error.message || String(error),
+            debug: debugContext.entries,
+          },
+          error: error.message || String(error),
+          updatedAt: nowIso(),
+        });
         await this.bus.emit("knowledge.error", {
           error: error.message || String(error),
           nodeId: node.id,
@@ -10011,6 +10557,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           message: `Knowledge error: ${error.message || error}`,
           context: { inputChannel: event?.channel || "", error: error.message || String(error) },
         });
+      } finally {
+        endKnowledgeRuntimeDebug(debugContext);
       }
     }
   }

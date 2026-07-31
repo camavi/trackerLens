@@ -560,7 +560,7 @@ window.TrackerLensOrchestratorAgentRuntime = (() => {
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText.slice(0, 180)}` : ""}`);
+      throw new Error(`LM Studio HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`);
     }
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content || "";

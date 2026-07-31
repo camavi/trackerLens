@@ -49,6 +49,7 @@ Last updated: 2026-06-25.
 - Do not invent endpoint URLs or domain-specific data. Endpoint discovery must be attributed and confirmed.
 - Mutating Flow Agent commands must go through the registered tool layer and safe executor.
 - Destructive operations must be dependency-aware and must preserve user data unless explicitly confirmed.
+- Do not hardcode Trackers Lens limits that hide, truncate, cap or partially save runtime data, prompts, tokens, chunks, debug traces, previews or exports. User-configured limits are allowed; internal safeguards must be opt-in/configurable and must never override explicit user settings or prevent full inspection.
 - Update `docs/ai/current-focus.md` and `docs/ai/task-registry.md` when task state changes.
 
 ## Legacy Markdown Policy
