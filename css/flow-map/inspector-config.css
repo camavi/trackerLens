@@ -3239,6 +3239,118 @@ button.tl-flow-mini-chip {
   word-break: break-word;
 }
 
+.tl-world-graph-card p {
+  margin: 0;
+  padding: 8px;
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 12px;
+}
+
+.tl-world-graph-mini {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px;
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 12px;
+}
+
+.tl-world-graph-mini strong {
+  color: rgba(226, 232, 240, 0.96);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tl-world-graph-dialog-body {
+  display: grid;
+  gap: 12px;
+}
+
+.tl-world-graph-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.tl-world-graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 12px;
+  min-height: 560px;
+}
+
+.tl-world-graph-canvas {
+  min-width: 0;
+  min-height: 560px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.055) 1px, transparent 1px),
+    rgba(2, 6, 23, 0.82);
+  background-size: 32px 32px;
+}
+
+.tl-world-graph-side {
+  min-width: 0;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.82);
+  overflow: auto;
+}
+
+.tl-world-graph-side h3 {
+  margin: 0 0 10px;
+  color: rgba(248, 250, 252, 0.96);
+  font-size: 14px;
+}
+
+.tl-world-graph-side dl {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.tl-world-graph-side dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tl-world-graph-side dt {
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 11px;
+}
+
+.tl-world-graph-side dd {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.96);
+  font-size: 11px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.tl-world-graph-relation-label {
+  fill: rgba(226, 232, 240, 0.78);
+  font: 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  paint-order: stroke;
+  stroke: rgba(2, 6, 23, 0.9);
+  stroke-width: 3px;
+}
+
+@media (max-width: 860px) {
+  .tl-world-graph-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .tl-world-graph-side {
+    max-height: 300px;
+  }
+}
+
 .tl-flow-preview-dialog-panel {
   width: min(1040px, calc(100vw - 44px));
 }

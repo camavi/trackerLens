@@ -2676,7 +2676,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
         relationType,
       });
     };
+    const worldRecord = records.find((record) => record.recordType === "world") || null;
     records.forEach((record) => {
+      if (
+        worldRecord &&
+        record.id !== worldRecord.id &&
+        !record.parentId &&
+        record.recordType !== "story"
+      ) {
+        addRelation(record, "belongs_to", worldRecord);
+      }
       if (record.parentId) addRelation(record, "belongs_to", byId.get(record.parentId));
       if (record.recordType === "pack") addRelation(record, "belongs_to", resolve(record.data?.kingdomId || record.data?.kingdom || "", "kingdom"));
       if (record.recordType === "territory") addRelation(record, "belongs_to", resolve(record.data?.packId || record.data?.pack || "", "pack"));
@@ -10726,27 +10735,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
           }, {
             workspaceId: this.workspaceId,
             eventType: "world_database_updated",
-            sourceNodeId: node.id,
-            meta: {
-              knowledgeRuntime: node.id,
-              inputEventId: event?.id || "",
-              inputChannel: event?.channel || "",
-              runId,
-              subtype,
-              visualUntil: runtimeVisualUntil(),
-            },
-          });
-          await this.bus.emit("knowledge.graph.context", {
-            worldId: result.worldId,
-            collectionId: result.collectionId,
-            entities: result.graph?.entities || [],
-            relations: result.graph?.relations || [],
-            entityCount: result.graph?.entities?.length || 0,
-            relationCount: result.graph?.relations?.length || 0,
-            context: result.context,
-          }, {
-            workspaceId: this.workspaceId,
-            eventType: "world_graph_context",
             sourceNodeId: node.id,
             meta: {
               knowledgeRuntime: node.id,

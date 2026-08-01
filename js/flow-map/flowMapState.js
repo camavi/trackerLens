@@ -1057,28 +1057,77 @@ const repairMissingDependencyConnections = async (nodes = [], dependencies = [],
 
 const normalizeLoadedNodeManifest = (node = {}) => {
   const metadata = node.metadata || {};
+  const subtype = metadata.subtype || nodeSubtype(node);
+  const isWorldDatabase = node.type === "knowledge" && subtype === "world-database";
+  const stripWorldGraphContextPort = (ports = []) => (ports || []).filter((port) => {
+    const name = typeof port === "string" ? port : port?.name || port?.key || "";
+    return !isWorldDatabase || name !== "knowledge.graph.context";
+  });
+  const normalizedConfig = isWorldDatabase
+    ? {
+      ...(metadata.config || {}),
+      outputChannel: metadata.config?.outputChannel === "knowledge.graph.context" ? "world.database.updated" : metadata.config?.outputChannel,
+    }
+    : metadata.config;
   const manifest = window.TrackerLensRuntimeManifest?.normalizeManifest?.({
     ...(metadata.manifest || {}),
     type: metadata.manifest?.type || (node.type === "boxLens" ? "lens" : node.type),
-    subtype: metadata.manifest?.subtype || metadata.subtype || nodeSubtype(node),
+    subtype: metadata.manifest?.subtype || subtype,
     category: metadata.manifest?.category || metadata.category || nodeCategory(node),
-    inputs: metadata.manifest?.inputs || node.inputs || [],
-    outputs: metadata.manifest?.outputs || node.outputs || [],
+    inputs: stripWorldGraphContextPort(metadata.manifest?.inputs || node.inputs || []),
+    outputs: stripWorldGraphContextPort(metadata.manifest?.outputs || node.outputs || []),
     permissions: metadata.manifest?.permissions || metadata.permissions || node.permissions || [],
     settingsSchema: metadata.manifest?.settingsSchema || metadata.settingsSchema || {},
     runtime: metadata.manifest?.runtime || metadata.runtimeMetadata || node.runtime || {},
   });
   if (!manifest) return node;
+  const inputs = stripWorldGraphContextPort(node.inputs || manifest.inputs || []);
+  const outputs = stripWorldGraphContextPort(node.outputs || manifest.outputs || []);
+  const channels = stripWorldGraphContextPort(node.channels || [...inputs, ...outputs]);
   return {
     ...node,
+    inputs,
+    outputs,
+    channels,
     metadata: {
       ...metadata,
       manifest,
       permissions: manifest.permissions,
       settingsSchema: manifest.settingsSchema,
       runtimeMetadata: manifest.runtime,
+      config: normalizedConfig,
     },
   };
+};
+
+const needsWorldDatabasePortMigration = (node = {}) => {
+  const metadata = node.metadata || {};
+  const subtype = metadata.subtype || nodeSubtype(node);
+  if (node.type !== "knowledge" || subtype !== "world-database") return false;
+  const hasGraphContext = (ports = []) => (ports || []).some((port) => {
+    const name = typeof port === "string" ? port : port?.name || port?.key || "";
+    return name === "knowledge.graph.context";
+  });
+  return (
+    hasGraphContext(node.inputs) ||
+    hasGraphContext(node.outputs) ||
+    hasGraphContext(node.channels) ||
+    hasGraphContext(metadata.manifest?.inputs) ||
+    hasGraphContext(metadata.manifest?.outputs) ||
+    metadata.config?.outputChannel === "knowledge.graph.context"
+  );
+};
+
+const persistWorldDatabasePortMigrations = async (originalNodes = [], normalizedNodes = []) => {
+  if (!window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode) return;
+  const normalizedById = new Map((normalizedNodes || []).map((node) => [node.id, node]));
+  const migrations = (originalNodes || [])
+    .filter(needsWorldDatabasePortMigration)
+    .map((node) => normalizedById.get(node.id))
+    .filter(Boolean);
+  for (const node of migrations) {
+    await window.TrackerLensRuntimeGraphStore.upsertRuntimeNode({ node }).catch(() => null);
+  }
 };
 
 const sortById = (items = []) =>
@@ -1185,7 +1234,9 @@ const loadRuntime = async (options = {}) => {
       return;
     }
 
-    const loadedNodes = (await resolveAiAgentAliasNodes(enrichNodesWithLibrarySample(runtimeNodes, libraryItems))).map(normalizeLoadedNodeManifest);
+    const enrichedNodes = await resolveAiAgentAliasNodes(enrichNodesWithLibrarySample(runtimeNodes, libraryItems));
+    const loadedNodes = enrichedNodes.map(normalizeLoadedNodeManifest);
+    await persistWorldDatabasePortMigrations(enrichedNodes, loadedNodes);
     const nodes = await syncEmbeddedFlowMapAliases(loadedNodes);
     const mergedDependencies = await normalizeRuntimeDependencyChannels(
       nodes,
@@ -1632,6 +1683,7 @@ const nodeRuntimeDescription = (node = {}, live = null) => {
   if (node.metadata?.description) return node.metadata.description;
   if (category === "sources" && nodeSubtype(node) === "task") return "Agent task source emitting objective, context and success conditions.";
   if (category === "sources") return "Input adapter ingesting raw external data.";
+  if (nodeSubtype(node) === "world-graph-view") return "Visual worldbuilding graph view for World Database payloads.";
   if (category === "dev" || node.type === "devPreview") return "Development probe showing raw and JSON payloads passing through the graph.";
   if (category === "trackers" || node.type === "boxTracker") return "Data orchestrator emitting structured runtime channels.";
   if (category === "processors" || node.type === "processor") return "Stateless transformation node for runtime events.";
