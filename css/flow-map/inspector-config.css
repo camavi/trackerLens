@@ -3276,7 +3276,10 @@ button.tl-flow-mini-chip {
 .tl-world-graph-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
   min-height: 38px;
   padding: 0 10px;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -3287,8 +3290,14 @@ button.tl-flow-mini-chip {
   white-space: nowrap;
 }
 
-.tl-world-graph-toggle input {
-  accent-color: #22d3ee;
+.tl-world-graph-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tl-world-graph-toggle .cms-toggle {
+  flex: 0 0 auto;
 }
 
 .tl-world-graph-layout {
@@ -3364,6 +3373,24 @@ button.tl-flow-mini-chip {
   margin: 0;
   color: rgba(226, 232, 240, 0.92);
   font-size: 11px;
+}
+
+.tl-world-graph-details dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.tl-world-graph-details dl div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.tl-world-graph-details dd {
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .tl-world-graph-record-list {

@@ -426,6 +426,7 @@ Main files:
 - World Graph layout follow-up: hierarchy rendering now separates visual parent/child placement from relation source/target direction and uses parent-owned vertical lanes, fixing story blocks and other children appearing behind their parent or crossing into another branch in the force layout.
 - World Graph aside follow-up: node selection now surfaces related records and scoped catalog groups in the right panel, so isolated worldbuilding records are useful without being forced into visual graph edges.
 - World Graph aside scroll follow-up: the right panel uses internal vertical overflow for long related-record/catalog/JSON content.
+- World Graph selected-record follow-up: selected records now show a readable Details section in the aside before raw JSON, including isolated catalog entries.
 - World Database generated-record root fix: records-only generated world payloads now get a synthesized `world` record before storage, and nested `data.kingdomId` / `data.packId` references are promoted into `parentId` for graph linking.
 - World Database generated payload dedup: generated payloads that include both `world.*` arrays and `records` for the same IDs are deduplicated before persistence/emission, keeping World Graph output counts aligned with actual unique records.
 - World Database root record cleanup: generated `world` objects now strip child arrays from the persisted root record data, leaving children as standalone records and keeping World Graph detail panels readable.

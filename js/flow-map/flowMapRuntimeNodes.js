@@ -3184,6 +3184,37 @@ const openWorldGraphViewDialog = (node = {}) => {
       ))
     )
   ) : null;
+  const renderWorldRecordDetails = (record = {}) => {
+    if (!record?.id) return null;
+    const data = record.data && typeof record.data === "object" ? record.data : {};
+    const baseRows = [
+      ["Type", record.recordType || record.entityType || "record"],
+      ["ID", record.id],
+      ["Parent", record.parentId || data.parentId || "none"],
+      ["World", record.worldId || graphData.worldId || "unknown"],
+    ];
+    const dataRows = Object.entries(data)
+      .filter(([key, value]) => value != null && value !== "" && !["parentId", "worldId"].includes(key))
+      .slice(0, 10)
+      .map(([key, value]) => [
+        key,
+        Array.isArray(value)
+          ? value.map((item) => typeof item === "string" ? item : item?.label || item?.name || item?.id || JSON.stringify(item)).join(", ")
+          : typeof value === "object"
+            ? previewValueText(value, "json")
+            : String(value),
+      ]);
+    return _.section(
+      { class: "tl-world-graph-aside-section tl-world-graph-details" },
+      _.h4("Details"),
+      _.dl(
+        ...[...baseRows, ...dataRows].map(([key, value]) => _.div(
+          _.dt(key),
+          _.dd(String(value || "none"))
+        ))
+      )
+    );
+  };
   const refreshWorldGraphDialog = () => {
     const host = document.querySelector(`[data-world-graph-dialog="${escapeSelectorValue(node.id)}"]`);
     if (host) host.replaceChildren(renderBody());
@@ -3229,15 +3260,16 @@ const openWorldGraphViewDialog = (node = {}) => {
             }),
             _.label(
               { class: "tl-world-graph-toggle" },
-              _.input({
-                type: "checkbox",
+              _.span(`Show isolated (${isolatedCount})`),
+              _.Toggle({
+                size: "sm",
+                color: "success",
                 checked: showIsolated,
-                onchange: (event) => {
-                  showIsolated = Boolean(event.currentTarget.checked);
+                onChange: (checked) => {
+                  showIsolated = Boolean(checked);
                   refresh();
                 },
-              }),
-              _.span(`Show isolated (${isolatedCount})`)
+              })
             )
           ),
           _.div(
@@ -3340,6 +3372,7 @@ const openWorldGraphViewDialog = (node = {}) => {
                 _.div(_.dt("Entities"), _.dd(`${visibleGraph.entities.length}/${graphData.entities.length}`)),
                 _.div(_.dt("Relations"), _.dd(`${visibleGraph.relations.length}/${graphData.relations.length}`))
               ),
+              selected ? renderWorldRecordDetails(selected) : null,
               renderWorldAsideList("Graph Links", relationRows, { showRelation: true }),
               ...catalogSections.map((section) => renderWorldAsideList(section.title, section.rows)),
               selected ? _.pre({ class: "tl-flow-storage-record-preview" }, previewValueText(selected, "json")) : _.p("No selection")

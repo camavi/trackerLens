@@ -628,6 +628,7 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - World Graph layout follow-up: force layout now derives visual parent/child levels from relation semantics and assigns each parent a vertical lane, so worlds/regni/branchi/classi/storie/story-blocks progress left-to-right with children placed forward near their parent instead of behind it or mixed with another branch.
 - World Graph aside follow-up: selecting a worldbuilding node now shows graph links plus scoped catalog sections such as kingdoms, stories, name/personality pools, global classes, packs/classes or story blocks. Isolated catalog records stay off the canvas by default but remain browseable/clickable in the aside with full JSON inspection.
 - World Graph aside scroll follow-up: the right aside now has its own viewport-bounded vertical overflow so long catalog/JSON sections scroll inside the panel without pushing the graph canvas.
+- World Graph selected-record follow-up: the aside now renders a readable Details section for the selected record before raw JSON, so isolated catalog records show their type/id/parent/world and key data fields immediately when clicked.
 
 ## Next Logical Step
 
