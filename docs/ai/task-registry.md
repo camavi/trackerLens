@@ -420,6 +420,12 @@ Main files:
 - Entity Extractor zero-relation config fix: runtime QA found `"maxRelations":0` in every LLM prompt, so proposed provider relations were sliced to zero during validation. Entity Extractor now treats zero/empty relation caps as unlimited and only applies relation limits for positive user-configured values.
 - Entity Extractor relation diagnostics follow-up: Entity Extractor request steps now retain raw provider response text plus parsed JSON, and final output reports relation materialization counters/samples for duplicate, missing endpoint, cap skipped, same endpoint and dictionary-filtered candidates.
 - Entity Extractor truncated JSON salvage: invalid/unterminated Entity Extractor provider output now salvages complete objects from `entities` and `relations` arrays before falling back to repair/micro, preserving provider-owned relation candidates from long Gemma responses.
+- World Generator Agent foundation: added a Knowledge LLM node for worldbuilding/v1 generation. It emits `world.record` only, keeps `World Database` as the explicit persistence boundary, exposes View Runtime diagnostics, and adds a sample flow test that connects task input through generation, database persistence and World Graph View.
+- World Database generated-record root fix: records-only generated world payloads now get a synthesized `world` record before storage, and nested `data.kingdomId` / `data.packId` references are promoted into `parentId` for graph linking.
+- World Database generated payload dedup: generated payloads that include both `world.*` arrays and `records` for the same IDs are deduplicated before persistence/emission, keeping World Graph output counts aligned with actual unique records.
+- World Database root record cleanup: generated `world` objects now strip child arrays from the persisted root record data, leaving children as standalone records and keeping World Graph detail panels readable.
+- World Generator count cleanup: generated-world runtime counts now deduplicate parallel `world.*` arrays and `records`, preventing misleading inflated counts in View Runtime.
+- World Generator JSON repair: malformed-but-recoverable provider JSON with a missing `world` closing brace before `records` now repairs deterministically, and `create_world` omits existing stored records from the prompt unless explicitly configured.
 - Runtime graph foundation.
 - Event bus and channel registry.
 - Sandbox isolation.

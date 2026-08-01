@@ -361,6 +361,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         semanticRelations: result.semanticRelationCount ?? result.semanticRelations?.length,
         graphEntities: result.graph?.entityCount ?? result.snapshot?.entityCount,
         graphRelations: result.graph?.relationCount ?? result.snapshot?.relationCount,
+        worldRecords: result.recordCount ?? result.records?.length,
       },
     };
   };
@@ -2613,7 +2614,38 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!world || typeof world !== "object") return explicit;
     const worldId = world.id || source.worldId || config.worldId || "";
     const records = [...explicit];
-    if (world.name || world.title || world.id) records.push({ ...world, type: "world", worldId, data: { ...(world.data || {}), description: world.description || "" } });
+    if (world.name || world.title || world.id) {
+      const {
+        kingdoms,
+        regni,
+        packs,
+        branchi,
+        clans,
+        classes,
+        classi,
+        roles,
+        personalities,
+        personalita,
+        personalità,
+        names,
+        nomi,
+        storyBlocks,
+        story_blocks,
+        blocchiStoria,
+        stories,
+        storie,
+        ...worldRecord
+      } = world;
+      records.push({
+        ...worldRecord,
+        type: "world",
+        worldId,
+        data: {
+          ...(world.data || {}),
+          description: world.description || "",
+        },
+      });
+    }
     const appendTyped = (items = [], type = "") => structuredArray(items).forEach((item) => records.push({ ...item, type, worldId: item.worldId || worldId }));
     appendTyped(world.kingdoms || world.regni, "kingdom");
     appendTyped(world.packs || world.branchi || world.clans, "pack");
@@ -2623,6 +2655,41 @@ window.TrackerLensKnowledgeRuntime = (() => {
     appendTyped(world.storyBlocks || world.story_blocks || world.blocchiStoria, "story_block");
     appendTyped(world.stories || world.storie, "story");
     return records;
+  };
+
+  const dedupeWorldRecords = (records = []) => {
+    const byId = new Map();
+    const scoreRecord = (record = {}) => {
+      let score = 0;
+      if (record.parentId || record.kingdomId || record.packId || record.data?.parentId || record.data?.kingdomId || record.data?.packId) score += 8;
+      if (record.data && typeof record.data === "object") score += Object.keys(record.data).length;
+      score += Object.keys(record || {}).length;
+      return score;
+    };
+    records.forEach((record) => {
+      if (!record?.id) return;
+      const previous = byId.get(record.id);
+      if (!previous) {
+        byId.set(record.id, record);
+        return;
+      }
+      const preferred = scoreRecord(record) >= scoreRecord(previous) ? record : previous;
+      const fallback = preferred === record ? previous : record;
+      byId.set(record.id, {
+        ...fallback,
+        ...preferred,
+        data: {
+          ...(fallback.data && typeof fallback.data === "object" ? fallback.data : {}),
+          ...(preferred.data && typeof preferred.data === "object" ? preferred.data : {}),
+        },
+        metadata: {
+          ...(fallback.metadata && typeof fallback.metadata === "object" ? fallback.metadata : {}),
+          ...(preferred.metadata && typeof preferred.metadata === "object" ? preferred.metadata : {}),
+        },
+        parentId: preferred.parentId || fallback.parentId || "",
+      });
+    });
+    return [...byId.values()];
   };
 
   const validateWorldRecords = (records = []) => {
@@ -2709,18 +2776,36 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const worldId = source?.worldId || source?.world?.id || source?.id || config.worldId || `world_${safeId(source?.world?.name || source?.name || config.worldName || collectionId)}`;
     const rawRecords = worldPayloadRecords(source, config);
     if (!rawRecords.length) throw new Error("World Database: nessun record worldbuilding da salvare");
-    const normalizedRecords = rawRecords.map((item) => {
+    const hasWorldRecord = rawRecords.some((item) => normalizeWorldRecordType(item) === "world");
+    const worldLabel = source?.world?.name || source?.worldName || source?.name || config.worldName || worldId;
+    const recordsWithWorld = hasWorldRecord
+      ? rawRecords
+      : [{
+        id: worldId,
+        type: "world",
+        recordType: "world",
+        worldId,
+        label: worldLabel,
+        name: worldLabel,
+        data: {
+          ...(source?.world?.data && typeof source.world.data === "object" ? source.world.data : {}),
+          description: source?.world?.description || source?.description || "",
+        },
+        metadata: { synthesized: true, source: "world-database" },
+      }, ...rawRecords];
+    const normalizedRecords = dedupeWorldRecords(recordsWithWorld.map((item) => {
       const recordType = normalizeWorldRecordType(item);
       const label = structuredRecordLabel(item);
+      const dataParentId = item.data?.parentId || item.data?.kingdomId || item.data?.packId || "";
       return {
         ...item,
         recordType,
         type: recordType,
         worldId: item.worldId || worldId,
-        parentId: item.parentId || item.kingdomId || item.packId || "",
+        parentId: item.parentId || item.kingdomId || item.packId || dataParentId || "",
         id: item.id || `world_${safeId(worldId)}_${safeId(recordType)}_${safeId(label || uniqueId(recordType))}`,
       };
-    });
+    }));
     const savedResult = await buildStructuredKnowledgeStore({
       workspaceId,
       node,
@@ -2758,6 +2843,296 @@ window.TrackerLensKnowledgeRuntime = (() => {
         records: scopedRecords,
         graph,
       },
+    };
+  };
+
+  const worldGeneratorMode = (config = {}, payload = {}) => {
+    const raw = String(payload?.generationMode || payload?.mode || config.generationMode || "create_world")
+      .toLowerCase()
+      .trim()
+      .replace(/[\s-]+/g, "_");
+    return [
+      "create_world",
+      "add_kingdoms",
+      "expand_kingdom",
+      "expand_pack",
+      "generate_story_blocks",
+      "generate_stories",
+      "modify_item",
+    ].includes(raw) ? raw : "create_world";
+  };
+
+  const worldGeneratorPrompt = ({ workspaceId = "", payload = {}, config = {}, existingRecords = [] } = {}) => {
+    const mode = worldGeneratorMode(config, payload);
+    const worldId = payload?.worldId || config.worldId || "";
+    const worldName = payload?.worldName || payload?.name || config.worldName || "";
+    const collectionId = payload?.collectionId || config.collectionId || "worldbuilding";
+    const schemaVersion = payload?.schemaVersion || config.schemaVersion || "1";
+    const objective = String(payload?.objective || payload?.task || payload?.prompt || payload?.text || config.objective || "").trim();
+    const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a World Generator Agent for Trackers Lens. Generate structured worldbuilding records as strict JSON for the worldbuilding/v1 schema.");
+    const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use the objective, input payload and generation mode to create or update only the requested worldbuilding scope. Keep IDs stable, use explicit parent links, and return data that can be appended to World Database.");
+    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, personality, name, story_block, story, territory, law. Do not include markdown or prose.");
+    const requestedCounts = {
+      kingdomCount: Number(config.kingdomCount || payload?.kingdomCount || 0) || "",
+      packsPerKingdom: Number(config.packsPerKingdom || payload?.packsPerKingdom || 0) || "",
+      storyBlockCount: Number(config.storyBlockCount || payload?.storyBlockCount || 0) || "",
+      storyCount: Number(config.storyCount || payload?.storyCount || 0) || "",
+    };
+    const request = {
+      workspaceId,
+      mode,
+      worldId,
+      worldName,
+      collectionId,
+      schemaVersion,
+      objective,
+      targetRecordId: payload?.targetRecordId || config.targetRecordId || "",
+      targetRecordType: payload?.targetRecordType || config.targetRecordType || "",
+      requestedCounts,
+      inputPayload: payload,
+      existingRecords,
+    };
+    const schema = {
+      worldId: "string",
+      collectionId: "string",
+      schemaVersion: "1",
+      world: {
+        id: "string",
+        name: "string",
+        description: "string",
+        kingdoms: [{ id: "string", name: "string", symbol: "string", color: "string", philosophy: "string", laws: ["string"], motto: "string", history: "string", territory: "string" }],
+        packs: [{ id: "string", kingdomId: "string", name: "string", symbol: "string", color: "string", philosophy: "string", laws: ["string"], motto: "string", history: "string", territory: "string" }],
+        classes: [{ id: "string", name: "Guardian|Scout|Hunter|Elder|Oracle", description: "string", packId: "optional", kingdomId: "optional" }],
+        personalities: [{ id: "string", name: "Coraggioso|Calmo|Impulsivo|Silenzioso|Curioso|Protettivo|Leale", traits: ["string"] }],
+        names: [{ id: "string", name: "string", culture: "string", gender: "optional", packId: "optional", kingdomId: "optional" }],
+        storyBlocks: [{ id: "string", name: "string", blockType: "origin|conflict|quest|ritual|choice|consequence", summary: "string" }],
+        stories: [{ id: "string", title: "string", blocks: ["story_block_id"], kingdomId: "optional", packId: "optional", summary: "string" }],
+      },
+      records: [{ id: "string", type: "world|kingdom|pack|class|personality|name|story_block|story|territory|law", label: "string", parentId: "optional", data: "object" }],
+    };
+    return [
+      systemPrompt,
+      promptTemplate,
+      outputInstructions,
+      "Important: World Database will persist the returned JSON. Return append/update records only for the requested mode; do not delete unrelated existing records.",
+      "Always include either a world object or a records entry with type world for the requested worldId, even when the mode mostly returns child records.",
+      "Use deterministic lowercase snake_case IDs. Use parentId, kingdomId, packId and story block IDs to make graph links explicit.",
+      "For modify_item, return the complete replacement record for the target item plus only directly affected records.",
+      "Schema:",
+      JSON.stringify(schema),
+      "Request:",
+      JSON.stringify(request),
+    ].filter(Boolean).join("\n\n");
+  };
+
+  const generatedWorldRecordCount = (proposal = {}, config = {}) => {
+    const records = dedupeWorldRecords(worldPayloadRecords(proposal, config).map((item) => ({
+      ...item,
+      recordType: normalizeWorldRecordType(item),
+      type: normalizeWorldRecordType(item),
+    })));
+    return records.length;
+  };
+
+  const stripJsonFence = (text = "") =>
+    String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+
+  const extractBalancedJsonArrayText = (text = "", startIndex = 0) => {
+    const clean = String(text || "");
+    const start = clean.indexOf("[", Math.max(0, startIndex));
+    if (start < 0) return "";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let index = start; index < clean.length; index += 1) {
+      const char = clean[index];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === "\\") {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (char === "[") depth += 1;
+      if (char === "]") {
+        depth -= 1;
+        if (depth === 0) return clean.slice(start, index + 1);
+      }
+    }
+    return "";
+  };
+
+  const repairWorldGeneratorJsonObject = (text = "") => {
+    const clean = stripJsonFence(text);
+    if (!clean) return null;
+    const recordsKeyIndex = clean.indexOf('"records"');
+    if (recordsKeyIndex > 0) {
+      const repaired = clean.slice(0, recordsKeyIndex).replace(/,\s*$/, "\n  },\n  ") + clean.slice(recordsKeyIndex);
+      try {
+        return JSON.parse(repaired);
+      } catch {}
+    }
+    const recordsIndex = clean.indexOf('"records"');
+    const recordsArrayText = recordsIndex >= 0 ? extractBalancedJsonArrayText(clean, recordsIndex) : "";
+    if (!recordsArrayText) return null;
+    try {
+      const records = JSON.parse(recordsArrayText);
+      if (!Array.isArray(records) || !records.length) return null;
+      const field = (key = "", fallback = "") => {
+        const match = clean.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, "i"));
+        return match ? match[1] : fallback;
+      };
+      return {
+        worldId: field("worldId", ""),
+        collectionId: field("collectionId", "worldbuilding"),
+        schemaVersion: field("schemaVersion", "1"),
+        records,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const callWorldGeneratorAi = async ({ workspaceId = "", node = {}, payload = {}, event = {}, config = {} } = {}) => {
+    const provider = await pickAiProvider(config);
+    if (!provider) return { proposal: null, provider: "", model: "", usage: {}, error: "provider-not-found", rawText: "" };
+    const providerType = String(provider.provider || provider.providerType || config.providerType || config.provider || "").toLowerCase();
+    const model = String(config.model || provider.model || (providerType === "ollama" ? "llama3.1" : "local-model")).trim();
+    const collectionId = payload?.collectionId || config.collectionId || "worldbuilding";
+    const schemaId = "worldbuilding/v1";
+    const worldId = payload?.worldId || payload?.world?.id || config.worldId || "";
+    const mode = worldGeneratorMode(config, payload);
+    const includeExistingRecords = mode !== "create_world" ||
+      config.includeExistingRecords === true ||
+      config.includeExistingRecords === "true" ||
+      payload?.includeExistingRecords === true ||
+      payload?.includeExistingRecords === "true";
+    const existingRecords = includeExistingRecords
+      ? await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId })
+      : [];
+    const prompt = worldGeneratorPrompt({ workspaceId, payload, config, existingRecords });
+    const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
+    const url = providerType === "ollama"
+      ? `${endpoint}/api/generate`
+      : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
+    const temperature = knowledgeAiNumberConfig(config.temperature, 0.4);
+    const topP = knowledgeAiNumberConfig(config.topP, 0.9);
+    const configuredMaxTokens = knowledgeAiNumberConfig(config.maxTokens, 0);
+    const baseBody = providerType === "ollama"
+      ? { model, prompt, stream: false, format: "json", options: { temperature, top_p: topP } }
+      : { model, messages: [{ role: "user", content: prompt }], temperature, top_p: topP };
+    if (configuredMaxTokens > 0) {
+      if (providerType === "ollama") baseBody.options.num_predict = configuredMaxTokens;
+      else baseBody.max_tokens = configuredMaxTokens;
+    }
+    const requestBody = providerType === "ollama" ? baseBody : withJsonObjectResponseFormat(baseBody, providerType, config);
+    knowledgeLlmDebug("world-generator:request", {
+      status: "working",
+      mode,
+      provider: provider.id || providerType || "",
+      providerType,
+      model,
+      worldId,
+      collectionId,
+      existingRecordCount: existingRecords.length,
+      promptChars: prompt.length,
+      configuredMaxTokens,
+      maxTokens: requestBody.max_tokens || requestBody.options?.num_predict || 0,
+      promptMode: "worldbuilding",
+      prompt,
+    });
+    let response = await postChatJson({ url, body: requestBody, headers: headersForProvider(provider, config) });
+    let errorText = response.ok ? "" : await chatErrorText(response);
+    if (!response.ok && providerType !== "ollama" && /json|format/i.test(errorText)) {
+      const fallbackBody = { ...requestBody };
+      delete fallbackBody.response_format;
+      response = await postChatJson({ url, body: fallbackBody, headers: headersForProvider(provider, config) });
+      errorText = response.ok ? "" : await chatErrorText(response);
+    }
+    if (!response.ok) {
+      return { proposal: null, provider: provider.id || providerType, model, usage: {}, error: `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`, rawText: "" };
+    }
+    const data = await response.json();
+    const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+    const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
+    const parsedProposal = parseAiJsonObject(text);
+    const repairedProposal = parsedProposal ? null : repairWorldGeneratorJsonObject(text);
+    const proposal = parsedProposal || repairedProposal;
+    knowledgeLlmDebug("world-generator:response", {
+      status: proposal ? "complete" : "error",
+      mode,
+      provider: provider.id || providerType || "",
+      providerType,
+      model: data.model || model,
+      promptChars: prompt.length,
+      configuredMaxTokens,
+      maxTokens: requestBody.max_tokens || requestBody.options?.num_predict || 0,
+      promptMode: "worldbuilding",
+      recordCount: generatedWorldRecordCount(proposal || {}, config),
+      rawText: text,
+      parsedJson: proposal,
+      repairedJson: Boolean(repairedProposal),
+      error: proposal ? (repairedProposal ? "repaired-invalid-json" : "") : "invalid-ai-json",
+    });
+    return {
+      proposal,
+      provider: provider.id || providerType || "provider",
+      model: data.model || model,
+      usage,
+      error: proposal ? (repairedProposal ? "repaired-invalid-json" : "") : "invalid-ai-json",
+      rawText: text,
+    };
+  };
+
+  const generateWorldWithAi = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
+    const aiResult = await callWorldGeneratorAi({ workspaceId, node, payload, event, config });
+    if (aiResult.usage?.totalTokens) {
+      await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
+    }
+    if (!aiResult.proposal || typeof aiResult.proposal !== "object") {
+      throw new Error(`World Generator Agent: output JSON non valido${aiResult.error ? ` (${aiResult.error})` : ""}`);
+    }
+    const source = unwrapStructuredPayload(aiResult.proposal, config);
+    const collectionId = source?.collectionId || config.collectionId || "worldbuilding";
+    const schemaVersion = source?.schemaVersion || config.schemaVersion || "1";
+    const worldId = source?.worldId || source?.world?.id || source?.id || config.worldId || `world_${safeId(source?.world?.name || source?.name || config.worldName || collectionId)}`;
+    const recordCount = generatedWorldRecordCount({ ...source, worldId, collectionId, schemaVersion }, config);
+    if (!recordCount) throw new Error("World Generator Agent: il modello non ha prodotto record worldbuilding");
+    return {
+      ...source,
+      worldId,
+      collectionId,
+      schemaId: "worldbuilding/v1",
+      schemaVersion,
+      generatedBy: "world-generator-agent",
+      generationMode: worldGeneratorMode(config, payload),
+      provider: aiResult.provider,
+      model: aiResult.model,
+      usage: aiResult.usage,
+      recordCount,
+      rawText: aiResult.rawText,
+      status: aiResult.error ? "warning" : "ready",
+      error: aiResult.error || "",
+      ai: {
+        provider: aiResult.provider,
+        model: aiResult.model,
+        usage: aiResult.usage,
+        error: aiResult.error || "",
+        promptMode: "worldbuilding",
+      },
+      metadata: {
+        ...(source.metadata && typeof source.metadata === "object" ? source.metadata : {}),
+        nodeId: node?.id || "",
+        inputChannel: event?.channel || "",
+        sourceNodeId: event?.sourceNodeId || "",
+      },
+      createdAt: nowIso(),
     };
   };
 
@@ -10746,6 +11121,43 @@ window.TrackerLensKnowledgeRuntime = (() => {
             },
           });
           outputChannel = nodeOutput(node, config, "world.database.updated");
+        } else if (subtype === "world-generator-agent") {
+          await emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "thinking",
+            label: "Generating world records",
+            durationMs: 180000,
+          });
+          let waitingHeartbeat = 0;
+          const emitWaitingHeartbeat = () => emitKnowledgeRuntimeActivity({
+            bus: this.bus,
+            workspaceId: this.workspaceId,
+            runtime: this.runtime,
+            node,
+            event,
+            runId,
+            subtype,
+            status: "busy",
+            phase: "thinking",
+            label: "Generating world records",
+            durationMs: 30000,
+          });
+          waitingHeartbeat = setInterval(() => {
+            emitWaitingHeartbeat().catch(() => null);
+          }, 2000);
+          try {
+            result = await generateWorldWithAi({ workspaceId: this.workspaceId, node, payload, event, config });
+          } finally {
+            clearInterval(waitingHeartbeat);
+          }
+          outputChannel = nodeOutput(node, config, "world.record");
         } else if (subtype === "embedding-generator" || subtype === "vector-memory") {
           result = await createEmbeddings({ workspaceId: this.workspaceId, node, payload, event, config });
           outputChannel = nodeOutput(node, config, "knowledge.embedding.created");
@@ -11109,7 +11521,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           error: resultSummary.error || "",
           updatedAt: nowIso(),
         });
-        if (subtype === "knowledge-graph-builder-agent") {
+        if (subtype === "knowledge-graph-builder-agent" || subtype === "world-generator-agent") {
           await emitKnowledgeRuntimeActivity({
             bus: this.bus,
             workspaceId: this.workspaceId,

@@ -1107,6 +1107,13 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
       outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity.",
     };
   }
+  if (subtype === "world-generator-agent") {
+    return {
+      systemPrompt: "You are a World Generator Agent for Trackers Lens. Generate structured worldbuilding records as strict JSON for the worldbuilding/v1 schema.",
+      promptTemplate: "Use the objective, input payload and generation mode to create or update only the requested worldbuilding scope. Keep IDs stable, use explicit parent links, and return data that can be appended to World Database.",
+      outputInstructions: "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, personality, name, story_block, story, territory, law. Do not include markdown or prose.",
+    };
+  }
   if (subtype === "knowledge-mechanism-cue-agent") {
     return {
       systemPrompt: "You are a Knowledge Mechanism Cue Agent. You do not answer the user. You identify only document-grounded retrieval cues that help find the concrete method, cause, transformation and direct outcome evidence in the supplied chunks.",
@@ -1859,6 +1866,24 @@ const configFieldDefinitions = (node = {}) => {
         { key: "replaceExisting", label: "Replace world records", type: "checkbox", defaultValue: false },
         { key: "outputChannel", label: "Output channel", placeholder: "world.database.updated" },
       ];
+    }
+    if (subtype === "world-generator-agent") {
+      return withAiProviderConfigFields([
+        { key: "generationMode", label: "Generation mode", type: "select", options: ["create_world", "add_kingdoms", "expand_kingdom", "expand_pack", "generate_story_blocks", "generate_stories", "modify_item"], defaultValue: "create_world" },
+        ...knowledgeAiPromptFieldDefinitions(subtype),
+        { key: "objective", label: "Objective", type: "textarea", rows: 5, placeholder: "Create a fantasy world with kingdoms, packs, laws and story blocks..." },
+        { key: "worldId", label: "World ID", placeholder: "world_storms" },
+        { key: "worldName", label: "World name", placeholder: "Mondo delle Tempeste" },
+        { key: "collectionId", label: "Collection ID", placeholder: "worldbuilding" },
+        { key: "schemaVersion", label: "Schema version", placeholder: "1" },
+        { key: "targetRecordId", label: "Target record ID", placeholder: "optional for modify/expand" },
+        { key: "targetRecordType", label: "Target record type", placeholder: "kingdom, pack, story..." },
+        { key: "kingdomCount", label: "Kingdom count", placeholder: "1" },
+        { key: "packsPerKingdom", label: "Packs per kingdom", placeholder: "3" },
+        { key: "storyBlockCount", label: "Story blocks", placeholder: "4" },
+        { key: "storyCount", label: "Stories", placeholder: "1" },
+        { key: "outputChannel", label: "Output channel", placeholder: "world.record" },
+      ]);
     }
     if (subtype === "knowledge-graph") {
       return [
@@ -3903,6 +3928,14 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "tune", label: "Replace", value: boolInlineConfigValue(config.replaceExisting ?? false) },
       { iconName: "hub", label: "Output", value: output || "world.database.updated" },
     ],
+    "world-generator-agent": [
+      { iconName: "auto_awesome", label: "Mode", value: config.generationMode || "create_world" },
+      { iconName: "tune", label: "Provider", value: config.providerProfile || config.providerType || "lm-studio" },
+      { iconName: "memory", label: "Model", value: config.model || "local-model" },
+      { iconName: "public", label: "World", value: config.worldId || config.worldName || "world" },
+      { iconName: "folder", label: "Collection", value: config.collectionId || "worldbuilding" },
+      { iconName: "hub", label: "Output", value: output || "world.record" },
+    ],
     "knowledge-graph": [
       { iconName: "filter_alt", label: "Scope", value: config.graphScope || (config.documentId ? "document" : config.collectionId ? "collection" : "workspace") },
       { iconName: "account_tree", label: "Entities", value: config.topEntities || "12" },
@@ -4723,9 +4756,10 @@ const aiAgentFromRuntimeNode = (node = {}, aiDefaults = {}) => {
     subtype === "knowledge-event-builder" ? "classifier" :
       subtype === "semantic-relation-enricher" ? "classifier" :
         subtype === "knowledge-graph-builder-agent" ? "planner" :
-          subtype === "knowledge-mechanism-cue-agent" ? "classifier" :
-            subtype === "orchestrator" ? "planner" :
-              "";
+          subtype === "world-generator-agent" ? "creator" :
+            subtype === "knowledge-mechanism-cue-agent" ? "classifier" :
+              subtype === "orchestrator" ? "planner" :
+                "";
   const agentType = config.agentType || knowledgeAgentType || subtype || "analyzer";
   const split = window.TrackerLensAiAgentEditor?.splitList || ((value) => String(value || "").split(/[\n,]+/).map((item) => item.trim()).filter(Boolean));
   return {
@@ -6340,6 +6374,7 @@ const knowledgeAiNodeTabMeta = (subtype = "") => {
   if (subtype === "knowledge-event-builder") return { label: "Event Builder", icon: "timeline" };
   if (subtype === "semantic-relation-enricher") return { label: "Semantic", icon: "psychology" };
   if (subtype === "knowledge-graph-builder-agent") return { label: "Graph Builder", icon: "auto_awesome" };
+  if (subtype === "world-generator-agent") return { label: "World Generator", icon: "auto_awesome" };
   if (subtype === "knowledge-mechanism-cue-agent") return { label: "Mechanism Cue", icon: "psychology_alt" };
   return { label: "Knowledge", icon: "schema" };
 };
