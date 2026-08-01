@@ -2049,6 +2049,7 @@ const configFieldDefinitions = (node = {}) => {
     if (subtype === "world-graph-view") {
       return mergeSchemaFields([
         { key: "layout", label: "Layout", type: "select", options: ["force", "radial"] },
+        { key: "showIsolatedRecords", label: "Show isolated records", type: "checkbox", defaultValue: false },
         { key: "showRecordJson", label: "Show record JSON", type: "checkbox", defaultValue: true },
       ]);
     }
@@ -2743,7 +2744,16 @@ const worldGraphLayout = ({ entities = [], relations = [], layout = "force" } = 
     if (degree.has(relation.targetEntityId)) degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) || 0) + 1);
   });
   const positions = new Map();
-  const roots = entities.filter((entity) => !relations.some((relation) => relation.sourceEntityId === entity.id));
+  const visualHierarchyEdge = (relation = {}) => {
+    const type = relation.relationType || "relation";
+    if (type === "uses_block") return { parentId: relation.sourceEntityId, childId: relation.targetEntityId };
+    return { parentId: relation.targetEntityId, childId: relation.sourceEntityId };
+  };
+  const visualEdges = relations
+    .map(visualHierarchyEdge)
+    .filter((edge) => byId.has(edge.parentId) && byId.has(edge.childId) && edge.parentId !== edge.childId);
+  const childIds = new Set(visualEdges.map((edge) => edge.childId));
+  const roots = entities.filter((entity) => !childIds.has(entity.id));
   const ordered = [...entities].sort((a, b) =>
     (b.recordType === "world" || b.entityType === "world" ? 1 : 0) - (a.recordType === "world" || a.entityType === "world" ? 1 : 0) ||
     (degree.get(b.id) || 0) - (degree.get(a.id) || 0) ||
@@ -2764,11 +2774,23 @@ const worldGraphLayout = ({ entities = [], relations = [], layout = "force" } = 
     });
   } else {
     const rootIds = new Set(roots.map((entity) => entity.id));
-    const childrenByTarget = new Map();
-    relations.forEach((relation) => {
-      if (!byId.has(relation.sourceEntityId) || !byId.has(relation.targetEntityId)) return;
-      if (!childrenByTarget.has(relation.targetEntityId)) childrenByTarget.set(relation.targetEntityId, []);
-      childrenByTarget.get(relation.targetEntityId).push(relation.sourceEntityId);
+    const childrenByParent = new Map();
+    const seenChildren = new Set();
+    visualEdges.forEach((edge) => {
+      const key = `${edge.parentId}::${edge.childId}`;
+      if (seenChildren.has(key)) return;
+      seenChildren.add(key);
+      if (!childrenByParent.has(edge.parentId)) childrenByParent.set(edge.parentId, []);
+      childrenByParent.get(edge.parentId).push(edge.childId);
+    });
+    childrenByParent.forEach((children) => {
+      children.sort((leftId, rightId) => {
+        const left = byId.get(leftId) || {};
+        const right = byId.get(rightId) || {};
+        const typeOrder = { world: 0, kingdom: 1, story: 2, pack: 3, story_block: 4, class: 5, territory: 6, law: 7, personality: 8, name: 9 };
+        return (typeOrder[left.recordType || left.entityType] ?? 20) - (typeOrder[right.recordType || right.entityType] ?? 20) ||
+          String(left.label || left.id).localeCompare(String(right.label || right.id));
+      });
     });
     const levels = new Map();
     const queue = (roots.length ? roots : ordered.slice(0, 1)).map((entity) => ({ id: entity.id, level: 0 }));
@@ -2776,24 +2798,62 @@ const worldGraphLayout = ({ entities = [], relations = [], layout = "force" } = 
       const item = queue.shift();
       if (levels.has(item.id) && levels.get(item.id) <= item.level) continue;
       levels.set(item.id, item.level);
-      (childrenByTarget.get(item.id) || []).forEach((childId) => queue.push({ id: childId, level: item.level + 1 }));
+      (childrenByParent.get(item.id) || []).forEach((childId) => queue.push({ id: childId, level: item.level + 1 }));
     }
     ordered.forEach((entity) => {
       if (!levels.has(entity.id)) levels.set(entity.id, rootIds.has(entity.id) ? 0 : 2);
     });
-    const buckets = new Map();
-    ordered.forEach((entity) => {
-      const level = levels.get(entity.id) || 0;
-      if (!buckets.has(level)) buckets.set(level, []);
-      buckets.get(level).push(entity);
-    });
-    const maxLevel = Math.max(1, ...buckets.keys());
-    buckets.forEach((items, level) => {
-      const x = 92 + (level / maxLevel) * (width - 184);
-      items.forEach((entity, index) => {
-        const gap = height / (items.length + 1);
-        positions.set(entity.id, { x, y: gap * (index + 1) });
+    const maxLevel = Math.max(1, ...levels.values());
+    const xForLevel = (level) => 86 + (level / maxLevel) * (width - 172);
+    const leafCounts = new Map();
+    const countLeaves = (id, stack = new Set()) => {
+      if (leafCounts.has(id)) return leafCounts.get(id);
+      if (stack.has(id)) return 1;
+      stack.add(id);
+      const children = (childrenByParent.get(id) || []).filter((childId) => byId.has(childId));
+      const count = children.length
+        ? children.reduce((sum, childId) => sum + countLeaves(childId, new Set(stack)), 0)
+        : 1;
+      leafCounts.set(id, Math.max(1, count));
+      return leafCounts.get(id);
+    };
+    const sortedRoots = [...(roots.length ? roots : ordered.slice(0, 1))].sort((a, b) =>
+      (a.recordType === "world" || a.entityType === "world" ? -1 : 0) - (b.recordType === "world" || b.entityType === "world" ? -1 : 0) ||
+      String(a.label || a.id).localeCompare(String(b.label || b.id))
+    );
+    sortedRoots.forEach((entity) => countLeaves(entity.id));
+    const totalLeaves = Math.max(1, sortedRoots.reduce((sum, entity) => sum + (leafCounts.get(entity.id) || 1), 0));
+    const topPad = 70;
+    const bottomPad = 70;
+    const laneHeight = Math.max(1, height - topPad - bottomPad);
+    const placeBranch = (id, yStart, yEnd, stack = new Set()) => {
+      if (!byId.has(id) || stack.has(id)) return;
+      const level = levels.get(id) || 0;
+      const y = Math.max(38, Math.min(height - 38, (yStart + yEnd) / 2));
+      positions.set(id, { x: xForLevel(level), y });
+      const children = (childrenByParent.get(id) || []).filter((childId) => byId.has(childId));
+      if (!children.length) return;
+      let cursor = yStart;
+      children.forEach((childId) => {
+        const childShare = ((leafCounts.get(childId) || 1) / Math.max(1, leafCounts.get(id) || children.length)) * Math.max(24, yEnd - yStart);
+        const childEnd = cursor + childShare;
+        placeBranch(childId, cursor, childEnd, new Set([...stack, id]));
+        cursor = childEnd;
       });
+    };
+    let cursor = topPad;
+    sortedRoots.forEach((entity) => {
+      const share = ((leafCounts.get(entity.id) || 1) / totalLeaves) * laneHeight;
+      placeBranch(entity.id, cursor, cursor + share);
+      cursor += share;
+    });
+    ordered.forEach((entity) => {
+      if (positions.has(entity.id)) return;
+      const level = levels.get(entity.id) || 0;
+      const sameLevel = ordered.filter((item) => !positions.has(item.id) && (levels.get(item.id) || 0) === level);
+      const index = Math.max(0, sameLevel.findIndex((item) => item.id === entity.id));
+      const gap = height / (sameLevel.length + 1 || 2);
+      positions.set(entity.id, { x: xForLevel(level), y: gap * (index + 1) });
     });
   }
   return { width, height, positions, degree };
@@ -2991,10 +3051,27 @@ const openWorldGraphViewDialog = (node = {}) => {
   let panX = 0;
   let panY = 0;
   let drag = null;
+  let showIsolated = Boolean(config.showIsolatedRecords);
   const manualPositions = {};
+  const graphDegree = () => {
+    const degree = new Map(graphData.entities.map((entity) => [entity.id, 0]));
+    graphData.relations.forEach((relation) => {
+      if (degree.has(relation.sourceEntityId)) degree.set(relation.sourceEntityId, (degree.get(relation.sourceEntityId) || 0) + 1);
+      if (degree.has(relation.targetEntityId)) degree.set(relation.targetEntityId, (degree.get(relation.targetEntityId) || 0) + 1);
+    });
+    return degree;
+  };
   const filteredGraphData = () => {
     const query = String(search || "").trim().toLowerCase();
-    if (!query) return graphData;
+    const degree = graphDegree();
+    if (!query) {
+      const entityIds = new Set(graphData.entities.filter((entity) => showIsolated || (degree.get(entity.id) || 0) > 0).map((entity) => entity.id));
+      return {
+        ...graphData,
+        entities: graphData.entities.filter((entity) => entityIds.has(entity.id)),
+        relations: graphData.relations.filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId)),
+      };
+    }
     const matchEntity = (entity) =>
       [entity.id, entity.label, entity.entityType, entity.recordType, entity.worldId].some((value) => String(value || "").toLowerCase().includes(query));
     const entityIds = new Set(graphData.entities.filter(matchEntity).map((entity) => entity.id));
@@ -3007,7 +3084,7 @@ const openWorldGraphViewDialog = (node = {}) => {
     });
     return {
       ...graphData,
-      entities: graphData.entities.filter((entity) => entityIds.has(entity.id)),
+      entities: graphData.entities.filter((entity) => entityIds.has(entity.id) && (showIsolated || (degree.get(entity.id) || 0) > 0 || matchEntity(entity))),
       relations: graphData.relations.filter((relation) => entityIds.has(relation.sourceEntityId) && entityIds.has(relation.targetEntityId)),
     };
   };
@@ -3015,14 +3092,111 @@ const openWorldGraphViewDialog = (node = {}) => {
     const entity = graphData.entities.find((item) => item.id === selectedId) || null;
     return graphData.records.find((item) => item.id === entity?.id) || entity;
   };
+  const recordById = new Map((graphData.records || []).map((item) => [item.id, item]));
+  const entityById = new Map((graphData.entities || []).map((item) => [item.id, item]));
+  const displayRecord = (record = {}) => ({
+    ...record,
+    label: record.label || record.name || record.id,
+    recordType: record.recordType || record.entityType || "record",
+  });
+  const worldArray = (value) => Array.isArray(value) ? value : [];
+  const uniqueRecords = (items = []) => {
+    const seen = new Set();
+    return items
+      .map(displayRecord)
+      .filter((item) => {
+        if (!item?.id || seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+      });
+  };
+  const relationRowsFor = (record = {}) => uniqueRecords((graphData.relations || [])
+    .filter((relation) => relation.sourceEntityId === record.id || relation.targetEntityId === record.id)
+    .map((relation) => {
+      const otherId = relation.sourceEntityId === record.id ? relation.targetEntityId : relation.sourceEntityId;
+      const other = recordById.get(otherId) || entityById.get(otherId) || { id: otherId, label: relation.sourceEntityId === record.id ? relation.targetLabel : relation.sourceLabel };
+      return {
+        ...other,
+        relationLabel: relation.sourceEntityId === record.id ? `${relation.relationType} ->` : `<- ${relation.relationType}`,
+      };
+    }));
+  const worldCatalogSections = (record = {}) => {
+    const records = graphData.records || [];
+    const type = record.recordType || record.entityType || "";
+    const id = record.id || "";
+    const worldId = graphData.worldId || record.worldId || id;
+    const direct = (item) => item.parentId === id || item.data?.parentId === id;
+    const byKingdom = (item) => item.parentId === id || item.data?.kingdomId === id || item.data?.kingdom === id;
+    const byPack = (item) => item.parentId === id || item.data?.packId === id || item.data?.pack === id;
+    const noParent = (item) => !item.parentId && !item.data?.parentId && !item.data?.kingdomId && !item.data?.packId;
+    const storyBlockIds = new Set();
+    if (type === "story") {
+      worldArray(record.data?.blocks || record.data?.storyBlocks).forEach((block) => {
+        const blockRef = typeof block === "string" ? block : block.id || block.blockId || block.type || "";
+        if (blockRef) storyBlockIds.add(blockRef);
+      });
+    }
+    const sections = [];
+    const push = (title, items) => {
+      const rows = uniqueRecords(items);
+      if (rows.length) sections.push({ title, rows });
+    };
+    if (type === "world") {
+      push("Kingdoms", records.filter((item) => item.recordType === "kingdom" && (item.parentId === id || item.worldId === worldId)));
+      push("Stories", records.filter((item) => item.recordType === "story" && (item.worldId === worldId || item.data?.worldId === worldId)));
+      push("Name Pool", records.filter((item) => item.recordType === "name" && item.worldId === worldId));
+      push("Personality Pool", records.filter((item) => item.recordType === "personality" && item.worldId === worldId));
+      push("Global Classes", records.filter((item) => item.recordType === "class" && item.worldId === worldId && noParent(item)));
+      push("Story Blocks", records.filter((item) => item.recordType === "story_block" && item.worldId === worldId));
+    } else if (type === "kingdom") {
+      push("Packs", records.filter((item) => item.recordType === "pack" && byKingdom(item)));
+      push("Classes", records.filter((item) => item.recordType === "class" && byKingdom(item)));
+      push("Stories", records.filter((item) => item.recordType === "story" && byKingdom(item)));
+      push("Catalog In World", records.filter((item) => ["name", "personality"].includes(item.recordType) && item.worldId === worldId));
+    } else if (type === "pack") {
+      push("Classes Available", records.filter((item) => item.recordType === "class" && byPack(item)));
+      push("Stories", records.filter((item) => item.recordType === "story" && byPack(item)));
+      push("Catalog In World", records.filter((item) => ["name", "personality"].includes(item.recordType) && item.worldId === worldId));
+    } else if (type === "story") {
+      push("Story Blocks Used", records.filter((item) => item.recordType === "story_block" && storyBlockIds.has(item.id)));
+      push("Other Story Blocks", records.filter((item) => item.recordType === "story_block" && item.worldId === worldId && !storyBlockIds.has(item.id)));
+    } else {
+      push("Children", records.filter(direct));
+    }
+    return sections;
+  };
+  const renderWorldAsideList = (title, rows = [], options = {}) => rows.length ? _.section(
+    { class: "tl-world-graph-aside-section" },
+    _.h4(title),
+    _.div(
+      { class: "tl-world-graph-record-list" },
+      ...rows.map((item) => _.button(
+        {
+          type: "button",
+          class: item.id === selectedId ? "is-active" : "",
+          onclick: () => {
+            selectedId = item.id;
+            refreshWorldGraphDialog();
+          },
+        },
+        _.span({ class: "tl-world-graph-record-label" }, item.label || item.id),
+        _.span({ class: "tl-world-graph-record-meta" }, options.showRelation && item.relationLabel ? `${item.relationLabel} ${item.recordType}` : item.recordType)
+      ))
+    )
+  ) : null;
+  const refreshWorldGraphDialog = () => {
+    const host = document.querySelector(`[data-world-graph-dialog="${escapeSelectorValue(node.id)}"]`);
+    if (host) host.replaceChildren(renderBody());
+  };
   const renderBody = () => {
     const visibleGraph = filteredGraphData();
-    if (visibleGraph.entities.length && !visibleGraph.entities.some((entity) => entity.id === selectedId)) selectedId = visibleGraph.entities[0].id;
+    const degree = graphDegree();
+    const isolatedCount = graphData.entities.filter((entity) => !(degree.get(entity.id) || 0)).length;
+    if (visibleGraph.entities.length && !graphData.entities.some((entity) => entity.id === selectedId)) selectedId = visibleGraph.entities[0].id;
     const selected = selectedRecord();
-    const refresh = () => {
-      const host = document.querySelector(`[data-world-graph-dialog="${escapeSelectorValue(node.id)}"]`);
-      if (host) host.replaceChildren(renderBody());
-    };
+    const refresh = refreshWorldGraphDialog;
+    const relationRows = selected ? relationRowsFor(selected) : [];
+    const catalogSections = selected ? worldCatalogSections(selected) : [];
     return _.div(
       { class: "tl-world-graph-dialog-body" },
       _.div(
@@ -3052,7 +3226,19 @@ const openWorldGraphViewDialog = (node = {}) => {
                   input?.setSelectionRange?.(input.value.length, input.value.length);
                 }, 0);
               },
-            })
+            }),
+            _.label(
+              { class: "tl-world-graph-toggle" },
+              _.input({
+                type: "checkbox",
+                checked: showIsolated,
+                onchange: (event) => {
+                  showIsolated = Boolean(event.currentTarget.checked);
+                  refresh();
+                },
+              }),
+              _.span(`Show isolated (${isolatedCount})`)
+            )
           ),
           _.div(
             { class: "tl-world-graph-layout" },
@@ -3154,6 +3340,8 @@ const openWorldGraphViewDialog = (node = {}) => {
                 _.div(_.dt("Entities"), _.dd(`${visibleGraph.entities.length}/${graphData.entities.length}`)),
                 _.div(_.dt("Relations"), _.dd(`${visibleGraph.relations.length}/${graphData.relations.length}`))
               ),
+              renderWorldAsideList("Graph Links", relationRows, { showRelation: true }),
+              ...catalogSections.map((section) => renderWorldAsideList(section.title, section.rows)),
               selected ? _.pre({ class: "tl-flow-storage-record-preview" }, previewValueText(selected, "json")) : _.p("No selection")
             )
           )

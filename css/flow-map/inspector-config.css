@@ -3273,6 +3273,24 @@ button.tl-flow-mini-chip {
   gap: 12px;
 }
 
+.tl-world-graph-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  color: rgba(226, 232, 240, 0.86);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tl-world-graph-toggle input {
+  accent-color: #22d3ee;
+}
+
 .tl-world-graph-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -3295,11 +3313,14 @@ button.tl-flow-mini-chip {
 
 .tl-world-graph-side {
   min-width: 0;
+  max-height: min(560px, calc(100vh - 250px));
   border: 1px solid rgba(56, 189, 248, 0.22);
   border-radius: 8px;
   padding: 12px;
   background: rgba(15, 23, 42, 0.82);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .tl-world-graph-side h3 {
@@ -3331,6 +3352,62 @@ button.tl-flow-mini-chip {
   font-size: 11px;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.tl-world-graph-aside-section {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 12px;
+}
+
+.tl-world-graph-aside-section h4 {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.92);
+  font-size: 11px;
+}
+
+.tl-world-graph-record-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tl-world-graph-record-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.36);
+  color: rgba(226, 232, 240, 0.9);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tl-world-graph-record-list button:hover,
+.tl-world-graph-record-list button.is-active {
+  border-color: rgba(34, 211, 238, 0.42);
+  background: rgba(14, 116, 144, 0.22);
+}
+
+.tl-world-graph-record-label,
+.tl-world-graph-record-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-world-graph-record-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tl-world-graph-record-meta {
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 10px;
 }
 
 .tl-world-graph-relation-label {

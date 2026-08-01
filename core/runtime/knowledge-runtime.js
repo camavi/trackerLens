@@ -2727,6 +2727,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const byId = new Map(records.map((record) => [record.id, record]));
     const byTypeLabel = new Map(records.map((record) => [`${record.recordType}::${normalizeEntityToken(record.label || record.id)}`, record]));
     const resolve = (value = "", type = "") => byId.get(value) || byTypeLabel.get(`${type}::${normalizeEntityToken(value)}`) || null;
+    const resolveAny = (value = "", types = []) => {
+      for (const type of types) {
+        const resolved = resolve(value, type);
+        if (resolved) return resolved;
+      }
+      return byId.get(value) || null;
+    };
     const relations = [];
     const relationKeys = new Set();
     const addRelation = (source, relationType, target) => {
@@ -2744,24 +2751,53 @@ window.TrackerLensKnowledgeRuntime = (() => {
       });
     };
     const worldRecord = records.find((record) => record.recordType === "world") || null;
+    const storyBlockIdsInStories = new Set();
+    records.filter((record) => record.recordType === "story").forEach((record) => {
+      structuredArray(record.data?.blocks || record.data?.storyBlocks).forEach((block) => {
+        const blockRef = typeof block === "string" ? block : block.id || block.blockId || block.type || "";
+        if (blockRef) storyBlockIdsInStories.add(blockRef);
+      });
+    });
+    const parentRelationType = (record = {}) => {
+      if (record.recordType === "kingdom") return "part_of_world";
+      if (record.recordType === "pack") return "belongs_to_kingdom";
+      if (record.recordType === "class") return "available_in";
+      if (record.recordType === "story") return "set_in";
+      if (record.recordType === "story_block") return "block_pool_for";
+      if (record.recordType === "name") return "name_pool_for";
+      if (record.recordType === "personality") return "trait_pool_for";
+      return "belongs_to";
+    };
     records.forEach((record) => {
-      if (
-        worldRecord &&
-        record.id !== worldRecord.id &&
-        !record.parentId &&
-        record.recordType !== "story"
-      ) {
-        addRelation(record, "belongs_to", worldRecord);
+      const parentTarget = record.parentId ? byId.get(record.parentId) : null;
+      if (parentTarget) addRelation(record, parentRelationType(record), parentTarget);
+      if (record.recordType === "pack") {
+        addRelation(record, "belongs_to_kingdom", resolve(record.data?.kingdomId || record.data?.kingdom || "", "kingdom"));
       }
-      if (record.parentId) addRelation(record, "belongs_to", byId.get(record.parentId));
-      if (record.recordType === "pack") addRelation(record, "belongs_to", resolve(record.data?.kingdomId || record.data?.kingdom || "", "kingdom"));
-      if (record.recordType === "territory") addRelation(record, "belongs_to", resolve(record.data?.packId || record.data?.pack || "", "pack"));
+      if (record.recordType === "class") {
+        addRelation(record, "available_in", resolveAny(record.data?.packId || record.data?.pack || "", ["pack"]));
+        addRelation(record, "available_in", resolveAny(record.data?.kingdomId || record.data?.kingdom || "", ["kingdom"]));
+      }
+      if (record.recordType === "territory") addRelation(record, "territory_of", resolve(record.data?.packId || record.data?.pack || "", "pack"));
       if (record.recordType === "law") addRelation(resolve(record.data?.packId || record.data?.pack || "", "pack") || record, "follows", record);
       if (record.recordType === "story") {
+        if (!parentTarget) {
+          addRelation(record, "set_in", resolveAny(record.data?.packId || record.data?.pack || "", ["pack"]));
+          addRelation(record, "set_in", resolveAny(record.data?.kingdomId || record.data?.kingdom || "", ["kingdom"]));
+          if (worldRecord) addRelation(record, "set_in_world", worldRecord);
+        }
         structuredArray(record.data?.blocks || record.data?.storyBlocks).forEach((block) => {
           const blockRef = typeof block === "string" ? block : block.id || block.blockId || block.type || "";
           addRelation(record, "uses_block", resolve(blockRef, "story_block"));
         });
+      }
+      if (
+        worldRecord &&
+        record.id !== worldRecord.id &&
+        !parentTarget &&
+        !["pack", "class", "story", "story_block", "name", "personality"].includes(record.recordType)
+      ) {
+        addRelation(record, parentRelationType(record), worldRecord);
       }
     });
     return { entities, relations };
