@@ -5,6 +5,17 @@ Read when: changing the Python worker protocol, managed process lifecycle, Pytho
 Do not read when: implementing production Python nodes, SDK packages or app-data migration.
 Last updated: 2026-08-25.
 
+## Current Direction
+
+The next Python-runtime work follows `docs/ai/python_migration_guide.md`:
+production Python nodes should wrap established Python modules through thin TL
+adapters, rather than reimplement specialist algorithms. A future node
+manifest must declare its Python module/pack requirements, pinned versions or
+lockfile and managed install policy. TL Runtime Manager—not the renderer,
+worker or node adapter—will resolve, install with explicit consent when
+needed, and record the approved environment. This POC deliberately has no
+external dependencies and does not implement that production dependency path.
+
 ## Scope
 
 `runtimes/python/tl_python_worker.py` is a persistent stdio JSON Lines worker using only the Python standard library. `core/desktop/managed-python-runtime.cjs` owns spawn, request correlation, timeout, cancellation, worker health and stop/restart.

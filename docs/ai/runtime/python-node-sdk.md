@@ -16,6 +16,20 @@ Last updated: 2026-08-25.
 
 The SDK deliberately provides no database, filesystem, network, subprocess, memory or knowledge APIs. Any future TL capability must be introduced through a permissioned TL Core contract first.
 
+## Module and Dependency Direction
+
+Built-in Python nodes should be thin adapters over established Python modules,
+not new implementations of existing specialist algorithms. The node manifest
+must declare its capability plus Python module/pack requirements, exact
+version constraints or a lockfile, environment class and managed install
+policy. The SDK must never install dependencies itself.
+
+Runtime Manager resolves those requirements only in an approved managed
+environment. If a requirement is absent, TL presents an explicit trusted-pack
+install or fallback/unavailable outcome; it never performs an implicit network
+install. Execution diagnostics must retain the resolved module, version,
+environment and provenance.
+
 `tl_python_worker.py` registers only the POC handlers. `text.transform` is the only normal capability; delay/exception/crash handlers are development diagnostics.
 
 ## Phase 7: Capabilities

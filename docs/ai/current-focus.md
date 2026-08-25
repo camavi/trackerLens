@@ -15,6 +15,8 @@ Custom Node Packages are the next product/architecture path after the AI Agent l
 
 ## Current Work
 
+- Python runtime direction is being clarified in `docs/ai/python_migration_guide.md`: TL will integrate established Python modules through thin capability adapters rather than recreate specialist algorithms. Future Python node manifests must declare managed module/pack requirements, pinned versions or lockfile and install policy; Runtime Manager resolves them only through approved environments with explicit install consent when needed.
+
 - Electron desktop persistence is SQLite-only by product decision. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime use TL Core SQLite.
 - `database.html` is the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle, arbitrary SQL or demo-data fallback reaches the renderer. The UI exposes only inspection, copy and local JSON export—not mutation actions.
 - Settings obtains desktop persistence status directly from `trackers.desktop.persistence.getStatus()` and contains no import, shadow, activation or recovery controls.
