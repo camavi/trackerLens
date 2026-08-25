@@ -11,6 +11,9 @@ window.TrackerLensRuntimeManifest = (() => {
   const unique = (values = []) =>
     [...new Set(values.filter(Boolean).map(String))];
 
+  const normalizePermissions = (permissions = []) =>
+    unique(permissions).map((permission) => permission.replace(/^indexeddb\./i, "sqlite."));
+
   const executionContract = () => window.TrackerLensNodeExecutionContract || null;
 
   const normalizeExecution = (manifest = {}) => {
@@ -83,7 +86,7 @@ window.TrackerLensRuntimeManifest = (() => {
       category,
       inputs: normalizePorts(manifest.inputs, "in", { ...manifest, type, category, subtype }),
       outputs: normalizePorts(manifest.outputs, "out", { ...manifest, type, category, subtype }),
-      permissions: unique(manifest.permissions || []),
+      permissions: normalizePermissions(manifest.permissions || []),
       settingsSchema: manifest.settingsSchema && typeof manifest.settingsSchema === "object" ? manifest.settingsSchema : {},
       runtime: manifest.runtime && typeof manifest.runtime === "object" ? manifest.runtime : {},
       execution: normalizeExecution(manifest),
@@ -132,6 +135,7 @@ window.TrackerLensRuntimeManifest = (() => {
     NODE_TYPES: [...NODE_TYPES],
     PORT_TYPES: [...PORT_TYPES],
     normalizePort,
+    normalizePermissions,
     defaultPort,
     normalizeManifest,
     validateManifest,

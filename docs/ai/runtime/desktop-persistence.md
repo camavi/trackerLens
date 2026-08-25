@@ -73,6 +73,7 @@ Implemented foundation:
 - `database.html` loads only its UI framework, configuration, sidebar and Explorer script. It does not load graph, cache, package, editor or other persistence runtime modules.
 - `TrackerLensRuntimeGraphStore`, `RuntimeSnapshotStore`, `TrackerLensEventLogStore`, `TrackerLensConnectionsStore`, `TrackerLensChannelRegistry`, `TrackerLensLocalLibrary`, `TrackerLensBoxEditorDialog`, `TrackerLensBoxPerformanceMonitor`, `TrackerLensTimeTravelStore`, `TrackerLensKnowledgeRuntime`, `StorageRuntime` and the legacy-compatible `DatabaseIndexedDB` Workspace adapter use the Core SQLite boundary for desktop persistence.
 - Browser-oriented IndexedDB implementations still exist in modules not yet moved. They are temporary migration debt, not a valid desktop fallback.
+- Runtime manifest permissions normalize the old `indexeddb.read` / `indexeddb.write` tokens to `sqlite.read` / `sqlite.write`, including persisted legacy manifests. New palette nodes must declare the SQLite tokens directly.
 
 ## Acceptance Tests
 

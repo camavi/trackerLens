@@ -73,6 +73,7 @@ const nodeManifest = ({
   execute = null,
   persist = null,
 }) => {
+  const normalizedPermissions = (window.TrackerLensRuntimeManifest?.normalizePermissions || ((values) => values))(permissions);
   const manifestInputs = category === "sources" && !inputs.length
     ? sourceConfigInputPorts(subtype)
     : inputs;
@@ -84,7 +85,7 @@ const nodeManifest = ({
     category,
     inputs: manifestInputs.map((port) => manifestPortDef(port, category === "lens" ? "any" : "object")),
     outputs: outputs.map((port) => manifestPortDef(port, "object")),
-    permissions,
+    permissions: normalizedPermissions,
     settingsSchema,
     runtime,
     ...(execution ? { execution } : {}),
@@ -131,7 +132,7 @@ const paletteNode = ({
   category,
   inputs,
   outputs,
-  permissions,
+  permissions: (window.TrackerLensRuntimeManifest?.normalizePermissions || ((values) => values))(permissions),
   settingsSchema,
   runtime,
   url,
