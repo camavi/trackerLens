@@ -1,6 +1,5 @@
 window.TrackerLensStorageRuntime = (() => {
   const instances = new Map();
-  const DB_NAME = "TrackersLens";
   const DEFAULT_STORE = "tl_history";
 
   const nowIso = () => new Date().toISOString();
@@ -64,67 +63,14 @@ window.TrackerLensStorageRuntime = (() => {
     return desktopSqliteMode;
   };
 
-  const createIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column.name)) {
-        store.createIndex(column.name, column.keyPath || column.name, column.options || { unique: false });
-      }
-    });
-  };
-
-  const openDb = (version = undefined, storeName = DEFAULT_STORE) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains(storeName)) {
-          createIndexes(db.createObjectStore(storeName, { keyPath: "id" }), [
-            { name: "workspaceId" },
-            { name: "nodeId" },
-            { name: "channel" },
-            { name: "createdAt" },
-          ]);
-        }
-      };
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        db.onversionchange = () => db.close();
-        resolve(db);
-      };
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB storage runtime"));
-      request.onblocked = () => reject(new Error("IndexedDB storage runtime bloccato da un'altra scheda."));
-    });
-
-  const ensureStore = async (storeName = DEFAULT_STORE) => {
-    const name = safeStoreName(storeName);
-    if (await usesDesktopSqlite()) return { close() {} };
-    let db = await openDb(undefined, name);
-    if (db.objectStoreNames.contains(name)) return db;
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion, name);
-  };
-
   const writeRecord = async ({ storeName = DEFAULT_STORE, record = {} } = {}) => {
     const name = safeStoreName(storeName);
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName: name, records: [record] });
-      return record;
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) {
+      throw new Error("Storage Runtime richiede SQLite nell'app desktop.");
     }
-    const db = await ensureStore(name);
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(name, "readwrite").objectStore(name).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore salvataggio ${name}`));
-      });
-    } finally {
-      db.close();
-    }
+    await persistence.writeDevelopmentRecords({ storeName: name, records: [record] });
+    return record;
   };
 
   const serializePayload = (payload, format = "json") => {
