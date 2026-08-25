@@ -38,6 +38,7 @@ Last updated: 2026-06-25.
 - Runtime Manager: `docs/ai/runtime/runtime-manager.md`
 - Managed Python POC: `docs/ai/runtime/python-poc.md`
 - Python Node SDK and capabilities: `docs/ai/runtime/python-node-sdk.md`
+- Python node suitability audit: `docs/ai/runtime/python-node-audit.md`
 - Agent runtime: `docs/ai/runtime/agent-runtime.md`
 - Connected node tools: `docs/ai/runtime/connected-node-tools.md`
 - AI memory runtime: `docs/ai/runtime/ai-memory.md`

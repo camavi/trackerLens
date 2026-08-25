@@ -16,6 +16,7 @@ Custom Node Packages are the next product/architecture path after the AI Agent l
 ## Current Work
 
 - Python runtime direction is being clarified in `docs/ai/python_migration_guide.md`: TL will integrate established Python modules through thin capability adapters rather than recreate specialist algorithms. Future Python node manifests must declare managed module/pack requirements, pinned versions or lockfile and install policy; Runtime Manager resolves them only through approved environments with explicit install consent when needed.
+- Python node audit is complete for the 88-node Flow Map palette in `docs/ai/runtime/python-node-audit.md`. No control-plane node is a Python migration target; `text.embedding` for Embedding Generator/Vector Memory is the first hybrid candidate, followed by optional `text.rerank` for RAG Search/Graph Query.
 
 - Electron desktop persistence is SQLite-only by product decision. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime use TL Core SQLite.
 - `database.html` is the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle, arbitrary SQL or demo-data fallback reaches the renderer. The UI exposes only inspection, copy and local JSON export—not mutation actions.
