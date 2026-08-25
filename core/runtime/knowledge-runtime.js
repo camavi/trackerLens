@@ -18,6 +18,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
     sources: tableName("TL_KNOWLEDGE_SOURCES", "tl_knowledge_sources"),
     metrics: tableName("TL_KNOWLEDGE_METRICS", "tl_knowledge_metrics"),
   };
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
+  };
 
   const STORE_DEFINITIONS = [
     { name: STORES.documents, columns: ["workspaceId", "sourceId", "status", "createdAt", "updatedAt"] },
@@ -74,7 +83,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     });
   };
 
-  const ensureStores = () => new Promise((resolve, reject) => {
+  const ensureIndexedDbStores = () => new Promise((resolve, reject) => {
     if (!window.indexedDB) {
       reject(new Error("IndexedDB non disponibile"));
       return;
@@ -103,7 +112,16 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   });
 
+  const ensureStores = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
+    return ensureIndexedDbStores();
+  };
+
   const putRecord = async (storeName, record = {}) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
+      return record;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -118,6 +136,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const listStore = async (storeName) => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -133,6 +152,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const getRecord = async (storeName, id = "") => {
     if (!id) return null;
+    if (await usesDesktopSqlite()) return (await listStore(storeName)).find((record) => record.id === id) || null;
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -149,6 +169,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const deleteRecords = async (storeName, ids = []) => {
     const safeIds = [...new Set((ids || []).filter(Boolean).map(String))];
     if (!safeIds.length) return [];
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: safeIds });
+      return safeIds;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -2583,6 +2607,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     personalità: "personality",
     name: "name",
     nome: "name",
+    character: "character",
+    characters: "character",
+    personaggio: "character",
+    personaggi: "character",
     storyblock: "story_block",
     "story-block": "story_block",
     story_block: "story_block",
@@ -2604,7 +2632,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const source = unwrapStructuredPayload(payload, config);
     const explicit = structuredPayloadRecords(source, config);
     const sourceLooksLikeWorld = source && typeof source === "object" && (
-      source.kingdoms || source.regni || source.packs || source.branchi || source.storyBlocks || source.stories || source.name || source.title
+      source.kingdoms || source.regni || source.packs || source.branchi || source.characters || source.personaggi || source.storyBlocks || source.stories || source.name || source.title
     );
     const world = source?.world && typeof source.world === "object"
       ? source.world
@@ -2629,6 +2657,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         personalità,
         names,
         nomi,
+        characters,
+        personaggi,
         storyBlocks,
         story_blocks,
         blocchiStoria,
@@ -2652,6 +2682,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     appendTyped(world.classes || world.classi || world.roles, "class");
     appendTyped(world.personalities || world.personalita || world.personalità, "personality");
     appendTyped(world.names || world.nomi, "name");
+    appendTyped(world.characters || world.personaggi, "character");
     appendTyped(world.storyBlocks || world.story_blocks || world.blocchiStoria, "story_block");
     appendTyped(world.stories || world.storie, "story");
     return records;
@@ -2713,6 +2744,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
         if (blockRef && !findEndpoint(blockRef, "story_block")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "story-missing-block", ref: blockRef });
       });
     });
+    records.filter((record) => record.recordType === "character").forEach((record) => {
+      const packRef = record.data?.packId || record.data?.pack || record.parentId;
+      const kingdomRef = record.data?.kingdomId || record.data?.kingdom || "";
+      const classRef = record.data?.classId || record.data?.class || "";
+      const nameRef = record.data?.nameId || record.data?.nameRef || "";
+      const personalityRefs = structuredArray(record.data?.personalityIds || record.data?.personalities);
+      if (packRef && !findEndpoint(packRef, "pack")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "character-missing-pack", ref: packRef });
+      if (kingdomRef && !findEndpoint(kingdomRef, "kingdom")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "character-missing-kingdom", ref: kingdomRef });
+      if (classRef && !findEndpoint(classRef, "class")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "character-missing-class", ref: classRef });
+      if (nameRef && !findEndpoint(nameRef, "name")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "character-missing-name", ref: nameRef });
+      personalityRefs.forEach((ref) => {
+        const personalityRef = typeof ref === "string" ? ref : ref.id || ref.personalityId || ref.name || "";
+        if (personalityRef && !findEndpoint(personalityRef, "personality")) warnings.push({ recordId: record.id, recordType: record.recordType, warning: "character-missing-personality", ref: personalityRef });
+      });
+    });
     return warnings;
   };
 
@@ -2762,6 +2808,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (record.recordType === "kingdom") return "part_of_world";
       if (record.recordType === "pack") return "belongs_to_kingdom";
       if (record.recordType === "class") return "available_in";
+      if (record.recordType === "character") return "member_of";
       if (record.recordType === "story") return "set_in";
       if (record.recordType === "story_block") return "block_pool_for";
       if (record.recordType === "name") return "name_pool_for";
@@ -2777,6 +2824,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
       if (record.recordType === "class") {
         addRelation(record, "available_in", resolveAny(record.data?.packId || record.data?.pack || "", ["pack"]));
         addRelation(record, "available_in", resolveAny(record.data?.kingdomId || record.data?.kingdom || "", ["kingdom"]));
+      }
+      if (record.recordType === "character") {
+        const packTarget = resolveAny(record.data?.packId || record.data?.pack || record.parentId || "", ["pack"]);
+        const kingdomTarget = resolveAny(record.data?.kingdomId || record.data?.kingdom || "", ["kingdom"]) ||
+          resolveAny(packTarget?.parentId || packTarget?.data?.kingdomId || packTarget?.data?.kingdom || "", ["kingdom"]);
+        addRelation(record, "member_of", packTarget);
+        addRelation(record, "lives_in", kingdomTarget);
+        addRelation(record, "has_class", resolveAny(record.data?.classId || record.data?.class || "", ["class"]));
+        addRelation(record, "uses_name", resolveAny(record.data?.nameId || record.data?.nameRef || record.data?.name || "", ["name"]));
+        structuredArray(record.data?.personalityIds || record.data?.personalities).forEach((ref) => {
+          const personalityRef = typeof ref === "string" ? ref : ref.id || ref.personalityId || ref.name || "";
+          addRelation(record, "has_personality", resolveAny(personalityRef, ["personality"]));
+        });
       }
       if (record.recordType === "territory") addRelation(record, "territory_of", resolve(record.data?.packId || record.data?.pack || "", "pack"));
       if (record.recordType === "law") addRelation(resolve(record.data?.packId || record.data?.pack || "", "pack") || record, "follows", record);
@@ -2795,7 +2855,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         worldRecord &&
         record.id !== worldRecord.id &&
         !parentTarget &&
-        !["pack", "class", "story", "story_block", "name", "personality"].includes(record.recordType)
+        !["pack", "class", "character", "story", "story_block", "name", "personality"].includes(record.recordType)
       ) {
         addRelation(record, parentRelationType(record), worldRecord);
       }
@@ -2832,7 +2892,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const normalizedRecords = dedupeWorldRecords(recordsWithWorld.map((item) => {
       const recordType = normalizeWorldRecordType(item);
       const label = structuredRecordLabel(item);
-      const dataParentId = item.data?.parentId || item.data?.kingdomId || item.data?.packId || "";
+      const dataParentId = item.data?.parentId || item.data?.packId || item.data?.kingdomId || "";
       return {
         ...item,
         recordType,
@@ -2894,26 +2954,164 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "expand_pack",
       "generate_story_blocks",
       "generate_stories",
+      "generate_characters",
       "modify_item",
     ].includes(raw) ? raw : "create_world";
   };
 
+  const compactWorldRecordForPrompt = (record = {}) => {
+    const data = record.data && typeof record.data === "object" ? record.data : {};
+    return {
+      id: record.id || "",
+      type: record.recordType || record.type || "",
+      label: record.label || record.name || data.name || record.id || "",
+      parentId: record.parentId || data.parentId || "",
+      worldId: record.worldId || "",
+      kingdomId: data.kingdomId || data.kingdom || "",
+      packId: data.packId || data.pack || "",
+      classId: data.classId || data.class || "",
+      nameId: data.nameId || data.nameRef || "",
+      personalityIds: structuredArray(data.personalityIds || data.personalities).map((item) => typeof item === "string" ? item : item.id || item.personalityId || item.name || "").filter(Boolean),
+    };
+  };
+
+  const worldGeneratorExistingContext = ({ mode = "", records = [] } = {}) => {
+    const compactRecords = (records || []).map(compactWorldRecordForPrompt);
+    const byType = (types = []) => compactRecords.filter((record) => types.includes(record.type));
+    if (mode === "generate_characters") {
+      return {
+        mode,
+        compact: true,
+        note: "Existing records are compact references for generation. Use these IDs exactly when linking characters.",
+        worlds: byType(["world"]),
+        kingdoms: byType(["kingdom"]),
+        packs: byType(["pack"]),
+        classes: byType(["class"]),
+        names: byType(["name"]),
+        personalities: byType(["personality"]),
+        existingCharacters: byType(["character"]),
+      };
+    }
+    if (["expand_pack", "expand_kingdom", "generate_stories", "generate_story_blocks"].includes(mode)) {
+      return {
+        mode,
+        compact: true,
+        worlds: byType(["world"]),
+        kingdoms: byType(["kingdom"]),
+        packs: byType(["pack"]),
+        classes: byType(["class"]),
+        characters: byType(["character"]),
+        storyBlocks: byType(["story_block"]),
+        stories: byType(["story"]),
+      };
+    }
+    return {
+      mode,
+      compact: true,
+      records: compactRecords,
+    };
+  };
+
+  const parseWorldGeneratorTaskJson = (value) => {
+    if (!value || typeof value !== "string") return null;
+    const parsed = parseJsonLike(value, null);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    const text = String(value || "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) return null;
+    const extracted = parseJsonLike(text.slice(start, end + 1), null);
+    return extracted && typeof extracted === "object" && !Array.isArray(extracted) ? extracted : null;
+  };
+
+  const worldGeneratorPayloadFields = new Set([
+    "generationMode", "mode", "worldId", "worldName", "collectionId", "schemaVersion",
+    "includeExistingRecords", "targetRecordId", "targetRecordType", "objective",
+    "kingdomCount", "packsPerKingdom", "packCount", "classCount", "personalityCount",
+    "nameCount", "characterCount", "storyBlockCount", "storyCount", "records", "world",
+  ]);
+
+  const isPlainObject = (value) =>
+    value && typeof value === "object" && !Array.isArray(value);
+
+  const hasWorldGeneratorPayloadFields = (value = {}) =>
+    isPlainObject(value) && Object.keys(value).some((key) => worldGeneratorPayloadFields.has(key));
+
+  const mergeWorldGeneratorPayloadFields = (base = {}, patch = {}) => {
+    const next = { ...base };
+    Object.entries(patch || {}).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      if (typeof value === "string" && !value.trim()) return;
+      next[key] = value;
+    });
+    return next;
+  };
+
+  const collectWorldGeneratorFieldsDeep = (value, seen = new WeakSet()) => {
+    const parsed = typeof value === "string" ? parseWorldGeneratorTaskJson(value) : value;
+    if (!isPlainObject(parsed)) return {};
+    if (seen.has(parsed)) return {};
+    seen.add(parsed);
+    let collected = {};
+    Object.entries(parsed).forEach(([key, item]) => {
+      if (worldGeneratorPayloadFields.has(key)) {
+        collected = mergeWorldGeneratorPayloadFields(collected, { [key]: item });
+      }
+      const nested = collectWorldGeneratorFieldsDeep(item, seen);
+      collected = mergeWorldGeneratorPayloadFields(collected, nested);
+    });
+    return collected;
+  };
+
+  const normalizeWorldGeneratorPayload = (payload = {}, config = {}) => {
+    const root = isPlainObject(payload) ? payload : {};
+    const candidates = [];
+    const addCandidate = (value, depth = 0) => {
+      if (depth > 3 || value == null) return;
+      const parsed = typeof value === "string" ? parseWorldGeneratorTaskJson(value) : value;
+      if (!isPlainObject(parsed)) return;
+      if (hasWorldGeneratorPayloadFields(parsed)) candidates.push(parsed);
+      ["payload", "data", "task", "value", "context"].forEach((key) => addCandidate(parsed[key], depth + 1));
+    };
+    addCandidate(root);
+    ["objective", "task", "text", "prompt", "value", "payload", "data", "context"].forEach((key) => addCandidate(root[key]));
+    addCandidate(config.objective);
+    const normalized = candidates.reduce((next, candidate) => mergeWorldGeneratorPayloadFields(next, candidate), { ...root });
+    const deepFields = collectWorldGeneratorFieldsDeep(root);
+    const deepConfigFields = collectWorldGeneratorFieldsDeep(config.objective);
+    const merged = mergeWorldGeneratorPayloadFields(mergeWorldGeneratorPayloadFields(normalized, deepFields), deepConfigFields);
+    return {
+      ...merged,
+      objective: merged.objective || root.objective || config.objective || "",
+    };
+  };
+
+  const inferWorldIdFromRecords = (records = []) => {
+    const worldIds = [...new Set((records || [])
+      .map((record) => record.recordType === "world" ? record.id : record.worldId)
+      .filter(Boolean))];
+    return worldIds.length === 1 ? worldIds[0] : "";
+  };
+
   const worldGeneratorPrompt = ({ workspaceId = "", payload = {}, config = {}, existingRecords = [] } = {}) => {
+    payload = normalizeWorldGeneratorPayload(payload, config);
     const mode = worldGeneratorMode(config, payload);
-    const worldId = payload?.worldId || config.worldId || "";
+    const worldId = payload?.worldId || config.worldId || inferWorldIdFromRecords(existingRecords) || "";
     const worldName = payload?.worldName || payload?.name || config.worldName || "";
     const collectionId = payload?.collectionId || config.collectionId || "worldbuilding";
     const schemaVersion = payload?.schemaVersion || config.schemaVersion || "1";
     const objective = String(payload?.objective || payload?.task || payload?.prompt || payload?.text || config.objective || "").trim();
     const systemPrompt = knowledgeAiTextConfig(config.systemPrompt, "You are a World Generator Agent for Trackers Lens. Generate structured worldbuilding records as strict JSON for the worldbuilding/v1 schema.");
     const promptTemplate = knowledgeAiTextConfig(config.promptTemplate, "Use the objective, input payload and generation mode to create or update only the requested worldbuilding scope. Keep IDs stable, use explicit parent links, and return data that can be appended to World Database.");
-    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, personality, name, story_block, story, territory, law. Do not include markdown or prose.");
+    const outputInstructions = knowledgeAiTextConfig(config.outputInstructions, "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, character, personality, name, story_block, story, territory, law. Do not include markdown or prose.");
     const requestedCounts = {
       kingdomCount: Number(config.kingdomCount || payload?.kingdomCount || 0) || "",
       packsPerKingdom: Number(config.packsPerKingdom || payload?.packsPerKingdom || 0) || "",
       storyBlockCount: Number(config.storyBlockCount || payload?.storyBlockCount || 0) || "",
       storyCount: Number(config.storyCount || payload?.storyCount || 0) || "",
+      characterCount: Number(config.characterCount || payload?.characterCount || 0) || "",
     };
+    const existingContext = worldGeneratorExistingContext({ mode, records: existingRecords });
     const request = {
       workspaceId,
       mode,
@@ -2925,8 +3123,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
       targetRecordId: payload?.targetRecordId || config.targetRecordId || "",
       targetRecordType: payload?.targetRecordType || config.targetRecordType || "",
       requestedCounts,
-      inputPayload: payload,
-      existingRecords,
+      inputPayload: {
+        ...payload,
+        existingRecords: undefined,
+        context: undefined,
+        records: undefined,
+      },
+      existingRecordCount: existingRecords.length,
+      existingContext,
     };
     const schema = {
       worldId: "string",
@@ -2941,10 +3145,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         classes: [{ id: "string", name: "Guardian|Scout|Hunter|Elder|Oracle", description: "string", packId: "optional", kingdomId: "optional" }],
         personalities: [{ id: "string", name: "Coraggioso|Calmo|Impulsivo|Silenzioso|Curioso|Protettivo|Leale", traits: ["string"] }],
         names: [{ id: "string", name: "string", culture: "string", gender: "optional", packId: "optional", kingdomId: "optional" }],
+        characters: [{ id: "string", name: "string", packId: "pack_id", kingdomId: "optional", classId: "class_id", nameId: "optional name record id", personalityIds: ["personality_id"], role: "string", age: "optional", backstory: "string", goals: ["string"], relationships: ["string"] }],
         storyBlocks: [{ id: "string", name: "string", blockType: "origin|conflict|quest|ritual|choice|consequence", summary: "string" }],
         stories: [{ id: "string", title: "string", blocks: ["story_block_id"], kingdomId: "optional", packId: "optional", summary: "string" }],
       },
-      records: [{ id: "string", type: "world|kingdom|pack|class|personality|name|story_block|story|territory|law", label: "string", parentId: "optional", data: "object" }],
+      records: [{ id: "string", type: "world|kingdom|pack|class|character|personality|name|story_block|story|territory|law", label: "string", parentId: "optional", data: "object" }],
     };
     return [
       systemPrompt,
@@ -2953,6 +3158,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       "Important: World Database will persist the returned JSON. Return append/update records only for the requested mode; do not delete unrelated existing records.",
       "Always include either a world object or a records entry with type world for the requested worldId, even when the mode mostly returns child records.",
       "Use deterministic lowercase snake_case IDs. Use parentId, kingdomId, packId and story block IDs to make graph links explicit.",
+      mode === "generate_characters" ? "For generate_characters, return only character records. Use only existingContext pack/class/name/personality IDs for packId, classId, nameId and personalityIds. Do not invent IDs. Set parentId to the selected packId, not to the worldId." : "",
       "For modify_item, return the complete replacement record for the target item plus only directly affected records.",
       "Schema:",
       JSON.stringify(schema),
@@ -2968,6 +3174,37 @@ window.TrackerLensKnowledgeRuntime = (() => {
       type: normalizeWorldRecordType(item),
     })));
     return records.length;
+  };
+
+  const requestedWorldGeneratorCount = (mode = "", payload = {}, config = {}) => {
+    if (mode === "generate_characters") return Math.floor(Number(payload?.characterCount || config.characterCount || 0)) || 0;
+    if (mode === "add_kingdoms") return Math.floor(Number(payload?.kingdomCount || config.kingdomCount || 0)) || 0;
+    if (mode === "expand_kingdom" || mode === "expand_pack") return Math.floor(Number(payload?.packsPerKingdom || payload?.packCount || config.packsPerKingdom || config.packCount || 0)) || 0;
+    if (mode === "generate_story_blocks") return Math.floor(Number(payload?.storyBlockCount || config.storyBlockCount || 0)) || 0;
+    if (mode === "generate_stories") return Math.floor(Number(payload?.storyCount || config.storyCount || 0)) || 0;
+    return 0;
+  };
+
+  const enforceWorldGeneratorMode = ({ source = {}, mode = "", payload = {}, config = {} } = {}) => {
+    if (mode !== "generate_characters") return source;
+    const worldId = source?.worldId || source?.world?.id || payload?.worldId || config.worldId || "";
+    const collectionId = source?.collectionId || payload?.collectionId || config.collectionId || "worldbuilding";
+    const schemaVersion = source?.schemaVersion || payload?.schemaVersion || config.schemaVersion || "1";
+    const records = dedupeWorldRecords(worldPayloadRecords(source, config).map((item) => ({
+      ...item,
+      recordType: normalizeWorldRecordType(item),
+      type: normalizeWorldRecordType(item),
+    }))).filter((record) => record.recordType === "character");
+    const requested = requestedWorldGeneratorCount(mode, payload, config);
+    if (requested > 0 && records.length < requested) {
+      throw new Error(`World Generator Agent: generate_characters incompleto (${records.length}/${requested} character prodotti)`);
+    }
+    return {
+      worldId,
+      collectionId,
+      schemaVersion,
+      records,
+    };
   };
 
   const stripJsonFence = (text = "") =>
@@ -3036,13 +3273,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const callWorldGeneratorAi = async ({ workspaceId = "", node = {}, payload = {}, event = {}, config = {} } = {}) => {
+    payload = normalizeWorldGeneratorPayload(payload, config);
     const provider = await pickAiProvider(config);
     if (!provider) return { proposal: null, provider: "", model: "", usage: {}, error: "provider-not-found", rawText: "" };
     const providerType = String(provider.provider || provider.providerType || config.providerType || config.provider || "").toLowerCase();
     const model = String(config.model || provider.model || (providerType === "ollama" ? "llama3.1" : "local-model")).trim();
     const collectionId = payload?.collectionId || config.collectionId || "worldbuilding";
     const schemaId = "worldbuilding/v1";
-    const worldId = payload?.worldId || payload?.world?.id || config.worldId || "";
+    const requestedWorldId = payload?.worldId || payload?.world?.id || config.worldId || "";
     const mode = worldGeneratorMode(config, payload);
     const includeExistingRecords = mode !== "create_world" ||
       config.includeExistingRecords === true ||
@@ -3050,9 +3288,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       payload?.includeExistingRecords === true ||
       payload?.includeExistingRecords === "true";
     const existingRecords = includeExistingRecords
-      ? await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId })
+      ? await structuredRecordsForScope({ workspaceId, collectionId, schemaId, worldId: requestedWorldId })
       : [];
-    const prompt = worldGeneratorPrompt({ workspaceId, payload, config, existingRecords });
+    const inferredWorldId = requestedWorldId || inferWorldIdFromRecords(existingRecords);
+    if (includeExistingRecords && mode !== "create_world" && !inferredWorldId) {
+      return {
+        proposal: null,
+        provider: provider.id || providerType,
+        model,
+        usage: {},
+        error: `world-id-required: set worldId in the task/config because multiple or no existing worlds match this collection (mode=${mode}, collectionId=${collectionId}, payloadKeys=${Object.keys(payload || {}).join(",") || "none"})`,
+        rawText: "",
+        worldId: "",
+      };
+    }
+    const effectivePayload = inferredWorldId ? { ...payload, worldId: inferredWorldId } : payload;
+    const effectiveConfig = inferredWorldId ? { ...config, worldId: inferredWorldId } : config;
+    const prompt = worldGeneratorPrompt({ workspaceId, payload: effectivePayload, config: effectiveConfig, existingRecords });
     const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
     const url = providerType === "ollama"
       ? `${endpoint}/api/generate`
@@ -3074,12 +3326,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
       provider: provider.id || providerType || "",
       providerType,
       model,
-      worldId,
+      worldId: inferredWorldId,
       collectionId,
       existingRecordCount: existingRecords.length,
       promptChars: prompt.length,
       configuredMaxTokens,
       maxTokens: requestBody.max_tokens || requestBody.options?.num_predict || 0,
+      existingContextMode: includeExistingRecords ? "compact" : "none",
       promptMode: "worldbuilding",
       prompt,
     });
@@ -3123,10 +3376,12 @@ window.TrackerLensKnowledgeRuntime = (() => {
       usage,
       error: proposal ? (repairedProposal ? "repaired-invalid-json" : "") : "invalid-ai-json",
       rawText: text,
+      worldId: inferredWorldId,
     };
   };
 
   const generateWorldWithAi = async ({ workspaceId, node, payload, event, config = {} } = {}) => {
+    payload = normalizeWorldGeneratorPayload(payload, config);
     const aiResult = await callWorldGeneratorAi({ workspaceId, node, payload, event, config });
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
@@ -3134,10 +3389,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (!aiResult.proposal || typeof aiResult.proposal !== "object") {
       throw new Error(`World Generator Agent: output JSON non valido${aiResult.error ? ` (${aiResult.error})` : ""}`);
     }
-    const source = unwrapStructuredPayload(aiResult.proposal, config);
-    const collectionId = source?.collectionId || config.collectionId || "worldbuilding";
-    const schemaVersion = source?.schemaVersion || config.schemaVersion || "1";
-    const worldId = source?.worldId || source?.world?.id || source?.id || config.worldId || `world_${safeId(source?.world?.name || source?.name || config.worldName || collectionId)}`;
+    const mode = worldGeneratorMode(config, payload);
+    const source = enforceWorldGeneratorMode({
+      source: unwrapStructuredPayload(aiResult.proposal, config),
+      mode,
+      payload,
+      config,
+    });
+    const collectionId = source?.collectionId || payload?.collectionId || config.collectionId || "worldbuilding";
+    const schemaVersion = source?.schemaVersion || payload?.schemaVersion || config.schemaVersion || "1";
+    const worldId = source?.worldId || source?.world?.id || source?.id || aiResult.worldId || config.worldId || (mode === "create_world" ? `world_${safeId(source?.world?.name || source?.name || config.worldName || collectionId)}` : "");
+    if (!worldId) throw new Error("World Generator Agent: worldId mancante per aggiornare un mondo esistente");
     const recordCount = generatedWorldRecordCount({ ...source, worldId, collectionId, schemaVersion }, config);
     if (!recordCount) throw new Error("World Generator Agent: il modello non ha prodotto record worldbuilding");
     return {
@@ -3147,7 +3409,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       schemaId: "worldbuilding/v1",
       schemaVersion,
       generatedBy: "world-generator-agent",
-      generationMode: worldGeneratorMode(config, payload),
+      generationMode: mode,
       provider: aiResult.provider,
       model: aiResult.model,
       usage: aiResult.usage,

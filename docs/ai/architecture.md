@@ -3,7 +3,7 @@
 Purpose: high-level engineering constraints.
 Read when: planning or implementing non-trivial changes.
 Do not read when: only updating docs or copy.
-Last updated: 2026-06-11.
+Last updated: 2026-08-25.
 
 ## Runtime Model
 
@@ -25,10 +25,22 @@ Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -
 
 ## Persistence
 
-Use IndexedDB and existing stores/helpers.
+Electron desktop persistence is SQLite-only and Core-owned. Renderer, workers, Python and packages use narrow repository APIs; they never receive SQLite handles, paths or SQL. IndexedDB is browser compatibility/development residue only and is not a desktop fallback.
 Prefer `core/runtime/` modules for runtime behavior.
 Do not add parallel stores unless the existing model cannot represent the data.
 Use `core/runtime/runtime-contract.js` for shared runtime contract/schema normalization.
+
+## Electron Desktop Shell
+
+- Electron is a desktop host for the existing renderer, not a replacement runtime or a second frontend.
+- Keep renderer access restricted: context isolation and sandboxing stay enabled, Node integration stays disabled, and desktop APIs are exposed only through a validated preload bridge.
+- Electron main owns windows, lifecycle, validated IPC and OS integration. Runtime, knowledge, memory and storage ownership stay in Trackers Lens modules.
+- The initial desktop shell loads `flowMap.html`; IndexedDB/app-data migration and Python runtime integration are separate later phases.
+- `core/desktop/tl-core.cjs` is the Electron-independent boundary for desktop commands. Main adapts OS calls into it; preload exposes only its named, validated API surface.
+- Nodes represent TL capabilities, not language classes. Their `execution` contract selects a runtime explicitly; legacy manifests default to JavaScript and unavailable runtimes must reject rather than silently reroute.
+- Runtime Manager owns runtime registration, routing and health metadata. The Phase 4 JavaScript executor delegates to the existing node-controller path; Python registration, process lifecycle and transport are later work.
+- The Phase 5 Python POC runs only in Electron Main through a restricted TL Core adapter. Renderer code never receives a child-process handle, Python stays feature-flagged and it has no direct persistence access. Its single Flow Map `Python Test` processor uses the existing Event Bus and emits separate output, error and status channels.
+- Desktop SQLite is the only desktop persistence mode. It never exposes raw database handles/SQL to renderer, workers, Python or packages; remaining direct IndexedDB callers must be migrated or removed.
 
 ## Safety
 

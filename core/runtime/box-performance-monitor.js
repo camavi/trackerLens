@@ -1,6 +1,15 @@
 window.TrackerLensBoxPerformanceMonitor = (() => {
   const DB_NAME = "TrackersLens";
   const STORE = "tl_box_performance";
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
+  };
   const SCHEMA_VERSION = "1.0.0";
   const WINDOW_MS = 60 * 1000;
   const DEFAULT_THRESHOLDS = {
@@ -55,6 +64,7 @@ window.TrackerLensBoxPerformanceMonitor = (() => {
     });
 
   const ensureDb = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     const db = await openDb();
     if (db.objectStoreNames.contains(STORE)) return db;
     const nextVersion = db.version + 1;
@@ -63,6 +73,10 @@ window.TrackerLensBoxPerformanceMonitor = (() => {
   };
 
   const write = async (record) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName: STORE, records: [record] });
+      return record;
+    }
     const db = await ensureDb();
     try {
       return await new Promise((resolve, reject) => {
@@ -76,6 +90,11 @@ window.TrackerLensBoxPerformanceMonitor = (() => {
   };
 
   const list = async ({ workspaceId = "", boxId = "" } = {}) => {
+    if (await usesDesktopSqlite()) {
+      return (await desktopPersistence().readDevelopmentRecords({ storeName: STORE, workspaceId }))
+        .filter((record) => !boxId || record.boxId === boxId)
+        .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+    }
     const db = await ensureDb();
     try {
       return await new Promise((resolve, reject) => {

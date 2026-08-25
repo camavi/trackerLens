@@ -3,7 +3,7 @@
 Purpose: locate implementation ownership quickly.
 Read when: deciding which files to inspect.
 Do not read when: file scope is already obvious.
-Last updated: 2026-06-11.
+Last updated: 2026-08-25.
 
 ## Flow Map
 
@@ -56,3 +56,22 @@ Last updated: 2026-06-11.
 - `CMSwift/`: UI framework.
 - `js/tl-sidebar.js`, `css/tl-sidebar.css`: standard sidebar.
 - `js/TlConfig.js`: store constants and app config.
+- SQLite status diagnostics are read directly from the restricted TL Core preload bridge by `js/settingsView.js`; no renderer-side IndexedDB preview helper remains.
+
+## Electron Desktop Shell
+
+- `package.json`: Electron scripts and development dependency.
+- `electron/main.cjs`: desktop lifecycle, secure BrowserWindow, CSP, validated IPC and navigation policy.
+- `electron/preload.cjs`: minimal renderer bridge; it must not expose Node.js, filesystem or unrestricted IPC.
+- `core/desktop/tl-core.cjs`: Electron-independent allow-listed desktop command boundary.
+- `core/desktop/desktop-persistence.cjs`: Core-owned SQLite schema, diagnostic import planning and fixture-only import adapter.
+- `core/runtime/node-execution-contract.js`: versioned multi-runtime manifest/request/result normalization.
+- `core/runtime/runtime-manager.js`: runtime registry, JavaScript execution routing and health status.
+- `core/desktop/managed-python-runtime.cjs`: managed Python POC process adapter.
+- `runtimes/python/tl_python_worker.py`: standard-library JSON Lines POC worker.
+- `runtimes/python/tl_python_sdk.py`: minimal capability-scoped Python node SDK.
+- `core/runtime/processor-runtime.js`: owns the Flow Map `Python Test` processor bridge and its Event Bus output/error/status events.
+- `test/tl-core.test.cjs`: unit tests for the desktop boundary.
+- `test/electron-preload-smoke.cjs`: Electron renderer smoke test for the sandboxed preload bridge.
+- `test/python-poc.test.cjs`: Python POC protocol tests.
+- `docs/ai/runtime/desktop-persistence.md`: SQLite target, IndexedDB inventory, migration/cutover and rollback contract.

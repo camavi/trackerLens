@@ -5437,7 +5437,7 @@ const flowPromptBuildPlan = (prompt = "") => {
   if (flowPromptHasAny(lower, ["transform", "map", "format", "parser", "parse"])) add("Transform");
   if (flowPromptHasAny(lower, ["condition", "if", "alert se", "quando"])) add("Condition");
 
-  if (flowPromptHasAny(lower, ["db", "database", "salva", "storico", "history"])) add(lower.includes("history") || lower.includes("storico") ? "History Store" : "Save DB Record");
+  if (flowPromptHasAny(lower, ["db", "database", "salva", "storico", "history"])) add(lower.includes("history") || lower.includes("storico") ? "History Store" : "Save SQLite Record");
   if (flowPromptHasAny(lower, ["telegram"])) add("Telegram Message");
   else if (flowPromptHasAny(lower, ["slack"])) add("Slack Message");
   else if (flowPromptHasAny(lower, ["discord"])) add("Discord Message");
@@ -5513,7 +5513,7 @@ const flowPromptBuildContextualLocalPlan = (prompt = "", conversationContext = n
     "AI Predictor",
     "Transform",
     "Filter",
-    "Save DB Record",
+    "Save SQLite Record",
     "History Store",
     "Telegram Message",
     "Slack Message",

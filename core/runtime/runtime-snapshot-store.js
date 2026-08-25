@@ -83,18 +83,30 @@ window.TrackerLensRuntimeSnapshotStore = (() => {
       read.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName} per workspace`));
     });
 
+  const readWorkspaceScoped = async (db, storeName, workspaceId = "") => {
+    const graphStore = window.TrackerLensRuntimeGraphStore;
+    const desktopStores = new Set([
+      STORES.channels, STORES.flows, STORES.events, STORES.flowLogs, STORES.runtimeNodes, STORES.runtimeDependencies, STORES.connections,
+    ]);
+    if (desktopStores.has(storeName) && await graphStore?.usesDesktopSqlite?.()) {
+      const records = await window.trackers?.desktop?.persistence?.readDevelopmentRecords?.({ storeName, workspaceId: workspaceId === "all" ? "" : workspaceId });
+      return Array.isArray(records) ? records : [];
+    }
+    return readWorkspaceScopedFromDb(db, storeName, workspaceId);
+  };
+
   const load = async ({ includeConnections = true, workspaceId = "" } = {}) => {
     await ensureRuntimeStores();
     const db = await openDb();
     try {
       const [channels, flows, events, flowLogs, runtimeNodes, runtimeDependencies, connections] = await Promise.all([
-        readWorkspaceScopedFromDb(db, STORES.channels, workspaceId),
-        readWorkspaceScopedFromDb(db, STORES.flows, workspaceId),
-        readWorkspaceScopedFromDb(db, STORES.events, workspaceId),
-        readWorkspaceScopedFromDb(db, STORES.flowLogs, workspaceId),
-        readWorkspaceScopedFromDb(db, STORES.runtimeNodes, workspaceId),
-        readWorkspaceScopedFromDb(db, STORES.runtimeDependencies, workspaceId),
-        includeConnections ? readWorkspaceScopedFromDb(db, STORES.connections, workspaceId) : Promise.resolve([]),
+        readWorkspaceScoped(db, STORES.channels, workspaceId),
+        readWorkspaceScoped(db, STORES.flows, workspaceId),
+        readWorkspaceScoped(db, STORES.events, workspaceId),
+        readWorkspaceScoped(db, STORES.flowLogs, workspaceId),
+        readWorkspaceScoped(db, STORES.runtimeNodes, workspaceId),
+        readWorkspaceScoped(db, STORES.runtimeDependencies, workspaceId),
+        includeConnections ? readWorkspaceScoped(db, STORES.connections, workspaceId) : Promise.resolve([]),
       ]);
 
       return {

@@ -32,6 +32,12 @@ Last updated: 2026-06-25.
 - Runtime graph: `docs/ai/flow-map/runtime-graph.md`
 - Runtime stores/channels/dependencies: `docs/ai/runtime/`
 - Runtime contract: `docs/ai/runtime/contract.md`
+- Electron/TL Core boundary: `docs/ai/runtime/desktop-core.md`
+- Desktop SQLite persistence: `docs/ai/runtime/desktop-persistence.md`
+- Multi-runtime node contract: `docs/ai/runtime/node-execution-contract.md`
+- Runtime Manager: `docs/ai/runtime/runtime-manager.md`
+- Managed Python POC: `docs/ai/runtime/python-poc.md`
+- Python Node SDK and capabilities: `docs/ai/runtime/python-node-sdk.md`
 - Agent runtime: `docs/ai/runtime/agent-runtime.md`
 - Connected node tools: `docs/ai/runtime/connected-node-tools.md`
 - AI memory runtime: `docs/ai/runtime/ai-memory.md`

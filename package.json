@@ -1,0 +1,19 @@
+{
+  "name": "trackers-lens",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trackers Lens desktop shell",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "desktop": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "desktop:dev": "env -u ELECTRON_RUN_AS_NODE TL_ELECTRON_DEVTOOLS=1 electron .",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check core/desktop/tl-core.cjs && node --check core/desktop/desktop-persistence.cjs && node --check core/desktop/managed-python-runtime.cjs && node --check core/runtime/node-execution-contract.js && node --check core/runtime/runtime-manager.js && node --check core/runtime/runtime-manifest.js && node --check core/runtime/processor-runtime.js && node --check js/settingsView.js && node --check js/flow-map/flowMapNodeBuilder.js && node --check js/flow-map/flowMapRuntimeNodes.js && node --check js/flow-map/flowMapState.js",
+    "test": "node --test test/tl-core.test.cjs",
+    "test:electron-bridge": "env -u ELECTRON_RUN_AS_NODE electron test/electron-preload-smoke.cjs",
+    "test:python-poc": "node --test test/python-poc.test.cjs",
+    "desktop:python-poc": "env -u ELECTRON_RUN_AS_NODE TL_ENABLE_PYTHON_POC=1 TL_ELECTRON_DEVTOOLS=1 electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.0.0"
+  }
+}

@@ -1,6 +1,15 @@
 window.TrackerLensTimeTravelStore = (() => {
   const DB_NAME = "TrackersLens";
   const STORE = "tl_time_travel_snapshots";
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
+  };
   const SCHEMA_VERSION = "1.0.0";
 
   const now = () => new Date().toISOString();
@@ -23,6 +32,7 @@ window.TrackerLensTimeTravelStore = (() => {
     });
 
   const ensureDb = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     const db = await openDb();
     if (db.objectStoreNames.contains(STORE)) return db;
     const version = db.version + 1;
@@ -31,6 +41,10 @@ window.TrackerLensTimeTravelStore = (() => {
   };
 
   const write = async (record) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName: STORE, records: [record] });
+      return record;
+    }
     const db = await ensureDb();
     try {
       return await new Promise((resolve, reject) => {
@@ -44,6 +58,7 @@ window.TrackerLensTimeTravelStore = (() => {
   };
 
   const readAllStore = async (storeName) => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
     const db = await ensureDb();
     try {
       if (!db.objectStoreNames.contains(storeName)) return [];
@@ -58,6 +73,12 @@ window.TrackerLensTimeTravelStore = (() => {
   };
 
   const replaceStore = async (storeName, records = []) => {
+    if (await usesDesktopSqlite()) {
+      const existing = await desktopPersistence().readDevelopmentRecords({ storeName });
+      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: existing.map((record) => record.id) });
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records: records.filter((record) => record?.id) });
+      return { storeName, restored: records.length, skipped: false };
+    }
     const db = await ensureDb();
     try {
       if (!db.objectStoreNames.contains(storeName)) return { storeName, restored: 0, skipped: true };
@@ -75,6 +96,10 @@ window.TrackerLensTimeTravelStore = (() => {
   };
 
   const list = async ({ workspaceId = "" } = {}) => {
+    if (await usesDesktopSqlite()) {
+      return (await desktopPersistence().readDevelopmentRecords({ storeName: STORE, workspaceId }))
+        .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+    }
     const db = await ensureDb();
     try {
       return await new Promise((resolve, reject) => {

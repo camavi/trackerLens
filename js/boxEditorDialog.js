@@ -4,6 +4,15 @@ window.TrackerLensBoxEditorDialog = (() => {
     { name: tlConfig.TABLES.TL_WIDGETS, columns: [{ name: "content" }] },
     { name: tlConfig.TABLES.TL_PAGES, columns: [{ name: "content" }] },
   ];
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
+  };
 
   const icon = (name, size = "md") => _.Icon({ name, size });
   const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
@@ -93,6 +102,7 @@ window.TrackerLensBoxEditorDialog = (() => {
 
   const getWidgetRecord = async (id) => {
     if (!id) return null;
+    if (await usesDesktopSqlite()) return (await desktopPersistence().readDevelopmentRecords({ storeName: WIDGET_STORE() })).find((record) => record.id === id) || null;
     const db = await openDb();
     try {
       return await new Promise((resolve, reject) => {
@@ -108,6 +118,10 @@ window.TrackerLensBoxEditorDialog = (() => {
   };
 
   const putWidgetRecord = async (payload) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName: WIDGET_STORE(), records: [payload] });
+      return payload;
+    }
     const db = await openDb();
     try {
       return await new Promise((resolve, reject) => {

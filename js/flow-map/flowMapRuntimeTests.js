@@ -2472,12 +2472,12 @@ const runMappingStorageTest = async () => {
     metadata: {
       configured: true,
       draft: false,
-      paletteLabel: "Save DB Record",
+      paletteLabel: "Save SQLite Record",
       paletteAction: "Storage mapping test",
       tone: "cyan",
       icon: "database",
       runtimeType: "storage",
-      subtype: "indexeddb",
+      subtype: "sqlite",
       category: "storage",
       settingsSchema: { storeName: "string", keyPath: "string", retention: "string" },
       config: {
@@ -3631,9 +3631,10 @@ const runWorldGeneratorAgentSampleTest = async () => {
     worldName: "Mondo delle Tempeste",
     collectionId,
     schemaVersion: "1",
-    objective: "Crea un piccolo mondo fantasy per test: un regno, due branchi, tre classi, quattro personalita, cinque nomi, tre blocchi storia e una storia che usa i blocchi. Usa italiano, ID stabili e collegamenti espliciti.",
+    objective: "Crea un piccolo mondo fantasy per test: un regno, due branchi, tre classi, quattro personalita, cinque nomi, quattro personaggi collegati a branco/classe/nome/personalita, tre blocchi storia e una storia che usa i blocchi. Usa italiano, ID stabili e collegamenti espliciti.",
     kingdomCount: 1,
     packsPerKingdom: 2,
+    characterCount: 4,
     storyBlockCount: 3,
     storyCount: 1,
   };
@@ -3694,7 +3695,7 @@ const runWorldGeneratorAgentSampleTest = async () => {
     icon: "auto_awesome",
     subtype: "world-generator-agent",
     category: "knowledge",
-    settingsSchema: { generationMode: "create_world|add_kingdoms|expand_kingdom|expand_pack|generate_story_blocks|generate_stories|modify_item", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", responseFormat: "json|structured|text|markdown", objective: "string", worldId: "string", worldName: "string", collectionId: "string", schemaVersion: "string", kingdomCount: "number", packsPerKingdom: "number", storyBlockCount: "number", storyCount: "number", outputChannel: "string" },
+    settingsSchema: { generationMode: "create_world|add_kingdoms|expand_kingdom|expand_pack|generate_story_blocks|generate_stories|generate_characters|modify_item", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", responseFormat: "json|structured|text|markdown", objective: "string", worldId: "string", worldName: "string", collectionId: "string", schemaVersion: "string", kingdomCount: "number", packsPerKingdom: "number", characterCount: "number", storyBlockCount: "number", storyCount: "number", outputChannel: "string" },
     config: { ...sampleAiConfig, ...taskPayload, outputChannel: "world.record" },
   });
   const world = nodeBase({
@@ -5770,7 +5771,7 @@ const renderSampleTestMenu = () =>
       renderFileMenuItem({
         iconName: "database",
         label: "Storage Test",
-        meta: "Manual JSON -> IndexedDB storage",
+        meta: "Manual JSON -> SQLite storage",
         disabled: state.testRun.running,
         onclick: () => runMappingStorageTest(),
       }),

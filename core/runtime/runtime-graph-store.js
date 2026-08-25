@@ -9,6 +9,34 @@ window.TrackerLensRuntimeGraphStore = (() => {
     runtimeDependencies: tableName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies"),
     widgets: tableName("TL_WIDGETS", "tl_widgets"),
   };
+  const FIRST_COHORT_STORES = new Set([
+    tableName("TL_PAGES", "tl_pages"),
+    STORES.widgets,
+    tableName("TL_CONNECTIONS", "tl_connections"),
+    tableName("TL_SETTINGS", "tl_settings"),
+    STORES.flows,
+    STORES.runtimeNodes,
+    STORES.runtimeDependencies,
+    tableName("TL_CHANNELS", "tl_channels"),
+  ]);
+  let desktopSqliteMode = null;
+
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw new Error("SQLite desktop bridge unavailable.");
+      return (desktopSqliteMode = false);
+    }
+    try {
+      desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
+    } catch (error) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw error;
+      desktopSqliteMode = false;
+    }
+    return desktopSqliteMode;
+  };
 
   const STORE_DEFINITIONS = [
     { name: STORES.flows, columns: [{ name: "workspaceId" }, { name: "status" }, { name: "updatedAt" }] },
@@ -54,6 +82,7 @@ window.TrackerLensRuntimeGraphStore = (() => {
     });
 
   const ensureStores = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
       await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
     }
@@ -69,6 +98,10 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const putRecords = async (storeName, records = []) => {
     if (!records.length) return [];
+    if (FIRST_COHORT_STORES.has(storeName) && await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records });
+      return records;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -84,6 +117,9 @@ window.TrackerLensRuntimeGraphStore = (() => {
   };
 
   const readAll = async (storeName) => {
+    if (FIRST_COHORT_STORES.has(storeName) && await usesDesktopSqlite()) {
+      return desktopPersistence().readDevelopmentRecords({ storeName });
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -99,6 +135,10 @@ window.TrackerLensRuntimeGraphStore = (() => {
   const deleteRecords = async (storeName, ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
+    if (FIRST_COHORT_STORES.has(storeName) && await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: uniqueIds });
+      return uniqueIds;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -246,6 +286,24 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const updateFlowNodePosition = async ({ workspaceId = "", nodeId = "", position = null }) => {
     if (!workspaceId || !nodeId || !position) return null;
+    if (await usesDesktopSqlite()) {
+      const [flows, nodes] = await Promise.all([readAll(STORES.flows), readAll(STORES.runtimeNodes)]);
+      const timestamp = new Date().toISOString();
+      const flowId = flowIdForWorkspace(workspaceId);
+      const flow = flows.find((item) => item.id === flowId);
+      const node = nodes.find((item) => item.id === nodeId);
+      const updatedFlow = flow && {
+        ...flow,
+        nodes: (Array.isArray(flow.nodes) ? flow.nodes : []).map((item) => item.id === nodeId ? { ...item, flowPosition: position } : item),
+        updatedAt: timestamp,
+      };
+      const updatedNode = node && { ...node, flowPosition: position, updatedAt: timestamp };
+      await Promise.all([
+        updatedFlow ? putRecords(STORES.flows, [updatedFlow]) : Promise.resolve(),
+        updatedNode ? putRecords(STORES.runtimeNodes, [updatedNode]) : Promise.resolve(),
+      ]);
+      return updatedFlow || updatedNode || null;
+    }
     const db = await ensureStores();
     const now = new Date().toISOString();
 
@@ -296,7 +354,6 @@ window.TrackerLensRuntimeGraphStore = (() => {
     outputs = null,
     metadata = {},
   } = {}) => {
-    const db = await ensureStores();
     const now = new Date().toISOString();
     const id = `draft_${safeId(type)}_${Date.now()}`;
     const node = {
@@ -319,6 +376,24 @@ window.TrackerLensRuntimeGraphStore = (() => {
       createdAt: now,
       updatedAt: now,
     };
+
+    if (await usesDesktopSqlite()) {
+      const flows = await readAll(STORES.flows);
+      const flowId = flowIdForWorkspace(workspaceId);
+      const existing = flows.find((item) => item.id === flowId) || {
+        id: flowId, workspaceId, name: "Draft Runtime Flow", status: "draft", nodes: [], connections: [], createdAt: now,
+      };
+      await Promise.all([
+        putRecords(STORES.runtimeNodes, [node]),
+        putRecords(STORES.flows, [{
+          ...existing,
+          nodes: [...(Array.isArray(existing.nodes) ? existing.nodes : []), { id: node.id, type: node.type, label: node.label, position: node.position, flowPosition: node.flowPosition, boxId: node.sourceRef }],
+          updatedAt: now,
+        }]),
+      ]);
+      return node;
+    }
+    const db = await ensureStores();
 
     try {
       return await new Promise((resolve, reject) => {
@@ -360,6 +435,18 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const deleteRuntimeNodeReferences = async ({ nodeId = "", workspaceId = "" } = {}) => {
     if (!nodeId) return { nodeIds: [], dependencyIds: [], flowIds: [] };
+    if (await usesDesktopSqlite()) {
+      const [dependencies, flows] = await Promise.all([readAll(STORES.runtimeDependencies), readAll(STORES.flows)]);
+      const staleDependencies = dependencies.filter((dependency) => dependency.sourceNodeId === nodeId || dependency.targetNodeId === nodeId || dependency.sourceRef === nodeId || dependency.targetRef === nodeId);
+      const changedFlows = flows.filter((flow) => (!workspaceId || flow.workspaceId === workspaceId) && (flow.nodes || []).some((node) => node.id === nodeId || node.boxId === nodeId))
+        .map((flow) => ({ ...flow, nodes: (flow.nodes || []).filter((node) => node.id !== nodeId && node.boxId !== nodeId), updatedAt: now() }));
+      await Promise.all([
+        deleteRecords(STORES.runtimeNodes, [nodeId]),
+        deleteRecords(STORES.runtimeDependencies, staleDependencies.map((item) => item.id)),
+        putRecords(STORES.flows, changedFlows),
+      ]);
+      return { nodeIds: [nodeId], dependencyIds: staleDependencies.map((item) => item.id), flowIds: changedFlows.map((item) => item.id) };
+    }
     const db = await ensureStores();
     const now = new Date().toISOString();
 
@@ -410,9 +497,49 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const promoteDraftNode = async ({ draftNodeId = "", workspaceId = "", node = {} } = {}) => {
     if (!draftNodeId || !node?.id) return null;
-    const db = await ensureStores();
     const now = new Date().toISOString();
     const targetWorkspaceId = workspaceId || node.workspaceId || "workspace_global";
+
+    if (await usesDesktopSqlite()) {
+      const [nodes, dependencies, flows] = await Promise.all([
+        readAll(STORES.runtimeNodes), readAll(STORES.runtimeDependencies), readAll(STORES.flows),
+      ]);
+      const draft = nodes.find((item) => item.id === draftNodeId) || {};
+      const promoted = {
+        ...draft, ...node, id: node.id, workspaceId: targetWorkspaceId,
+        sourceRef: node.sourceRef || node.assetId || node.id,
+        assetId: node.assetId || node.sourceRef || node.id,
+        status: node.status || "active", flowPosition: node.flowPosition || draft.flowPosition,
+        metadata: { ...(draft.metadata || {}), ...(node.metadata || {}), draft: false, promotedFrom: draftNodeId },
+        createdAt: draft.createdAt || now, updatedAt: now,
+      };
+      const updatedDependencies = dependencies
+        .filter((dependency) => dependency.sourceNodeId === draftNodeId || dependency.targetNodeId === draftNodeId)
+        .map((dependency) => ({
+          ...dependency,
+          sourceNodeId: dependency.sourceNodeId === draftNodeId ? node.id : dependency.sourceNodeId,
+          targetNodeId: dependency.targetNodeId === draftNodeId ? node.id : dependency.targetNodeId,
+          workspaceId: dependency.workspaceId || targetWorkspaceId,
+          updatedAt: now,
+        }));
+      const updatedFlows = flows.filter((flow) => !workspaceId || flow.workspaceId === targetWorkspaceId).map((flow) => {
+        let changed = false;
+        const nextNodes = (flow.nodes || []).map((flowNode) => {
+          if (flowNode.id !== draftNodeId && flowNode.boxId !== draftNodeId) return flowNode;
+          changed = true;
+          return { ...flowNode, id: node.id, boxId: node.sourceRef || node.assetId || node.id, type: node.type || flowNode.type, label: node.label || flowNode.label, flowPosition: node.flowPosition || flowNode.flowPosition };
+        });
+        return changed ? { ...flow, workspaceId: flow.workspaceId || targetWorkspaceId, nodes: nextNodes, status: flow.status === "draft" ? "active" : flow.status, updatedAt: now } : null;
+      }).filter(Boolean);
+      await Promise.all([
+        deleteRecords(STORES.runtimeNodes, [draftNodeId]),
+        putRecords(STORES.runtimeNodes, [promoted]),
+        putRecords(STORES.runtimeDependencies, updatedDependencies),
+        putRecords(STORES.flows, updatedFlows),
+      ]);
+      return promoted;
+    }
+    const db = await ensureStores();
 
     try {
       return await new Promise((resolve, reject) => {
@@ -503,6 +630,17 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const cleanupConnectionReferences = async ({ connectionId = "" } = {}) => {
     if (!connectionId) return { dependencyIds: [], flowIds: [] };
+    if (await usesDesktopSqlite()) {
+      const [dependencies, flows] = await Promise.all([readAll(STORES.runtimeDependencies), readAll(STORES.flows)]);
+      const staleDependencies = dependencies.filter((dependency) => dependency.connectionId === connectionId);
+      const changedFlows = flows.filter((flow) => (flow.connections || []).includes(connectionId))
+        .map((flow) => ({ ...flow, connections: (flow.connections || []).filter((id) => id !== connectionId), updatedAt: now() }));
+      await Promise.all([
+        deleteRecords(STORES.runtimeDependencies, staleDependencies.map((item) => item.id)),
+        putRecords(STORES.flows, changedFlows),
+      ]);
+      return { dependencyIds: staleDependencies.map((item) => item.id), flowIds: changedFlows.map((item) => item.id) };
+    }
     const db = await ensureStores();
     const now = new Date().toISOString();
 
@@ -547,7 +685,6 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const upsertDependency = async ({ dependency = {} } = {}) => {
     if (!dependency?.id || !dependency.sourceNodeId || !dependency.targetNodeId) return null;
-    const db = await ensureStores();
     const now = new Date().toISOString();
     const record = {
       status: "active",
@@ -556,6 +693,20 @@ window.TrackerLensRuntimeGraphStore = (() => {
       ...dependency,
       updatedAt: now,
     };
+
+    if (await usesDesktopSqlite()) {
+      const flows = await readAll(STORES.flows);
+      const workspaceId = record.workspaceId || "workspace_global";
+      const flowId = flowIdForWorkspace(workspaceId);
+      const existing = flows.find((item) => item.id === flowId) || { id: flowId, workspaceId, name: "Runtime Flow", status: "active", nodes: [], connections: [], createdAt: now };
+      const connections = Array.isArray(existing.connections) ? existing.connections : [];
+      await Promise.all([
+        putRecords(STORES.runtimeDependencies, [record]),
+        putRecords(STORES.flows, [{ ...existing, connections: record.connectionId && !connections.includes(record.connectionId) ? [...connections, record.connectionId] : connections, updatedAt: now }]),
+      ]);
+      return record;
+    }
+    const db = await ensureStores();
 
     try {
       return await new Promise((resolve, reject) => {
@@ -596,7 +747,6 @@ window.TrackerLensRuntimeGraphStore = (() => {
 
   const upsertRuntimeNode = async ({ node = {} } = {}) => {
     if (!node?.id) return null;
-    const db = await ensureStores();
     const now = new Date().toISOString();
     const workspaceId = node.workspaceId || "workspace_global";
     const record = {
@@ -613,6 +763,24 @@ window.TrackerLensRuntimeGraphStore = (() => {
       workspaceId,
       updatedAt: now,
     };
+
+    if (await usesDesktopSqlite()) {
+      const [nodes, flows] = await Promise.all([readAll(STORES.runtimeNodes), readAll(STORES.flows)]);
+      const previous = nodes.find((item) => item.id === record.id) || {};
+      const saved = { ...previous, ...record, metadata: { ...(previous.metadata || {}), ...(record.metadata || {}) }, createdAt: previous.createdAt || record.createdAt || now, updatedAt: now };
+      const flowId = flowIdForWorkspace(workspaceId);
+      const existing = flows.find((item) => item.id === flowId) || { id: flowId, workspaceId, name: "Runtime Flow", status: "active", nodes: [], connections: [], createdAt: now };
+      const nodesInFlow = Array.isArray(existing.nodes) ? existing.nodes : [];
+      const index = nodesInFlow.findIndex((item) => item.id === record.id || item.boxId === record.id);
+      const flowNode = { ...(index >= 0 ? nodesInFlow[index] : {}), id: record.id, type: record.type, label: record.label, position: record.position, flowPosition: record.flowPosition, boxId: record.sourceRef || record.assetId || record.id };
+      const nextNodes = index >= 0 ? nodesInFlow.map((item, itemIndex) => itemIndex === index ? flowNode : item) : [...nodesInFlow, flowNode];
+      await Promise.all([
+        putRecords(STORES.runtimeNodes, [saved]),
+        putRecords(STORES.flows, [{ ...existing, workspaceId, nodes: nextNodes, status: existing.status === "draft" ? "active" : existing.status || "active", updatedAt: now }]),
+      ]);
+      return saved;
+    }
+    const db = await ensureStores();
 
     try {
       return await new Promise((resolve, reject) => {
@@ -690,5 +858,6 @@ window.TrackerLensRuntimeGraphStore = (() => {
     upsertDependency,
     upsertRuntimeNode,
     updateFlowNodePosition,
+    usesDesktopSqlite,
   };
 })();

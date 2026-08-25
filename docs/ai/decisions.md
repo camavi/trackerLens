@@ -3,7 +3,7 @@
 Purpose: important decisions that should guide future work.
 Read when: a change might conflict with architecture or product direction.
 Do not read when: making narrow UI/code fixes.
-Last updated: 2026-06-11.
+Last updated: 2026-08-25.
 
 ## Product
 
@@ -20,6 +20,14 @@ Last updated: 2026-06-11.
 - The official contract is `Workspace/Page -> Flow -> Runtime Nodes -> Runtime Dependencies -> Connections -> Channels -> Events/Flow Logs`.
 - `tl_pages` remains the workspace/page store; do not introduce `tl_workspaces` without an explicit migration.
 - Schema-driven Flow Map config should use `TrackerLensRuntimeContract` instead of a parallel form system.
+- Electron is the desktop shell. Its main process owns lifecycle and validated OS/IPC integration; it must not absorb TL runtime, memory, knowledge or storage logic.
+- Electron renderers remain sandboxed and context-isolated with Node integration disabled. Preload exposes only narrowly scoped, validated APIs.
+- TL Core is Electron-independent. Electron Main adapts OS actions into its allow-listed command contract; Renderer code cannot call arbitrary IPC or receive persistence/runtime handles.
+- Node runtime is explicit through `tl-node-execution/v1`. Legacy manifests use JavaScript by default; an unavailable declared runtime is a visible execution failure, never an implicit JavaScript fallback.
+- Runtime Manager wraps the existing JavaScript controller instead of duplicating it. Only a registered runtime may execute; unavailable future runtimes fail before the existing task callback runs.
+- Python POC execution is Main-process owned, opt-in and standard-library-only. The renderer receives narrow TL Core commands, never process/DB handles; POC success does not authorize migration of existing nodes.
+- The first Python Flow node is a development-only `Python Test` processor. It owns no persistence, shares the existing Event Bus and has explicit output, error and status channels; the node is absent unless Electron POC mode is enabled.
+- SQLite is the sole Electron desktop persistence target and current product authority, owned by TL Core. IndexedDB is disposable development/browser-compatibility residue, never a desktop fallback or rollback path. Python/renderer/package runtimes receive neither a database handle nor raw SQL.
 
 ## Knowledge Answer Ownership
 

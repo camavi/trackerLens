@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-08-01.
+Last updated: 2026-08-25.
 
 ## Active Area
 
@@ -14,6 +14,10 @@ Connected Agent Node Tool Protocol foundation.
 Custom Node Packages are the next product/architecture path after the AI Agent long-objective validation. TL should allow developers to upload/install node packages containing manifest, runtime JS, UI schema, JSON schemas, assets, examples and docs. Because arbitrary JS cannot be guaranteed 100% safe, the design must use trust levels (`verified`, `community`, `local-dev`, `blocked`), permission-gated runtime APIs, marketplace signature/verification, AI-assisted code review and strong warnings for external unverified installs. See `docs/ai/runtime/custom-node-packages.md`.
 
 ## Current Work
+
+- Electron desktop persistence is SQLite-only by product decision. IndexedDB is disposable development residue, not a fallback, migration source or rollback path. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime now use TL Core SQLite. Remaining IndexedDB references are legacy browser/diagnostic code to delete or isolate from the desktop build.
+- `database.html` is now the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle or arbitrary SQL reaches the renderer. If the Electron bridge is absent it fails visibly instead of using IndexedDB or demo data. The UI exposes only inspection, copy and local JSON export—not mutation actions.
+- The old Settings IndexedDB migration/recovery preview has been deleted. Settings now obtains desktop persistence status directly from `trackers.desktop.persistence.getStatus()` and no longer contains import, shadow, activation or recovery controls.
 
 - Connected Node Tool Protocol v1 is being defined so Agent/LLM nodes can inspect connected nodes, plan tool calls, request full or partial document evidence, ask Dictionary/Event/Graph/Memory nodes for focused observations, verify answers from source-bearing evidence and only then respond or emit validated actions.
 - The protocol is being kept MCP-ready: TL node tools should map cleanly to MCP tools/resources, while TL remains the local runtime owner and all mutation still goes through safe executor/preflight.
@@ -337,7 +341,7 @@ Runtime contract base is complete:
 - Edge inspector mapping details now show mapping status and copy actions for transform/mapped payload;
 - Existing runtime links can reopen `Connection Mapping` from Edge Inspector and persist mapping edits back to connection/dependency metadata;
 - Flow Map topbar includes a `Mapping Test` diagnostic that creates Manual JSON -> Preview with a BTC `json-map` transform and emits a mapped test payload.
-- Flow Map topbar includes a `Storage Test` diagnostic that creates Manual JSON -> Save DB Record, emits through EventBus and verifies the mapped record persisted to IndexedDB.
+- Flow Map topbar includes a `Storage Test` diagnostic that creates Manual JSON -> Save SQLite Record, emits through EventBus and verifies the mapped record persisted to SQLite.
 - Storage node Inspector now shows the latest persisted IndexedDB record payload with copy/refresh actions.
 
 Step 5 base is complete:
@@ -629,6 +633,10 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - World Graph aside follow-up: selecting a worldbuilding node now shows graph links plus scoped catalog sections such as kingdoms, stories, name/personality pools, global classes, packs/classes or story blocks. Isolated catalog records stay off the canvas by default but remain browseable/clickable in the aside with full JSON inspection.
 - World Graph aside scroll follow-up: the right aside now has its own viewport-bounded vertical overflow so long catalog/JSON sections scroll inside the panel without pushing the graph canvas.
 - World Graph selected-record follow-up: the aside now renders a readable Details section for the selected record before raw JSON, so isolated catalog records show their type/id/parent/world and key data fields immediately when clicked.
+- Worldbuilding character foundation: `worldbuilding/v1` now accepts `character`/`personaggio` records. World Generator can run `generate_characters`, World Database parses/validates characters, and World Graph projects `member_of`, `has_class`, `uses_name` and `has_personality` links so name/personality/class catalogs can become part of a living world graph.
+- World Generator context overflow follow-up: `includeExistingRecords` now sends a compact existing-record reference context to the LLM prompt instead of full persisted world records, preserving all DB/runtime data while avoiding provider context overflow during `generate_characters`.
+- World Generator worldId safety follow-up: non-create generation modes infer `worldId` only when existing context has exactly one world; otherwise they fail with a clear `world-id-required` error instead of silently creating `world_worldbuilding`. Character generation also instructs the LLM to use only existing pack/class/name/personality IDs.
+- World Generator Task JSON follow-up: when a Task Node sends a JSON object as `objective`/`task` text, World Generator now parses and merges it before reading `worldId`, `generationMode`, counts and `includeExistingRecords`.
 
 ## Next Logical Step
 
@@ -644,6 +652,8 @@ Target behavior:
 
 ## Required Updates When Work Changes
 
+- Electron + Python migration: the Phase 5 managed Python POC now includes a `Python Test` Flow Map processor behind `TL_ENABLE_PYTHON_POC=1`. `Text Input -> Python Test -> Preview` uses a persistent standard-library worker and existing Event Bus output/error/status channels; existing JS nodes and renderer IndexedDB retain their ownership.
+- Electron + Python migration: Phase 6/7 base is complete. `tl_python_sdk.py` exposes explicit handler registration plus safe execution context/log/progress/cancellation, and `RuntimeManager.resolveCapability` maps `text.transform` to the feature-gated Python runtime without exposing language choice to callers.
 - Update this file.
 - Update `docs/ai/task-registry.md`.
 - If architecture changes, update `docs/ai/decisions.md`.

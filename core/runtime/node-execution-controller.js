@@ -87,7 +87,7 @@ window.TrackerLensNodeExecutionController = (() => {
       this.emitState({ node, bus, status: "busy", eventType: "node_busy", context });
       const startedAt = performance?.now?.() || Date.now();
       Promise.race([
-        Promise.resolve().then(task),
+        Promise.resolve().then(() => window.TrackerLensRuntimeManager?.getDefault?.().runLegacyTask({ node, task, context }) || task()),
         timeoutPromise(config.timeoutMs, node.id),
       ])
         .then((result) => resolve(result))

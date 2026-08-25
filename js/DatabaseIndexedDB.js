@@ -12,7 +12,28 @@ class DatabaseIndexedDB {
     });
   }
 
+  desktopPersistence() {
+    return window.trackers?.desktop?.persistence || null;
+  }
+
+  async usesDesktopSqlite() {
+    if (this.desktopSqliteMode !== undefined) return this.desktopSqliteMode;
+    const persistence = this.desktopPersistence();
+    if (!persistence?.getStatus) return (this.desktopSqliteMode = false);
+    try {
+      this.desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
+    } catch (_) {
+      this.desktopSqliteMode = false;
+    }
+    return this.desktopSqliteMode;
+  }
+
+  desktopDbFacade() {
+    return { objectStoreNames: { contains: () => true }, version: 1, close() {} };
+  }
+
   async mount() {
+    if (await this.usesDesktopSqlite()) return (this.db = this.desktopDbFacade());
     const openedDb = await this.openDatabase();
     const missingTables = this.startTables.filter((table) => !openedDb.objectStoreNames.contains(table.name));
 
@@ -36,6 +57,7 @@ class DatabaseIndexedDB {
   }
 
   async getVersion() {
+    if (await this.usesDesktopSqlite()) return 1;
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.DB_NAME);
       let blockedTimer = null;
@@ -65,6 +87,7 @@ class DatabaseIndexedDB {
   }
 
   async openDatabase() {
+    if (await this.usesDesktopSqlite()) return (this.db = this.desktopDbFacade());
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.DB_NAME);
       let blockedTimer = null;
@@ -147,6 +170,7 @@ class DatabaseIndexedDB {
   }
 
   async createTables(table, columns = []) {
+    if (await this.usesDesktopSqlite()) return;
     if (!this.db) await this.openDatabase();
     if (this.db.objectStoreNames.contains(table)) {
       console.log(`Object store "${table}" esiste già`);
@@ -160,6 +184,10 @@ class DatabaseIndexedDB {
   }
 
   async addData(table, data) {
+    if (await this.usesDesktopSqlite()) {
+      await this.desktopPersistence().writeDevelopmentRecords({ storeName: table, records: [data] });
+      return data;
+    }
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readwrite");
       const request = objectStore.add(data);
@@ -176,6 +204,10 @@ class DatabaseIndexedDB {
     });
   }
   async search(table, column, value) {
+    if (await this.usesDesktopSqlite()) {
+      return (await this.desktopPersistence().readDevelopmentRecords({ storeName: table }))
+        .filter((record) => record?.[column] === value);
+    }
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readonly");
       const index = objectStore.index(column);
@@ -193,6 +225,7 @@ class DatabaseIndexedDB {
     });
   }
   async getAllData(table) {
+    if (await this.usesDesktopSqlite()) return this.desktopPersistence().readDevelopmentRecords({ storeName: table });
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readonly");
       const request = objectStore.getAll();
@@ -211,6 +244,7 @@ class DatabaseIndexedDB {
 
 
   async getData(table, id) {
+    if (await this.usesDesktopSqlite()) return (await this.desktopPersistence().readDevelopmentRecords({ storeName: table })).find((record) => record.id === id) || null;
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readonly");
       const request = objectStore.get(id);
@@ -228,6 +262,10 @@ class DatabaseIndexedDB {
   }
 
   async updateData(table, data) {
+    if (await this.usesDesktopSqlite()) {
+      await this.desktopPersistence().writeDevelopmentRecords({ storeName: table, records: [data] });
+      return data;
+    }
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readwrite");
       const request = objectStore.put(data);
@@ -245,6 +283,10 @@ class DatabaseIndexedDB {
   }
 
   async deleteData(table, id) {
+    if (await this.usesDesktopSqlite()) {
+      await this.desktopPersistence().deleteDevelopmentRecords({ storeName: table, ids: [id] });
+      return id;
+    }
     return new Promise(async (resolve, reject) => {
       const objectStore = await this.objectStore(table, "readwrite");
       const request = objectStore.delete(id);
@@ -261,6 +303,7 @@ class DatabaseIndexedDB {
     });
   }
   async tableExists(tableName) {
+    if (await this.usesDesktopSqlite()) return true;
     await this.ready;
 
     // Verifica se l'object store esiste
@@ -268,6 +311,7 @@ class DatabaseIndexedDB {
   }
 
   async objectStore(table, mode = "readwrite") {
+    if (await this.usesDesktopSqlite()) throw new Error("SQLite desktop uses repository methods, not object stores.");
     await this.ready;
 
     // Assicurati che il database sia aperto

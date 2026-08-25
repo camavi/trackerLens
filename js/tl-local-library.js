@@ -2,6 +2,15 @@ window.TrackerLensLocalLibrary = (() => {
   const DB_NAME = "TrackersLens";
   const WIDGET_STORE = "tl_widgets";
   const PAGE_STORE = "tl_pages";
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
+  };
 
   const normalizeText = (value, fallback = "") => {
     if (value === null || value === undefined) return fallback;
@@ -47,6 +56,7 @@ window.TrackerLensLocalLibrary = (() => {
     });
 
   const readAll = async (storeName) => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
     const db = await openDb();
 
     try {
@@ -175,6 +185,10 @@ window.TrackerLensLocalLibrary = (() => {
   };
 
   const inspect = async () => {
+    if (await usesDesktopSqlite()) {
+      const [widgets, pages] = await Promise.all([readAll(WIDGET_STORE), readAll(PAGE_STORE)]);
+      return { name: "trackers-lens.sqlite", version: "tl-desktop-persistence/v1", stores: [WIDGET_STORE, PAGE_STORE], counts: { [WIDGET_STORE]: widgets.length, [PAGE_STORE]: pages.length }, origin: "tl-core", href: window.location.href };
+    }
     const db = await openDb();
 
     try {

@@ -159,6 +159,7 @@ const panelOwners = {
   security: "security",
   backup: "backup",
   system: "system",
+  "desktop-persistence": "data",
 };
 
 const settingsState = {
@@ -187,6 +188,11 @@ const settingsState = {
     usedLabel: "0 B",
     quotaLabel: "N/D",
     percent: 1,
+  },
+  desktopPersistence: {
+    loading: false,
+    status: null,
+    error: "",
   },
   updatedAt: new Date(),
   queryMs: 0,
@@ -818,6 +824,66 @@ const renderStorage = () =>
     btn({ class: "st-btn-primary", onclick: applyRuntimeRetention }, icon("cleaning_services", "sm"), "Applica retention runtime")
   );
 
+const desktopPersistenceLabel = () => {
+  const state = settingsState.desktopPersistence || { loading: false, status: null, error: "" };
+  if (state.loading) return ["Analisi SQLite in corso", "warn"];
+  if (state.error) return ["Diagnostica non disponibile", "error"];
+  if (!state.status?.available) return ["Disponibile solo nell'app desktop", "warn"];
+  return [state.status.status?.mode || "desktop-sqlite", "online"];
+};
+
+const desktopBridgeSummary = () => {
+  const diagnostic = settingsState.desktopPersistence?.status?.diagnostic;
+  if (!diagnostic) return "Bridge non ancora analizzato";
+  const desktopKeys = diagnostic.desktopKeys.length ? diagnostic.desktopKeys.join(", ") : "nessuna";
+  const legacyKeys = diagnostic.legacyKeys.length ? diagnostic.legacyKeys.join(", ") : "nessuna";
+  return `Renderer: ${diagnostic.renderer} · trackers.desktop: ${desktopKeys} · trackersDesktop: ${legacyKeys}`;
+};
+
+const renderDesktopPersistence = () => {
+  const state = settingsState.desktopPersistence || { loading: false, status: null, error: "" };
+  const [label, tone] = desktopPersistenceLabel();
+  return _.Card(
+    buildPanelProps("desktop-persistence", "tl-settings-panel tl-settings-desktop-persistence", { "data-settings-desktop-persistence-panel": "true" }),
+    _.Row(
+      { align: "center", justify: "space-between" },
+      _.div(_.h3("SQLite desktop"), _.p("Persistenza desktop gestita da TL Core.")),
+      _.span({ class: `tl-settings-status is-${tone}` }, dot(tone), label)
+    ),
+    state.error ? _.p({ class: "tl-settings-error" }, state.error) : null,
+    !state.status?.available && state.status?.error ? _.p({ class: "tl-settings-error" }, `Errore bridge: ${state.status.error}`) : null,
+    _.p("Modalità attiva: ", _.strong(state.status?.status?.mode || "desktop-sqlite")),
+    _.p("SQLite: ", _.strong(state.status?.status?.sqlite?.exists ? "candidato presente" : "nessun database creato")),
+    _.p({ class: "tl-settings-desktop-bridge-debug" }, "Debug bridge: ", _.code(desktopBridgeSummary())),
+    _.p({ class: "tl-settings-desktop-bridge-debug" }, "SQLite viene inizializzato all'avvio dell'app desktop e resta l'unica persistenza desktop.")
+  );
+};
+
+const patchDesktopPersistencePanel = () => {
+  const panel = document.querySelector("[data-settings-desktop-persistence-panel]");
+  if (panel) panel.replaceWith(renderDesktopPersistence());
+  syncSettingsNavigation();
+};
+
+const loadDesktopPersistenceStatus = async () => {
+  const persistence = window.trackers?.desktop?.persistence;
+  const diagnostic = {
+    renderer: /Electron\//i.test(navigator.userAgent) ? "electron" : "browser",
+    desktopKeys: window.trackers?.desktop ? Object.keys(window.trackers.desktop).sort() : [],
+    legacyKeys: window.trackersDesktop ? Object.keys(window.trackersDesktop).sort() : [],
+  };
+  if (!persistence?.getStatus) {
+    settingsState.desktopPersistence = { ...settingsState.desktopPersistence, status: { available: false, reason: "desktop-bridge-unavailable", diagnostic } };
+    return;
+  }
+  try {
+    const status = await persistence.getStatus();
+    settingsState.desktopPersistence = { ...settingsState.desktopPersistence, status: { available: true, status, diagnostic }, error: "" };
+  } catch (error) {
+    settingsState.desktopPersistence = { ...settingsState.desktopPersistence, status: { available: false, diagnostic, error: error?.message || "Errore IPC" }, error: error?.message || "Errore SQLite" };
+  }
+};
+
 const renderNotifications = () =>
   _.Card(
     buildPanelProps("notifications", "tl-settings-panel tl-settings-notifications"),
@@ -1012,7 +1078,7 @@ const renderSystemInfo = () => {
     _.h3("Informazioni Sistema"),
     ...[
       ["Versione Trackers Lens", (typeof tlConfig !== "undefined" ? tlConfig.VERSION : null) || "v1.0.0"],
-      ["Ambiente", location.protocol === "chrome-extension:" ? "Extension" : "Browser"],
+      ["Ambiente", /Electron\//i.test(navigator.userAgent) ? "Electron Desktop" : location.protocol === "chrome-extension:" ? "Extension" : "Browser"],
       ["Piattaforma", platform],
       ["Architettura", architecture],
       ["User Agent", navigator.userAgent.split(" ").slice(-2).join(" ")],
@@ -1075,6 +1141,7 @@ const renderShell = () =>
           renderConnections(),
           renderAiProvider(),
           renderStorage(),
+          renderDesktopPersistence(),
           renderNotifications(),
           renderBackup(),
           renderSecurity()
@@ -1141,7 +1208,7 @@ const refreshSettings = async () => {
     settingsState.notice = "Dati aggiornati";
     await loadSettingsStores();
     await updateStorageEstimate();
-    await loadAiModelsForSelectedProvider({ force: true });
+    await loadDesktopPersistenceStatus();
   } catch (error) {
     settingsState.error = error?.message || "Errore aggiornamento impostazioni";
   }
@@ -1320,7 +1387,9 @@ const bootSettings = async () => {
       settingsState.error = "Timeout caricamento store impostazioni";
     }
     await updateStorageEstimate();
-    await loadAiModelsForSelectedProvider({ force: true });
+    await loadDesktopPersistenceStatus();
+    // I modelli locali vengono interrogati solo su richiesta esplicita dell'utente.
+    // Evita tentativi automatici verso provider storici/non attivi all'apertura di Settings.
     if (!settingsState.error) settingsState.error = "";
   } catch (error) {
     settingsState.error = error?.message || "Errore caricamento impostazioni";

@@ -51,7 +51,17 @@ window.TrackerLensStorageRuntime = (() => {
 
   const safeStoreName = (value = "") => {
     const cleaned = String(value || DEFAULT_STORE).trim().replace(/[^A-Za-z0-9_-]/g, "_");
-    return cleaned || DEFAULT_STORE;
+    if (!cleaned || cleaned === DEFAULT_STORE) return DEFAULT_STORE;
+    return cleaned.startsWith("tl_storage_") ? cleaned : `tl_storage_${cleaned.replace(/^tl_/, "")}`;
+  };
+  let desktopSqliteMode = null;
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) return (desktopSqliteMode = false);
+    try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
+    return desktopSqliteMode;
   };
 
   const createIndexes = (store, columns = []) => {
@@ -91,6 +101,7 @@ window.TrackerLensStorageRuntime = (() => {
 
   const ensureStore = async (storeName = DEFAULT_STORE) => {
     const name = safeStoreName(storeName);
+    if (await usesDesktopSqlite()) return { close() {} };
     let db = await openDb(undefined, name);
     if (db.objectStoreNames.contains(name)) return db;
     const nextVersion = db.version + 1;
@@ -100,6 +111,10 @@ window.TrackerLensStorageRuntime = (() => {
 
   const writeRecord = async ({ storeName = DEFAULT_STORE, record = {} } = {}) => {
     const name = safeStoreName(storeName);
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName: name, records: [record] });
+      return record;
+    }
     const db = await ensureStore(name);
     try {
       return await new Promise((resolve, reject) => {

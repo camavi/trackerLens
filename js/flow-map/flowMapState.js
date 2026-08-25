@@ -497,6 +497,10 @@ const syncPageRuntimes = (workspaceId = state.filters.workspaceId) => {
   syncOrchestratorAgentRuntime(workspaceId);
 };
 
+const hasRendererOnlyPythonPocNode = (nodes = state.runtime.nodes || []) =>
+  Boolean(window.trackers?.runtime?.pythonPoc?.run) &&
+  nodes.some((node) => String(node.metadata?.subtype || node.metadata?.manifest?.subtype || "").toLowerCase() === "python-test");
+
 const setFiltersState = (filters) => {
   state.filters = filters;
   setFiltersSignal(filters);
@@ -515,6 +519,10 @@ const filterModel = (key) => [
 const runtimeStoreName = (key, fallback) => tlConfig?.TABLES?.[key] || fallback;
 
 const readRuntimeStore = async (storeName) => {
+  const eventStore = window.TrackerLensEventLogStore;
+  if (storeName === runtimeStoreName("TL_EVENTS", "tl_events") && eventStore?.listEvents) return eventStore.listEvents();
+  if (storeName === runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs") && eventStore?.listFlowLogs) return eventStore.listFlowLogs();
+  if (window.TrackerLensRuntimeGraphStore?.readAll) return window.TrackerLensRuntimeGraphStore.readAll(storeName);
   if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
     await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
   }
@@ -578,7 +586,14 @@ const readRuntimeRecord = async (storeName, id) => {
 };
 
 const writeRuntimeRecord = async (storeName, record) => {
-  if (!record?.id) return null;
+    if (!record?.id) return null;
+  const eventStore = window.TrackerLensEventLogStore;
+  if (storeName === runtimeStoreName("TL_EVENTS", "tl_events") && eventStore?.recordEvent) {
+    return eventStore.recordEvent(record);
+  }
+  if (storeName === runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs") && eventStore?.recordFlowLog) {
+    return eventStore.recordFlowLog(record);
+  }
   if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
     await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
   }
@@ -614,6 +629,10 @@ const deleteWorkspaceScopedRecords = async (storeName, workspaceId = "") => {
     .map((record) => record.id)
     .filter(Boolean);
   if (!ids.length) return [];
+  if ([runtimeStoreName("TL_EVENTS", "tl_events"), runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs")].includes(storeName) && window.TrackerLensEventLogStore?.deleteRecords) {
+    return window.TrackerLensEventLogStore.deleteRecords(storeName, ids);
+  }
+  if (window.TrackerLensRuntimeGraphStore?.deleteRecords) return window.TrackerLensRuntimeGraphStore.deleteRecords(storeName, ids);
   if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
     await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
   }
@@ -647,6 +666,10 @@ const deleteRuntimeRecordsWhere = async (storeName, predicate = () => false) => 
   const records = await readRuntimeStore(storeName).catch(() => []);
   const ids = records.filter(predicate).map((record) => record.id).filter(Boolean);
   if (!ids.length) return [];
+  if ([runtimeStoreName("TL_EVENTS", "tl_events"), runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs")].includes(storeName) && window.TrackerLensEventLogStore?.deleteRecords) {
+    return window.TrackerLensEventLogStore.deleteRecords(storeName, ids);
+  }
+  if (window.TrackerLensRuntimeGraphStore?.deleteRecords) return window.TrackerLensRuntimeGraphStore.deleteRecords(storeName, ids);
   if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
     await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
   }
@@ -1254,7 +1277,7 @@ const loadRuntime = async (options = {}) => {
     });
     state.previewClearedAt = loadStoredPreviewClears(workspaceId);
     rebuildPreviewPayloadsFromEvents();
-    if (state.testRun?.running) {
+    if (state.testRun?.running || hasRendererOnlyPythonPocNode(nodes)) {
       syncPageRuntimes(workspaceId);
     } else if (!syncBackgroundRuntime(workspaceId, { forceRefresh: force })) {
       syncPageRuntimes(workspaceId);
@@ -1700,6 +1723,11 @@ const nodeRuntimeDescription = (node = {}, live = null) => {
 const runtimeNodeBase = (node = {}, live = null, perf = null) => {
   const eventsPerMin = perf?.eventsPerSec ? Math.round(perf.eventsPerSec * 60) : live?.count || node.runtime?.eventsPerMin || 0;
   const latency = perf?.avgLatency || perf?.latency || node.runtime?.latency || 0;
+  const persistedListeners = selectedChannelRecords(node).reduce((total, channel) => total + (channel.subscribers?.length || 0), 0);
+  const connectedConsumers = (state.runtime.dependencies || []).filter((dependency) =>
+    dependency.sourceNodeId === node.id &&
+    String(dependency.metadata?.linkType || dependency.mapping?.linkType || "") !== "tool-access"
+  ).length;
   return {
     id: node.id || "",
     workspaceId: node.workspaceId || "",
@@ -1723,7 +1751,7 @@ const runtimeNodeBase = (node = {}, live = null, perf = null) => {
       ...(node.metrics || {}),
       eventsPerMin,
       latency,
-      listeners: selectedChannelRecords(node).reduce((total, channel) => total + (channel.subscribers?.length || 0), 0),
+      listeners: Math.max(persistedListeners, connectedConsumers),
     },
     permissions: node.metadata?.permissions || node.metadata?.manifest?.permissions || node.permissions || [],
     position: node.flowPosition || node.position || { x: 0, y: 0 },

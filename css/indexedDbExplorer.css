@@ -118,14 +118,18 @@ body {
   justify-self: end;
 }
 
-.tl-db-edit.cms-btn {
-  min-width: 104px;
-  color: #161000;
-  border-color: rgba(255, 199, 44, 0.58);
+.tl-db-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  color: #9be8ba;
+  border: 1px solid rgba(85, 218, 143, 0.32);
   border-radius: 8px;
-  background: linear-gradient(180deg, #ffd84f, #d99a00);
-  box-shadow: 0 10px 28px rgba(255, 199, 44, 0.2);
-  font-weight: 800;
+  background: rgba(28, 150, 83, 0.13);
+  font-size: 13px;
+  font-weight: 750;
 }
 
 .tl-db-menu.cms-btn {

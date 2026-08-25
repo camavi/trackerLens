@@ -3,9 +3,35 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-08-01.
+Last updated: 2026-08-25.
 
 ## Active
+
+### TASK-030: Electron Desktop + Managed Python Migration
+
+Status: Phase 5 Python Test Flow node is user-verified; Phase 6 minimal Python SDK and Phase 7 capability routing base are implemented.
+Priority: High.
+Risk: High because browser-extension persistence, Chrome-specific APIs, runtime ownership and saved Flow contracts must remain compatible during migration.
+
+Current sub-steps:
+
+- Inventory: map extension entry points, current JS runtime, persistent IndexedDB/localStorage data, browser APIs and existing export/recovery paths.
+- Baseline: verify the current repository state and available regression coverage before introducing dependencies or changing architecture.
+- Migration design: define the Electron shell, secure bridge, app-data SQLite and first isolated Python-node proof of concept only after the assessment is approved. Desktop data is disposable during development; no rollback path is required.
+- Electron shell: base implemented. `electron/main.cjs` loads the existing Flow Map UI with context isolation, renderer sandboxing, Node integration disabled, navigation/window hardening and a restrictive preload API.
+- Verification: `npm run check` passes and the Electron desktop shell starts through `npm run desktop:dev`; no existing runtime or persistence files were changed for this phase.
+- TL Core boundary: implemented. `core/desktop/tl-core.cjs` provides an allow-listed desktop contract (`desktop.getStatus`, `runtime.getStatus`, `desktop.openExternal`) independent of Electron; Main only adapts OS calls and preload exposes named API methods over one validated IPC route.
+- Boundary tests: `npm test` verifies the public status shape, existing renderer runtime ownership, command rejection and external URL validation.
+- Node execution contract: implemented. `core/runtime/node-execution-contract.js` defines `tl-node-execution/v1` request/result envelopes, lifecycle events, metrics, diagnostics, provenance and runtime resolution. Existing Flow Map manifests normalize to `execution.runtime=javascript`; explicit unavailable Python manifests fail safely instead of falling back.
+- Runtime Manager: implemented with the JavaScript executor as default. In Electron POC mode only it registers the bridge-backed Python executor; browser/normal desktop mode keeps explicit Python nodes unavailable.
+- Python POC: implemented. A persistent JSON Lines worker supports an isolated text-transform capability with request IDs, progress/log events, invalid-input errors, cancellation, timeout and crash isolation. In POC Electron mode, `Python Test` appears in the Processor palette and uses explicit input/output/error/status channels plus Cancel/Restart controls. It is disabled outside that mode and does not alter existing JS nodes.
+- Python Node SDK: implemented as a built-in standard-library-only foundation. `@node`, `NodeContext`, log/progress/cancellation and normalized outputs are available; it intentionally has no direct storage, filesystem, network, memory or knowledge access.
+- Capability routing: implemented as a base. Node manifests declare `text.transform`, and Runtime Manager resolves the feature-gated Python executor through `resolveCapability` rather than requiring callers to choose Python. Additional capabilities/packages remain future work.
+- Desktop persistence diagnostic preview has been retired with the discarded migration/recovery route. `core/desktop/desktop-persistence.cjs` owns the private SQLite document schema and integrity test; the CMSwift Settings panel reads only Core SQLite status through the restricted preload bridge. No renderer-side IndexedDB export/plan helper remains and no raw SQL/DB handle is exposed.
+- Legacy IndexedDB inspection helpers remain only while direct callers are being removed; they are not part of the desktop persistence product or a recovery path.
+- Marketplace trust catalog classification: `tl_marketplace_trust` is recognized as a known later-cohort operational store, not an unclassified/dynamic store and not part of the first import cohort.
+- Desktop SQLite authority: Electron initializes Core-owned SQLite at startup. TL Core exposes allow-listed graph/observation/page/widget/connection/channel/Knowledge reads (optionally workspace-scoped), upserts and ID-targeted deletions plus validated `tl_history`/`tl_storage_*` runtime buckets, rejecting raw SQL and filesystem/database handles. Flow Map Graph Store, snapshot, Event Log Store, Connections Store, Channel Registry, Local Library, Box Editor, Workspace editor adapter, Performance Monitor, Time Travel, Knowledge and Storage Runtime use SQLite. Remaining IndexedDB references are legacy browser/diagnostic code to delete or isolate from the desktop build.
+- SQLite Explorer: `database.html` now reads the allow-listed collection catalog and record JSON through TL Core in Electron. It is an inspection surface only: it never exposes a SQLite file path, database handle or arbitrary SQL to the renderer.
 
 ### TASK-029: Custom Node Packages
 
@@ -427,6 +453,10 @@ Main files:
 - World Graph aside follow-up: node selection now surfaces related records and scoped catalog groups in the right panel, so isolated worldbuilding records are useful without being forced into visual graph edges.
 - World Graph aside scroll follow-up: the right panel uses internal vertical overflow for long related-record/catalog/JSON content.
 - World Graph selected-record follow-up: selected records now show a readable Details section in the aside before raw JSON, including isolated catalog entries.
+- Worldbuilding character foundation: added `character` record support across generator prompt/schema, World Database normalization/validation and World Graph projection/aside browsing, with character links to pack, class, name and personality records.
+- World Generator context overflow follow-up: existing world records are compacted into ID/label/link references before prompt construction so character generation can use existing packs/classes/names/personalities without exceeding local model context.
+- World Generator worldId safety follow-up: non-create modes now require or unambiguously infer a target `worldId`, preventing accidental fallback worlds such as `world_worldbuilding`; character prompts explicitly forbid invented link IDs.
+- World Generator Task JSON follow-up: Task Node objective/task text containing a JSON object is parsed as structured generator input so `worldId` and `generate_characters` settings are not lost.
 - World Database generated-record root fix: records-only generated world payloads now get a synthesized `world` record before storage, and nested `data.kingdomId` / `data.packId` references are promoted into `parentId` for graph linking.
 - World Database generated payload dedup: generated payloads that include both `world.*` arrays and `records` for the same IDs are deduplicated before persistence/emission, keeping World Graph output counts aligned with actual unique records.
 - World Database root record cleanup: generated `world` objects now strip child arrays from the persisted root record data, leaving children as standalone records and keeping World Graph detail panels readable.
@@ -453,5 +483,6 @@ Main files:
 
 - Endpoint research hardening follow-up: browser-test explicit OpenAPI discovery from Flow Map AI Chat after routing fix and add provider scoring only from fetched documentation.
 - Background/service-worker persistence when pages are closed.
+- Electron SQLite development repository foundation: TL Core now offers only allow-listed first-cohort candidate record reads, upserts and deletions; it remains separate from the active renderer IndexedDB runtime until Flow Map's Graph Engine, snapshot and write paths are moved together.
 - Cloud sync, if explicitly prioritized.
 - Workspace templates and AI-generated workspaces after runtime core is stable.

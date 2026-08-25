@@ -11,6 +11,24 @@ window.TrackerLensChannelRegistry = (() => {
     runtimeNodes: tableName("TL_RUNTIME_NODES", "tl_runtime_nodes"),
     runtimeDependencies: tableName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies"),
   };
+  let desktopSqliteMode = null;
+
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw new Error("SQLite desktop bridge unavailable.");
+      return (desktopSqliteMode = false);
+    }
+    try {
+      desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
+    } catch (error) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw error;
+      desktopSqliteMode = false;
+    }
+    return desktopSqliteMode;
+  };
 
   const STORE_DEFINITIONS = [
     { name: STORES.channels, columns: [{ name: "workspaceId" }, { name: "name" }, { name: "status" }, { name: "producerNodeId" }] },
@@ -79,6 +97,7 @@ window.TrackerLensChannelRegistry = (() => {
     });
 
   const ensureStores = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
       await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
     }
@@ -93,6 +112,7 @@ window.TrackerLensChannelRegistry = (() => {
   };
 
   const readAll = async (storeName) => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
     const db = await ensureStores();
     try {
       if (!db.objectStoreNames.contains(storeName)) return [];
@@ -108,6 +128,10 @@ window.TrackerLensChannelRegistry = (() => {
 
   const putRecords = async (storeName, records = []) => {
     if (!records.length) return [];
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records });
+      return records;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -125,6 +149,10 @@ window.TrackerLensChannelRegistry = (() => {
   const deleteRecords = async (storeName, ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: uniqueIds });
+      return uniqueIds;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {

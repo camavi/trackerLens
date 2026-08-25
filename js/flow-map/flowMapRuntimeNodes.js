@@ -1111,7 +1111,7 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
     return {
       systemPrompt: "You are a World Generator Agent for Trackers Lens. Generate structured worldbuilding records as strict JSON for the worldbuilding/v1 schema.",
       promptTemplate: "Use the objective, input payload and generation mode to create or update only the requested worldbuilding scope. Keep IDs stable, use explicit parent links, and return data that can be appended to World Database.",
-      outputInstructions: "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, personality, name, story_block, story, territory, law. Do not include markdown or prose.",
+      outputInstructions: "Return one strict JSON object with worldId, collectionId, schemaVersion and either world plus arrays or records. Supported record types: world, kingdom, pack, class, character, personality, name, story_block, story, territory, law. Do not include markdown or prose.",
     };
   }
   if (subtype === "knowledge-mechanism-cue-agent") {
@@ -1548,6 +1548,8 @@ const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
   const category = nodeCategory(node);
   const outputs = subtype === "agent-bridge"
     ? ["action"]
+    : subtype === "python-test"
+      ? ["output", "error", "status"]
     : subtype === "condition"
       ? [config.trueOutput || defaults.trueOutput || "true", config.falseOutput || defaults.falseOutput || "false"].filter(Boolean)
       : category === "actions" || category === "storage" || category === "lens" || category === "dev"
@@ -1568,6 +1570,7 @@ const runtimeNodeUpdateFromValues = ({ node, values = {} }) => {
     permissions: previousMetadata.permissions || previousMetadata.manifest?.permissions || node.permissions || [],
     settingsSchema: previousMetadata.settingsSchema || previousMetadata.manifest?.settingsSchema || {},
     runtime: previousMetadata.runtimeMetadata || previousMetadata.manifest?.runtime || node.runtime || {},
+    execution: previousMetadata.manifest?.execution || node.execution || null,
     render: previousMetadata.manifest?.render || null,
     execute: previousMetadata.manifest?.execute || null,
     persist: previousMetadata.manifest?.persist || null,
@@ -1869,7 +1872,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "world-generator-agent") {
       return withAiProviderConfigFields([
-        { key: "generationMode", label: "Generation mode", type: "select", options: ["create_world", "add_kingdoms", "expand_kingdom", "expand_pack", "generate_story_blocks", "generate_stories", "modify_item"], defaultValue: "create_world" },
+        { key: "generationMode", label: "Generation mode", type: "select", options: ["create_world", "add_kingdoms", "expand_kingdom", "expand_pack", "generate_story_blocks", "generate_stories", "generate_characters", "modify_item"], defaultValue: "create_world" },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "objective", label: "Objective", type: "textarea", rows: 5, placeholder: "Create a fantasy world with kingdoms, packs, laws and story blocks..." },
         { key: "worldId", label: "World ID", placeholder: "world_storms" },
@@ -1880,6 +1883,7 @@ const configFieldDefinitions = (node = {}) => {
         { key: "targetRecordType", label: "Target record type", placeholder: "kingdom, pack, story..." },
         { key: "kingdomCount", label: "Kingdom count", placeholder: "1" },
         { key: "packsPerKingdom", label: "Packs per kingdom", placeholder: "3" },
+        { key: "characterCount", label: "Characters", placeholder: "6" },
         { key: "storyBlockCount", label: "Story blocks", placeholder: "4" },
         { key: "storyCount", label: "Stories", placeholder: "1" },
         { key: "outputChannel", label: "Output channel", placeholder: "world.record" },
@@ -2727,6 +2731,7 @@ const worldGraphTypeColors = {
   story: "#fb7185",
   story_block: "#60a5fa",
   class: "#c084fc",
+  character: "#22c55e",
   personality: "#2dd4bf",
   name: "#f472b6",
   entity: "#67e8f9",
@@ -2746,7 +2751,7 @@ const worldGraphLayout = ({ entities = [], relations = [], layout = "force" } = 
   const positions = new Map();
   const visualHierarchyEdge = (relation = {}) => {
     const type = relation.relationType || "relation";
-    if (type === "uses_block") return { parentId: relation.sourceEntityId, childId: relation.targetEntityId };
+    if (["uses_block", "has_class", "uses_name", "has_personality"].includes(type)) return { parentId: relation.sourceEntityId, childId: relation.targetEntityId };
     return { parentId: relation.targetEntityId, childId: relation.sourceEntityId };
   };
   const visualEdges = relations
@@ -2787,7 +2792,7 @@ const worldGraphLayout = ({ entities = [], relations = [], layout = "force" } = 
       children.sort((leftId, rightId) => {
         const left = byId.get(leftId) || {};
         const right = byId.get(rightId) || {};
-        const typeOrder = { world: 0, kingdom: 1, story: 2, pack: 3, story_block: 4, class: 5, territory: 6, law: 7, personality: 8, name: 9 };
+        const typeOrder = { world: 0, kingdom: 1, story: 2, pack: 3, character: 4, story_block: 5, class: 6, territory: 7, law: 8, personality: 9, name: 10 };
         return (typeOrder[left.recordType || left.entityType] ?? 20) - (typeOrder[right.recordType || right.entityType] ?? 20) ||
           String(left.label || left.id).localeCompare(String(right.label || right.id));
       });
@@ -3126,8 +3131,23 @@ const openWorldGraphViewDialog = (node = {}) => {
     const id = record.id || "";
     const worldId = graphData.worldId || record.worldId || id;
     const direct = (item) => item.parentId === id || item.data?.parentId === id;
-    const byKingdom = (item) => item.parentId === id || item.data?.kingdomId === id || item.data?.kingdom === id;
+    const byKingdom = (item) => {
+      if (item.parentId === id || item.data?.kingdomId === id || item.data?.kingdom === id) return true;
+      const itemPack = recordById.get(item.parentId || item.data?.packId || item.data?.pack || "");
+      return itemPack?.recordType === "pack" && (itemPack.parentId === id || itemPack.data?.kingdomId === id || itemPack.data?.kingdom === id);
+    };
     const byPack = (item) => item.parentId === id || item.data?.packId === id || item.data?.pack === id;
+    const byClass = (item) => item.data?.classId === id || item.data?.class === id;
+    const byName = (item) => item.data?.nameId === id || item.data?.nameRef === id;
+    const characterUsesPersonality = (character = {}, personality = record) => {
+      const personalityId = personality.id || "";
+      const personalityLabel = personality.label || personality.name || "";
+      return worldArray(character.data?.personalityIds || character.data?.personalities)
+        .some((ref) => {
+          const value = typeof ref === "string" ? ref : ref.id || ref.personalityId || ref.name || "";
+          return value === personalityId || value === personalityLabel;
+        });
+    };
     const noParent = (item) => !item.parentId && !item.data?.parentId && !item.data?.kingdomId && !item.data?.packId;
     const storyBlockIds = new Set();
     if (type === "story") {
@@ -3144,22 +3164,36 @@ const openWorldGraphViewDialog = (node = {}) => {
     if (type === "world") {
       push("Kingdoms", records.filter((item) => item.recordType === "kingdom" && (item.parentId === id || item.worldId === worldId)));
       push("Stories", records.filter((item) => item.recordType === "story" && (item.worldId === worldId || item.data?.worldId === worldId)));
+      push("Characters", records.filter((item) => item.recordType === "character" && item.worldId === worldId));
       push("Name Pool", records.filter((item) => item.recordType === "name" && item.worldId === worldId));
       push("Personality Pool", records.filter((item) => item.recordType === "personality" && item.worldId === worldId));
       push("Global Classes", records.filter((item) => item.recordType === "class" && item.worldId === worldId && noParent(item)));
       push("Story Blocks", records.filter((item) => item.recordType === "story_block" && item.worldId === worldId));
     } else if (type === "kingdom") {
       push("Packs", records.filter((item) => item.recordType === "pack" && byKingdom(item)));
+      push("Characters", records.filter((item) => item.recordType === "character" && byKingdom(item)));
       push("Classes", records.filter((item) => item.recordType === "class" && byKingdom(item)));
       push("Stories", records.filter((item) => item.recordType === "story" && byKingdom(item)));
       push("Catalog In World", records.filter((item) => ["name", "personality"].includes(item.recordType) && item.worldId === worldId));
     } else if (type === "pack") {
       push("Classes Available", records.filter((item) => item.recordType === "class" && byPack(item)));
+      push("Characters", records.filter((item) => item.recordType === "character" && byPack(item)));
       push("Stories", records.filter((item) => item.recordType === "story" && byPack(item)));
       push("Catalog In World", records.filter((item) => ["name", "personality"].includes(item.recordType) && item.worldId === worldId));
+    } else if (type === "character") {
+      push("Class", records.filter((item) => item.recordType === "class" && (item.id === record.data?.classId || item.label === record.data?.class || item.id === record.data?.class)));
+      push("Name", records.filter((item) => item.recordType === "name" && (item.id === record.data?.nameId || item.id === record.data?.nameRef || item.label === record.data?.name)));
+      push("Personalities", records.filter((item) => item.recordType === "personality" && characterUsesPersonality(record, item)));
+      push("Pack", records.filter((item) => item.recordType === "pack" && (item.id === record.parentId || item.id === record.data?.packId || item.label === record.data?.pack)));
     } else if (type === "story") {
       push("Story Blocks Used", records.filter((item) => item.recordType === "story_block" && storyBlockIds.has(item.id)));
       push("Other Story Blocks", records.filter((item) => item.recordType === "story_block" && item.worldId === worldId && !storyBlockIds.has(item.id)));
+    } else if (type === "class") {
+      push("Characters", records.filter((item) => item.recordType === "character" && byClass(item)));
+    } else if (type === "name") {
+      push("Characters", records.filter((item) => item.recordType === "character" && byName(item)));
+    } else if (type === "personality") {
+      push("Characters", records.filter((item) => item.recordType === "character" && characterUsesPersonality(item, record)));
     } else {
       push("Children", records.filter(direct));
     }
@@ -4458,6 +4492,23 @@ const renderRuntimeChipInlineConfig = (node, config = {}) => {
         _.em(shortInlineConfigValue(item.value))
       ))
     ),
+    subtype === "python-test" ? _.div(
+      { class: "tl-flow-node-python-controls" },
+      _.span({ class: "tl-flow-kdoc-config-chip" }, icon("terminal", "sm"), _.strong("Python"), _.em(window.TrackerLensPythonPocUi?.runForNode?.(node.id) ? "running" : "ready")),
+      btn({
+        class: "tl-flow-inline-editor-btn",
+        title: "Cancel active Python Test execution",
+        disabled: !window.TrackerLensPythonPocUi?.runForNode?.(node.id),
+        onPointerDown: stopNodeControlEvent,
+        onclick: async (event) => { stopNodeControlEvent(event); await window.TrackerLensPythonPocUi?.cancel?.(node.id); },
+      }, icon("cancel", "sm"), "Cancel"),
+      btn({
+        class: "tl-flow-inline-editor-btn",
+        title: "Restart the managed Python POC worker",
+        onPointerDown: stopNodeControlEvent,
+        onclick: async (event) => { stopNodeControlEvent(event); await window.TrackerLensPythonPocUi?.restart?.(node.id); },
+      }, icon("restart_alt", "sm"), "Restart")
+    ) : null,
     subtype === "telegram" ? btn({
       class: "tl-flow-inline-editor-btn",
       title: "Send Telegram test message",
@@ -4466,6 +4517,10 @@ const renderRuntimeChipInlineConfig = (node, config = {}) => {
     }, icon("send", "sm"), "Test") : null
   );
 };
+
+window.addEventListener("trackers:python-poc-status", () => {
+  if (typeof mount === "function") mount({ preserveScroll: true });
+});
 
 const fallbackInlineFieldValue = (node = {}, config = {}, definition = {}) => {
   const defaults = runtimeNodeConfigDefaults(node);

@@ -18,6 +18,24 @@ window.TrackerLensEventLogStore = (() => {
   };
   const SETTINGS_STORE = tableName("TL_SETTINGS", "tl_settings");
   const SETTINGS_RECORD_ID = "global";
+  let desktopSqliteMode = null;
+
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw new Error("SQLite desktop bridge unavailable.");
+      return (desktopSqliteMode = false);
+    }
+    try {
+      desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
+    } catch (error) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw error;
+      desktopSqliteMode = false;
+    }
+    return desktopSqliteMode;
+  };
 
   const createIndexes = (store, columns = []) => {
     columns.forEach((column) => {
@@ -57,6 +75,7 @@ window.TrackerLensEventLogStore = (() => {
     });
 
   const ensureStores = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
       await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
     }
@@ -71,6 +90,10 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const write = async (storeName, record) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
+      return record;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -86,6 +109,10 @@ window.TrackerLensEventLogStore = (() => {
   const deleteRecords = async (storeName, ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: uniqueIds });
+      return uniqueIds;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -101,6 +128,11 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const clearStore = async (storeName) => {
+    if (await usesDesktopSqlite()) {
+      const records = await desktopPersistence().readDevelopmentRecords({ storeName });
+      await deleteRecords(storeName, records.map((record) => record.id));
+      return storeName;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -122,6 +154,17 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const readRetentionPolicy = async () => {
+    if (await usesDesktopSqlite()) {
+      const settings = await desktopPersistence().readDevelopmentRecords({ storeName: SETTINGS_STORE });
+      const record = settings.find((item) => item.id === SETTINGS_RECORD_ID) || {};
+      const storage = record.settings?.storage || record.content?.settings?.storage || {};
+      const eventLimit = Number(storage.runtimeEventLimit ?? DEFAULT_RETENTION.eventLimit);
+      const flowLogLimit = Number(storage.runtimeFlowLogLimit ?? DEFAULT_RETENTION.flowLogLimit);
+      return {
+        eventLimit: Number.isFinite(eventLimit) && eventLimit > 0 ? Math.floor(eventLimit) : 0,
+        flowLogLimit: Number.isFinite(flowLogLimit) && flowLogLimit > 0 ? Math.floor(flowLogLimit) : 0,
+      };
+    }
     const db = await ensureStores();
     try {
       if (!db.objectStoreNames.contains(SETTINGS_STORE)) return { ...DEFAULT_RETENTION };
@@ -145,6 +188,16 @@ window.TrackerLensEventLogStore = (() => {
   const pruneByScope = async ({ storeName, workspaceId = "global", channel = "", limit = 0 }) => {
     const explicitLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 0;
     if (!explicitLimit) return false;
+    if (await usesDesktopSqlite()) {
+      const records = await desktopPersistence().readDevelopmentRecords({ storeName, workspaceId });
+      const ids = records
+        .filter((record) => !channel || record.channel === channel)
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(explicitLimit)
+        .map((record) => record.id);
+      await deleteRecords(storeName, ids);
+      return true;
+    }
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -308,6 +361,7 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const listEvents = async () => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName: STORES.events });
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {
@@ -321,6 +375,7 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const listFlowLogs = async () => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName: STORES.flowLogs });
     const db = await ensureStores();
     try {
       return await new Promise((resolve, reject) => {

@@ -40,10 +40,6 @@ const sourceConfigInputPorts = (subtype = "") => {
     { name: "secret", type: "string", description: "Webhook signing secret" },
     headers,
   ];
-  if (kind === "indexeddb-source") return [
-    { name: "store", type: "string", required: true, description: "IndexedDB store name" },
-    { name: "query", type: "record", description: "Local query/filter" },
-  ];
   if (kind === "image-source") return [
     { name: "image", type: "image", description: "Image file or URL" },
     { name: "metadata", type: "record", description: "Image metadata and tags" },
@@ -72,6 +68,7 @@ const nodeManifest = ({
   permissions = [],
   settingsSchema = {},
   runtime = {},
+  execution = null,
   render = null,
   execute = null,
   persist = null,
@@ -90,6 +87,7 @@ const nodeManifest = ({
     permissions,
     settingsSchema,
     runtime,
+    ...(execution ? { execution } : {}),
     metadata: {
       runtimeType: type,
       subtype,
@@ -116,6 +114,7 @@ const paletteNode = ({
   permissions = [],
   settingsSchema = {},
   runtime = {},
+  execution = null,
   url = "",
   trackerSource = "",
   runtimeMode = "",
@@ -148,6 +147,7 @@ const paletteNode = ({
     permissions,
     settingsSchema,
     runtime,
+    execution,
     render,
     execute,
     persist,
@@ -167,7 +167,6 @@ const nodePalette = [
     paletteNode({ label: "Audio Source", icon: "graphic_eq", tone: "teal", nodeType: "source", subtype: "audio-source", category: "sources", outputs: ["audio"], settingsSchema: { audioUrl: "string", audioDataUrl: "string", transcript: "string" }, connectionType: "Source: Audio" }),
     paletteNode({ label: "File Source", icon: "upload_file", tone: "teal", nodeType: "source", subtype: "file-source", category: "sources", outputs: ["file"], settingsSchema: { fileName: "string", fileDataUrl: "string", mimeType: "string" }, connectionType: "Source: File" }),
     paletteNode({ label: "Files Batch", icon: "drive_folder_upload", tone: "teal", nodeType: "source", subtype: "files-source", category: "sources", outputs: ["files"], settingsSchema: { files: "array" }, connectionType: "Source: Files" }),
-    paletteNode({ label: "IndexedDB Source", icon: "database", tone: "cyan", nodeType: "source", subtype: "indexeddb-source", category: "sources", outputs: ["raw"], permissions: ["indexeddb.read"], connectionType: "Source: IndexedDB" }),
   ]],
   ["Trackers", [
     paletteNode({ label: "Box Tracker", icon: "storage", tone: "gold", nodeType: "boxTracker", subtype: "box-tracker", category: "trackers", inputs: ["raw"], outputs: ["channel"], permissions: ["channel.emit"], trackerSource: "websocket", runtimeMode: "real-time" }),
@@ -196,6 +195,7 @@ const nodePalette = [
     paletteNode({ label: "Aggregator", icon: "stacked_bar_chart", tone: "purple", nodeType: "processor", subtype: "aggregator", category: "processors", inputs: ["input"], outputs: ["output"], connectionType: "Processor: Aggregator" }),
     paletteNode({ label: "Cache", icon: "cached", tone: "purple", nodeType: "processor", subtype: "cache", category: "processors", inputs: ["input"], outputs: ["output"], connectionType: "Processor: Cache" }),
     paletteNode({ label: "Parser", icon: "schema", tone: "purple", nodeType: "processor", subtype: "parser", category: "processors", inputs: ["raw"], outputs: ["output"], connectionType: "Processor: Parser" }),
+    ...(window.trackers?.runtime?.pythonPoc ? [paletteNode({ label: "Python Test", icon: "terminal", tone: "violet", nodeType: "processor", subtype: "python-test", category: "processors", inputs: ["input"], outputs: ["output", "error", "status"], permissions: [], settingsSchema: { operation: "text_transform|delay|raise|crash", delaySeconds: "number", timeoutMs: "number" }, runtime: { localFirst: true, worker: "managed-python-poc", featureFlag: "TL_ENABLE_PYTHON_POC" }, execution: { runtime: "python", entry: "poc.text_transform", capabilities: ["text.transform"], timeoutMs: 5000, cancellable: true }, connectionType: "Processor: Python Test" })] : []),
   ]],
   ["Knowledge", [
     paletteNode({ label: "Document Store", icon: "menu_book", tone: "cyan", nodeType: "knowledge", subtype: "document-store", category: "knowledge", inputs: ["document"], outputs: ["knowledge.document.created"], permissions: ["indexeddb.write"], settingsSchema: { title: "string", sourceType: "manual|channel|json|markdown", language: "string", collectionId: "string", replayAllDocuments: "boolean", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_knowledge_documents" }, connectionType: "Knowledge: Document Store" }),
@@ -204,7 +204,7 @@ const nodePalette = [
     paletteNode({ label: "Knowledge Dictionary Builder", icon: "travel_explore", tone: "cyan", nodeType: "knowledge", subtype: "knowledge-dictionary-builder", category: "knowledge", inputs: ["knowledge.chunk.created", "knowledge.document.created"], outputs: ["knowledge.dictionary.updated", "knowledge.lexicon.context"], permissions: ["indexeddb.read", "indexeddb.write", "ai.provider"], settingsSchema: { dictionaryMode: "rules|llm|hybrid", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", streaming: "boolean", responseFormat: "json|structured|text|markdown", systemPrompt: "string", promptTemplate: "string", outputInstructions: "string", scope: "document|collection|workspace", language: "string", maxTerms: "number", minFrequency: "number", maxChunks: "number", maxChunkTokens: "number", collectionId: "string", documentId: "string", replaceExisting: "boolean", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_knowledge_dictionary", phase: "lexicon" }, connectionType: "Knowledge: Dictionary Builder" }),
     paletteNode({ label: "Knowledge Event Builder", icon: "timeline", tone: "cyan", nodeType: "knowledge", subtype: "knowledge-event-builder", category: "knowledge", inputs: ["knowledge.chunk.created", "knowledge.dictionary.updated", "knowledge.lexicon.context"], outputs: ["knowledge.events.updated", "knowledge.event.context"], permissions: ["indexeddb.read", "indexeddb.write", "ai.provider"], settingsSchema: { eventMode: "rules|llm|hybrid", extractionMode: "rules|ai|hybrid", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", streaming: "boolean", responseFormat: "json|structured|text|markdown", systemPrompt: "string", promptTemplate: "string", outputInstructions: "string", maxEvents: "number", confidenceThreshold: "number", previewEvents: "number", previewIds: "number", collectionId: "string", documentId: "string", replaceExisting: "boolean", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_knowledge_events", phase: "events", evidenceRequired: true }, connectionType: "Knowledge: Event Builder" }),
     paletteNode({ label: "Structured Knowledge Store", icon: "database", tone: "cyan", nodeType: "knowledge", subtype: "structured-knowledge-store", category: "knowledge", inputs: ["raw", "structured.record"], outputs: ["structured.record.created", "structured.collection.updated"], permissions: ["indexeddb.read", "indexeddb.write"], settingsSchema: { schemaId: "string", schemaVersion: "string", recordType: "string", collectionId: "string", worldId: "string", parentId: "string", record: "object", records: "array", replaceExisting: "boolean", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_structured_knowledge", structuredStore: true }, connectionType: "Knowledge: Structured Store" }),
-    paletteNode({ label: "World Generator Agent", icon: "auto_awesome", tone: "gold", nodeType: "knowledge", subtype: "world-generator-agent", category: "knowledge", inputs: ["task", "raw", "world.generation.request"], outputs: ["world.record"], permissions: ["ai.provider", "channel.emit"], settingsSchema: { generationMode: "create_world|add_kingdoms|expand_kingdom|expand_pack|generate_story_blocks|generate_stories|modify_item", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", streaming: "boolean", responseFormat: "json|structured|text|markdown", systemPrompt: "string", promptTemplate: "string", outputInstructions: "string", objective: "string", worldId: "string", worldName: "string", collectionId: "string", schemaVersion: "string", targetRecordId: "string", targetRecordType: "string", kingdomCount: "number", packsPerKingdom: "number", storyBlockCount: "number", storyCount: "number", outputChannel: "string" }, runtime: { localFirst: true, schemaId: "worldbuilding/v1", worldGenerator: true, phase: "worldbuilding" }, connectionType: "Knowledge: World Generator Agent" }),
+    paletteNode({ label: "World Generator Agent", icon: "auto_awesome", tone: "gold", nodeType: "knowledge", subtype: "world-generator-agent", category: "knowledge", inputs: ["task", "raw", "world.generation.request"], outputs: ["world.record"], permissions: ["ai.provider", "channel.emit"], settingsSchema: { generationMode: "create_world|add_kingdoms|expand_kingdom|expand_pack|generate_story_blocks|generate_stories|generate_characters|modify_item", providerProfile: "string", providerType: "string", model: "string", temperature: "number", maxTokens: "number", topP: "number", streaming: "boolean", responseFormat: "json|structured|text|markdown", systemPrompt: "string", promptTemplate: "string", outputInstructions: "string", objective: "string", worldId: "string", worldName: "string", collectionId: "string", schemaVersion: "string", targetRecordId: "string", targetRecordType: "string", kingdomCount: "number", packsPerKingdom: "number", characterCount: "number", storyBlockCount: "number", storyCount: "number", outputChannel: "string" }, runtime: { localFirst: true, schemaId: "worldbuilding/v1", worldGenerator: true, phase: "worldbuilding" }, connectionType: "Knowledge: World Generator Agent" }),
     paletteNode({ label: "World Database", icon: "public", tone: "gold", nodeType: "knowledge", subtype: "world-database", category: "knowledge", inputs: ["raw", "structured.record.created", "world.record"], outputs: ["world.database.updated", "structured.collection.updated"], permissions: ["indexeddb.read", "indexeddb.write"], settingsSchema: { worldId: "string", worldName: "string", schemaVersion: "string", collectionId: "string", worldJson: "object", records: "array", replaceExisting: "boolean", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_structured_knowledge", schemaId: "worldbuilding/v1", worldDatabase: true }, connectionType: "Knowledge: World Database" }),
     paletteNode({ label: "World Graph View", icon: "hub", tone: "gold", nodeType: "devPreview", subtype: "world-graph-view", category: "dev", inputs: ["world.database.updated"], outputs: [], permissions: [], settingsSchema: { layout: "force|radial", showRecordJson: "boolean" }, runtime: { localFirst: true, view: "world-graph", sourceChannel: "world.database.updated" }, connectionType: "Knowledge: World Graph View" }),
     paletteNode({ label: "Embedding Generator", icon: "scatter_plot", tone: "green", nodeType: "knowledge", subtype: "embedding-generator", category: "knowledge", inputs: ["knowledge.chunk.created"], outputs: ["knowledge.embedding.created"], permissions: ["indexeddb.write", "ai.provider"], settingsSchema: { providerProfile: "string", providerType: "string", model: "string", dimensions: "number", collectionId: "string", outputChannel: "string" }, runtime: { localFirst: true, store: "tl_knowledge_embeddings", algorithm: "local-hash-cosine" }, connectionType: "Knowledge: Embeddings" }),
@@ -249,7 +249,7 @@ const nodePalette = [
     paletteNode({ label: "Runtime Trigger", icon: "bolt", tone: "red", nodeType: "action", subtype: "runtime-trigger", category: "actions", inputs: ["event"], outputs: ["trigger"], execute: {}, connectionType: "Runtime Trigger" }),
   ]],
   ["Storage", [
-    paletteNode({ label: "Save DB Record", icon: "database", tone: "cyan", nodeType: "storage", subtype: "indexeddb", category: "storage", inputs: ["record"], permissions: ["indexeddb.write"], persist: {}, url: "database.html" }),
+    paletteNode({ label: "Save SQLite Record", icon: "database", tone: "cyan", nodeType: "storage", subtype: "sqlite", category: "storage", inputs: ["record"], permissions: ["sqlite.write"], persist: {}, url: "database.html" }),
     paletteNode({ label: "Save File", icon: "file_download", tone: "cyan", nodeType: "storage", subtype: "file-export", category: "storage", inputs: ["record"], permissions: ["file.write"], persist: {} }),
     paletteNode({ label: "Local Cache", icon: "cached", tone: "green", nodeType: "storage", subtype: "local-cache", category: "storage", inputs: ["record"], permissions: ["cache.write"], persist: {} }),
     paletteNode({ label: "Runtime Memory", icon: "memory", tone: "cyan", nodeType: "storage", subtype: "runtime-memory", category: "storage", inputs: ["record"], permissions: ["memory.write"], persist: {} }),

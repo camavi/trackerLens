@@ -2,6 +2,29 @@ window.TrackerLensProcessorRuntime = (() => {
   const instances = new Map();
 
   const nowIso = () => new Date().toISOString();
+  const pythonPocRuns = new Map();
+  const pythonPocBridge = () => window.trackers?.runtime?.pythonPoc || null;
+  const executionId = (nodeId = "") => `${nodeId || "python"}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+  const announcePythonPoc = (detail = {}) => {
+    try { window.dispatchEvent(new CustomEvent("trackers:python-poc-status", { detail })); } catch (_) {}
+  };
+
+  window.TrackerLensPythonPocUi = {
+    runForNode: (nodeId = "") => pythonPocRuns.get(String(nodeId || "")) || null,
+    async cancel(nodeId = "") {
+      const run = pythonPocRuns.get(String(nodeId || ""));
+      if (!run) return { cancelled: false, reason: "No active Python job" };
+      await pythonPocBridge()?.cancel?.(run.executionId);
+      announcePythonPoc({ nodeId: run.nodeId, status: "cancelling", executionId: run.executionId });
+      return { cancelled: true, executionId: run.executionId };
+    },
+    async restart(nodeId = "") {
+      const result = await pythonPocBridge()?.restart?.();
+      announcePythonPoc({ nodeId: String(nodeId || ""), status: "restarted", worker: result || {} });
+      return result;
+    }
+  };
 
   const clonePayload = (payload) => {
     try {
@@ -28,7 +51,10 @@ window.TrackerLensProcessorRuntime = (() => {
     String(node.runtime?.status || node.metadata?.runtimeStatus || node.status || "idle").toLowerCase();
 
   const isRunnableProcessor = (node = {}) =>
-    node.type === "processor" && !node.metadata?.library && !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node));
+    node.type === "processor" &&
+    !node.metadata?.library &&
+    !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node)) &&
+    (nodeSubtype(node) !== "python-test" || Boolean(pythonPocBridge()?.run));
 
   const unique = (values = []) =>
     [...new Set(values.filter(Boolean).map(String))];
@@ -294,6 +320,9 @@ window.TrackerLensProcessorRuntime = (() => {
         const mapped = await this.applyIncomingMapping({ node, payload, event });
         payload = mapped.payload;
         event = mapped.event;
+        if (nodeSubtype(node) === "python-test") {
+          return this.performPythonTest({ node, payload, event, startedAt });
+        }
         const result = processPayload({ node, payload, event });
         const latencyMs = Math.round(performance.now() - startedAt);
         if (!result.emitted) {
@@ -322,8 +351,12 @@ window.TrackerLensProcessorRuntime = (() => {
           context: { inputChannel: event.channel, outputChannel: result.channel, inputEventId: event.id, result: result.meta, latencyMs },
         });
       } catch (error) {
-        await this.bus.emit(event.channel || "processor.error", {
+        const pythonNode = nodeSubtype(node) === "python-test";
+        const errorChannel = pythonNode ? node.outputs?.[1] || "error" : event.channel || "processor.error";
+        if (pythonNode) await this.emitPythonStatus({ node, status: error.code === "EXECUTION_CANCELLED" ? "cancelled" : "error", event, error });
+        await this.bus.emit(errorChannel, {
           error: error.message || String(error),
+          code: error.code || "NODE_EXCEPTION",
           nodeId: node.id,
           payload,
         }, {
@@ -339,6 +372,83 @@ window.TrackerLensProcessorRuntime = (() => {
           message: `Processor error: ${error.message || error}`,
           context: { inputChannel: event.channel, inputEventId: event.id, error: error.message || String(error) },
         });
+      }
+    }
+
+    async emitPythonStatus({ node, status = "running", event = {}, result = null, error = null } = {}) {
+      const channel = node.outputs?.[2] || "status";
+      const run = pythonPocRuns.get(node.id);
+      const payload = {
+        runtime: "python",
+        workerId: "managed-python-poc",
+        nodeId: node.id,
+        status,
+        executionId: run?.executionId || result?.executionId || error?.executionId || "",
+        diagnostics: result?.diagnostics || (error ? [{ code: error.code || "NODE_EXCEPTION", message: error.message || String(error) }] : []),
+        events: result?.events || [],
+        at: nowIso(),
+      };
+      announcePythonPoc(payload);
+      return this.bus.emit(channel, payload, {
+        workspaceId: this.workspaceId,
+        eventType: "python_runtime_status",
+        sourceNodeId: node.id,
+        status,
+        meta: { processorRuntime: node.id, pythonPoc: true, inputEventId: event?.id || "" },
+      });
+    }
+
+    async performPythonTest({ node, payload, event, startedAt }) {
+      const bridge = pythonPocBridge();
+      if (!bridge?.run) {
+        const error = new Error("Python Test is available only in Electron POC mode.");
+        error.code = "PYTHON_POC_DISABLED";
+        throw error;
+      }
+      const config = nodeConfig(node);
+      const id = executionId(node.id);
+      const value = typeof payload === "string"
+        ? payload
+        : typeof payload?.text === "string"
+          ? payload.text
+          : JSON.stringify(payload ?? "");
+      pythonPocRuns.set(node.id, { nodeId: node.id, executionId: id, startedAt: nowIso() });
+      await this.emitPythonStatus({ node, status: "running", event });
+      try {
+        const result = await bridge.run({
+          executionId: id,
+          operation: String(config.operation || "text_transform"),
+          inputs: {
+            text: value,
+            seconds: Number(config.delaySeconds || config.seconds || 0),
+          },
+          context: {
+            workspaceId: this.workspaceId,
+            flowId: event?.flowId || "",
+            sourceNodeId: event?.sourceNodeId || "",
+            runId: event?.meta?.runId || payload?.runId || "",
+          },
+          timeoutMs: Math.max(100, Number(config.timeoutMs || 5000)),
+        });
+        const latencyMs = Math.round(performance.now() - startedAt);
+        await this.bus.emit(node.outputs?.[0] || "output", {
+          ...result.outputs,
+          _python: { executionId: id, status: "success", events: result.events || [], latencyMs },
+        }, {
+          workspaceId: this.workspaceId,
+          eventType: "python_result",
+          sourceNodeId: node.id,
+          latencyMs,
+          meta: { processorRuntime: node.id, pythonPoc: true, inputEventId: event?.id || "" },
+        });
+        await this.emitPythonStatus({ node, status: "completed", event, result });
+        await this.log({ node, message: `Python Test completed: ${node.label || node.id}`, context: { executionId: id, latencyMs, events: result.events || [] } });
+      } catch (error) {
+        error.executionId = id;
+        throw error;
+      } finally {
+        pythonPocRuns.delete(node.id);
+        announcePythonPoc({ nodeId: node.id, status: "idle" });
       }
     }
   }

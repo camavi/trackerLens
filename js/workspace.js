@@ -226,7 +226,7 @@ const waitForWorkspaceStore = async () => {
   await db.ready;
 
   if (!db.db?.objectStoreNames?.contains(table)) {
-    throw new Error(`Store IndexedDB non trovato: ${table}`);
+    throw new Error(`Store SQLite non disponibile: ${table}`);
   }
 };
 
@@ -340,7 +340,7 @@ const loadWorkspaceFromQuery = async () => {
       workspaceState.workspace.id || workspaceId,
       Array.isArray(content.connections) ? content.connections : []
     );
-    workspaceState.savedLabel = content.updatedAt ? "Caricato da IndexedDB" : workspaceState.savedLabel;
+    workspaceState.savedLabel = content.updatedAt ? "Caricato da SQLite" : workspaceState.savedLabel;
   } catch (error) {
     console.error("Errore caricamento workspace:", error);
     setNotice("Workspace salvato non trovato o non leggibile.");
@@ -372,7 +372,7 @@ const saveWorkspace = async () => {
     }
 
     workspaceState.savedLabel = "Salvato localmente";
-    setNotice("Workspace salvato in IndexedDB");
+    setNotice("Workspace salvato in SQLite");
   } catch (error) {
     console.error("Errore salvataggio workspace:", error);
     workspaceState.savedLabel = "Errore salvataggio";

@@ -12,128 +12,19 @@ const dbExplorerStores = [
   { name: "tl_history", icon: "history", color: "pink" },
 ];
 
-const sampleRecords = [
-  {
-    id: "w_01H7X5K8Y9",
-    content: {
-      id: "w_01H7X5K8Y9",
-      name: "Crypto Tracker",
-      type: "boxLens",
-      category: "Crypto",
-      version: "1.2.0",
-      workspace: "Trading OS",
-      updatedAt: "2026-05-11T12:42:18.000Z",
-      createdAt: "2026-05-05T09:14:00.000Z",
-      status: "online",
-      channels: ["btc-price", "market-cap"],
-      endpoint: "local://widgets/crypto-tracker",
-      code: { html: "<section data-tl-bind=\"btcPrice\"></section>", css: ".value { color: #ffc72c; }" },
-    },
-  },
-  {
-    id: "w_01H7X5K8YA",
-    content: {
-      id: "w_01H7X5K8YA",
-      name: "Market Cap Monitor",
-      type: "boxTracker",
-      category: "Finanza",
-      version: "1.0.5",
-      workspace: "Trading OS",
-      updatedAt: "2026-05-11T12:40:02.000Z",
-      createdAt: "2026-05-04T15:04:00.000Z",
-      status: "online",
-      channels: ["market-cap"],
-      endpoint: "https://api.coingecko.com/api/v3/global",
-      method: "GET",
-      trackerType: "REST",
-      active: true,
-    },
-  },
-  {
-    id: "w_01H7X5K8YB",
-    content: {
-      id: "w_01H7X5K8YB",
-      name: "News Aggregator",
-      type: "boxLens",
-      category: "News",
-      version: "1.1.0",
-      workspace: "Media Desk",
-      updatedAt: "2026-05-11T12:36:47.000Z",
-      createdAt: "2026-05-03T11:22:00.000Z",
-      status: "online",
-      channels: ["rss-feed", "headline"],
-      endpoint: "local://widgets/news-aggregator",
-    },
-  },
-  {
-    id: "w_01H7X5K8YC",
-    content: {
-      id: "w_01H7X5K8YC",
-      name: "Social Feed Monitor",
-      type: "boxTracker",
-      category: "Social",
-      version: "1.3.2",
-      workspace: "Media Desk",
-      updatedAt: "2026-05-11T12:35:31.000Z",
-      createdAt: "2026-05-02T17:32:00.000Z",
-      status: "offline",
-      channels: ["social-feed"],
-      endpoint: "wss://stream.trackerslens.local/social",
-      trackerType: "WebSocket",
-      active: false,
-    },
-  },
-  {
-    id: "w_01H7X5K8YD",
-    content: {
-      id: "w_01H7X5K8YD",
-      name: "AI Sentiment Tracker",
-      type: "boxTracker",
-      category: "AI",
-      version: "0.9.8",
-      workspace: "Signals Lab",
-      updatedAt: "2026-05-11T12:28:04.000Z",
-      createdAt: "2026-05-01T08:18:00.000Z",
-      status: "online",
-      channels: ["sentiment"],
-      endpoint: "local://ai/sentiment",
-      trackerType: "AI",
-      active: true,
-    },
-  },
-  {
-    id: "w_01H7X5K8YE",
-    content: {
-      id: "w_01H7X5K8YE",
-      name: "RSS Trackers",
-      type: "boxTracker",
-      category: "News",
-      version: "1.0.3",
-      workspace: "Media Desk",
-      updatedAt: "2026-05-11T12:21:19.000Z",
-      createdAt: "2026-04-28T10:00:00.000Z",
-      status: "online",
-      channels: ["rss-feed"],
-      endpoint: "https://news.google.com/rss",
-      trackerType: "RSS",
-      active: true,
-    },
-  },
-];
-
 const explorerState = {
   loading: true,
   error: "",
   dbName: "TrackersLens",
   dbVersion: 1,
-  selectedStore: "tl_widgets",
+  selectedStore: "",
   selectedId: "",
   query: "",
   type: "all",
   category: "all",
   workspace: "all",
   view: "table",
-  stores: dbExplorerStores.map((store) => ({ ...store, count: 0, records: [] })),
+  stores: [],
   loadedAt: new Date(),
   queryTime: 0,
 };
@@ -165,24 +56,15 @@ const normalizeRecord = (record, index, storeName) => {
     createdAt: normalizeText(content.createdAt || record?.createdAt || updatedAt),
     status: content.active === false || content.status === "offline" ? "offline" : normalizeText(content.status, "online"),
     channels: Array.isArray(content.channels) ? content.channels : [content.outputChannel || content.channel].filter(Boolean),
-    endpoint: normalizeText(content.endpoint || content.runtime?.endpoint || content.source || content.runtime?.source, "local://indexeddb"),
+    endpoint: (() => {
+      const endpoint = normalizeText(content.endpoint || content.runtime?.endpoint || content.source || content.runtime?.source, "local://sqlite");
+      return /^local:\/\/.*db$/i.test(endpoint) ? "local://sqlite" : endpoint;
+    })(),
     size: byteSize(record),
     searchText: [id, content.name, content.title, type, content.category, content.workspace, content.endpoint]
       .map((value) => normalizeText(value).toLowerCase())
       .join(" "),
   };
-};
-
-const applySampleFallback = () => {
-  const sample = sampleRecords.map((record, index) => normalizeRecord(record, index, "tl_widgets"));
-  explorerState.stores = dbExplorerStores.map((store) => ({
-    ...store,
-    count: store.name === "tl_widgets" ? sample.length : 0,
-    records: store.name === "tl_widgets" ? sample : [],
-  }));
-  explorerState.selectedStore = "tl_widgets";
-  explorerState.selectedId = sample[0]?.id || "";
-  explorerState.loading = false;
 };
 
 const byteSize = (value) => {
@@ -206,71 +88,30 @@ const formatDate = (value) => {
   return new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
 };
 
-const openDb = () =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      reject(new Error("Timeout apertura IndexedDB"));
-    }, 1200);
-    const settle = (callback) => (value) => {
-      window.clearTimeout(timeout);
-      callback(value);
-    };
-    const request = indexedDB.open(explorerState.dbName);
-    request.onsuccess = settle((event) => resolve(event.target.result));
-    request.onerror = settle((event) => reject(event.target.error || new Error("Errore apertura IndexedDB")));
-    request.onblocked = settle(() => reject(new Error("IndexedDB bloccato da un'altra scheda")));
-  });
-
-const readStoreRecords = (db, storeName) =>
-  new Promise((resolve) => {
-    if (!db.objectStoreNames.contains(storeName)) {
-      resolve([]);
-      return;
-    }
-
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const request = store.getAll();
-    request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-    request.onerror = () => resolve([]);
-  });
-
-const loadIndexedDb = async () => {
+const loadSqlite = async () => {
   const started = performance.now();
-
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.listDevelopmentStores || !persistence?.readDevelopmentRecords) {
+    explorerState.error = "SQLite Explorer richiede l'app desktop Trackers Lens.";
+    explorerState.loading = false;
+    mountExplorer();
+    return;
+  }
   try {
-    const db = await openDb();
-    explorerState.dbName = db.name;
-    explorerState.dbVersion = db.version;
-    const existingStores = Array.from(db.objectStoreNames || []);
-    const knownNames = new Set(dbExplorerStores.map((store) => store.name));
-    const dynamicStores = existingStores
-      .filter((name) => !knownNames.has(name))
-      .map((name) => ({ name, icon: "database", color: "slate" }));
-    const storeDefs = [...dbExplorerStores, ...dynamicStores];
-    const stores = await Promise.all(storeDefs.map(async (store) => {
-      const records = await readStoreRecords(db, store.name);
-      return {
-        ...store,
-        count: records.length,
-        records: records.map((record, index) => normalizeRecord(record, index, store.name)),
-      };
+    const catalog = await persistence.listDevelopmentStores();
+    const stores = await Promise.all(catalog.map(async ({ name, recordCount }) => {
+      const records = await persistence.readDevelopmentRecords({ storeName: name });
+      const known = dbExplorerStores.find((store) => store.name === name) || { name, icon: "database", color: "slate" };
+      return { ...known, count: recordCount, records: records.map((record, index) => normalizeRecord(record, index, name)) };
     }));
-
-    db.close();
-
+    explorerState.dbName = "trackers-lens.sqlite";
+    explorerState.dbVersion = "TL Core";
     explorerState.stores = stores;
-    if (!stores.some((store) => store.count > 0)) applySampleFallback();
+    explorerState.selectedStore = stores.some((store) => store.name === explorerState.selectedStore) ? explorerState.selectedStore : stores[0]?.name || "";
     explorerState.selectedId = visibleRecords()[0]?.id || "";
     explorerState.error = "";
   } catch (error) {
-    explorerState.error = normalizeText(error.message, "Database locale non leggibile");
-    applySampleFallback();
+    explorerState.error = normalizeText(error.message, "SQLite non leggibile");
   } finally {
     explorerState.queryTime = Math.max(1, Math.round(performance.now() - started));
     explorerState.loadedAt = new Date();
@@ -316,30 +157,22 @@ const setSelectedRecord = (id) => {
   mountExplorer();
 };
 
-const openEditor = () => {
-  const record = selectedRecord();
-  if (!record) return;
-  if (record.type === "boxTracker") {
-    if (window.TrackerLensBoxEditorDialog?.open) {
-      window.TrackerLensBoxEditorDialog.open({ type: "boxTracker", id: record.id, workspaceId: "database" });
-      return;
-    }
-    CMSwift.notify?.error?.("Editor universale non disponibile.");
-  } else if (record.type === "workspace") {
-    window.location.assign(`editorWorkspace.html?workspaceId=${encodeURIComponent(record.id)}`);
-  } else {
-    if (window.TrackerLensBoxEditorDialog?.open) {
-      window.TrackerLensBoxEditorDialog.open({ type: "boxLens", id: record.id, workspaceId: "database" });
-      return;
-    }
-    CMSwift.notify?.error?.("Editor universale non disponibile.");
-  }
-};
-
 const copySelectedJson = async () => {
   const record = selectedRecord();
   if (!record || !navigator.clipboard) return;
   await navigator.clipboard.writeText(JSON.stringify(record.raw, null, 2));
+};
+
+const exportSelectedJson = (selected = selectedRecord()) => {
+  const record = selected;
+  if (!record) return;
+  const blob = new Blob([JSON.stringify(record.raw, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${record.storeName}-${record.id}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 };
 
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-db-brand" });
@@ -361,8 +194,8 @@ const renderTopbar = () =>
     }),
     _.Toolbar(
       { class: "tl-db-actions", align: "center", gap: 16 },
-      btn({ class: "tl-db-edit", onclick: openEditor }, icon("edit", "sm"), "Edit"),
-      btn({ class: "tl-db-menu", "aria-label": "Menu IndexedDB" }, icon("more_vert"))
+      _.span({ class: "tl-db-readonly" }, icon("visibility", "sm"), "Sola lettura"),
+      btn({ class: "tl-db-menu", "aria-label": "Menu SQLite" }, icon("more_vert"))
     )
   );
 
@@ -388,21 +221,21 @@ const databaseStats = () => {
   const pages = explorerState.stores.find((store) => store.name === "tl_pages")?.records || [];
   return [
     ["Totale record", totalRecords.toLocaleString("it-IT")],
-    ["Storage stimato", formatBytes(totalSize || 24.7 * 1024 * 1024)],
+    ["Storage stimato", formatBytes(totalSize)],
     ["Ultimo update", formatDate(explorerState.loadedAt)],
-    ["Workspace", String(pages.length || 4)],
-    ["BoxLens", String(widgets.filter((record) => record.type !== "boxTracker").length || 8)],
-    ["BoxTracker", String(widgets.filter((record) => record.type === "boxTracker").length || 6)],
+    ["Workspace", String(pages.length)],
+    ["BoxLens", String(widgets.filter((record) => record.type !== "boxTracker").length)],
+    ["BoxTracker", String(widgets.filter((record) => record.type === "boxTracker").length)],
   ];
 };
 
 const renderDatabasePanel = () =>
   _.aside(
-    { class: "tl-db-panel", "aria-label": "Database IndexedDB" },
+    { class: "tl-db-panel", "aria-label": "Database SQLite" },
     _.div(
       { class: "tl-db-panel-head" },
       _.span({ class: "tl-db-kicker" }, "Local storage engine"),
-      _.h2("IndexedDB Explorer"),
+      _.h2("SQLite Explorer"),
       _.div(
         { class: "tl-db-active" },
         _.span({ class: "tl-db-cylinder" }, icon("database", "md")),
@@ -412,7 +245,7 @@ const renderDatabasePanel = () =>
     ),
     _.section(
       { class: "tl-db-store-list" },
-      _.h3("Object store"),
+      _.h3("Collezioni SQLite"),
       ...explorerState.stores.map(renderStoreItem)
     ),
     _.section(
@@ -446,9 +279,8 @@ const renderTableToolbar = () =>
       renderSelect("tl-db-filter", explorerState.type, optionList("type", "Tipo"), (value) => { explorerState.type = value; explorerState.selectedId = ""; mountExplorer(); }),
       renderSelect("tl-db-filter", explorerState.category, optionList("category", "Categoria"), (value) => { explorerState.category = value; explorerState.selectedId = ""; mountExplorer(); }),
       renderSelect("tl-db-filter", explorerState.workspace, optionList("workspace", "Workspace"), (value) => { explorerState.workspace = value; explorerState.selectedId = ""; mountExplorer(); }),
-      btn({ class: "tl-db-icon-btn", "aria-label": "Aggiorna", onclick: () => { explorerState.loading = true; mountExplorer(); loadIndexedDb(); } }, icon("refresh", "sm")),
-      btn({ class: "tl-db-icon-btn", "aria-label": "Export" }, icon("download", "sm")),
-      btn({ class: "tl-db-icon-btn", "aria-label": "Import" }, icon("upload", "sm")),
+      btn({ class: "tl-db-icon-btn", "aria-label": "Aggiorna", onclick: () => { explorerState.loading = true; mountExplorer(); loadSqlite(); } }, icon("refresh", "sm")),
+      btn({ class: "tl-db-icon-btn", "aria-label": "Esporta record selezionato", onclick: exportSelectedJson }, icon("download", "sm")),
       _.div(
         { class: "tl-db-view-switch", role: "group", "aria-label": "Cambia vista" },
         btn({ class: explorerState.view === "table" ? "is-active" : "", "aria-label": "Table", onclick: () => setView("table") }, icon("table_rows", "sm")),
@@ -486,11 +318,8 @@ const renderRecordRow = (record) =>
     _.td(
       _.div(
         { class: "tl-db-row-actions" },
-        btn({ onclick: (event) => { event.stopPropagation(); openEditor(); } }, "Open"),
-        btn({}, "Edit"),
-        btn({}, "Duplicate"),
-        btn({}, "Export"),
-        btn({ class: "is-danger" }, "Delete"),
+        btn({ onclick: (event) => { event.stopPropagation(); setSelectedRecord(record.id); } }, "Inspect"),
+        btn({ onclick: (event) => { event.stopPropagation(); exportSelectedJson(record); } }, "Export JSON"),
         btn({ "aria-label": "Azioni record" }, icon("more_vert", "sm"))
       )
     )
@@ -542,11 +371,12 @@ const renderTableView = () => {
 const renderDataView = () => {
   const store = selectedStore();
   const records = visibleRecords();
+  const storeName = store?.name || (explorerState.loading ? "SQLite" : "Nessuna collezione");
   return _.section(
     { class: "tl-db-data-view", "aria-label": "Table data view" },
     _.div(
       { class: "tl-db-section-head" },
-      _.div(_.h2(store.name), _.p(`${records.length} record caricati · query visuale locale`)),
+      _.div(_.h2(storeName), _.p(`${records.length} record caricati · query visuale locale`)),
       _.Search({
         class: "tl-db-table-search-input",
         label: "Cerca nei dati...",
@@ -561,7 +391,13 @@ const renderDataView = () => {
       _.span({ class: "tl-db-live-pill" }, dot(), "Realtime")
     ),
     renderTableToolbar(),
-    explorerState.loading ? _.div({ class: "tl-db-empty" }, "Caricamento IndexedDB...") : records.length ? renderTableView() : _.div({ class: "tl-db-empty" }, "Nessun record per i filtri selezionati.")
+    explorerState.loading
+      ? _.div({ class: "tl-db-empty" }, "Caricamento SQLite...")
+      : explorerState.error
+        ? _.div({ class: "tl-db-empty" }, explorerState.error)
+        : records.length
+          ? renderTableView()
+          : _.div({ class: "tl-db-empty" }, "Nessun record SQLite disponibile per i filtri selezionati.")
   );
 };
 
@@ -633,10 +469,8 @@ const renderInspector = () => {
         renderJsonPreview(record),
         _.Toolbar(
           { class: "tl-db-inspector-actions", gap: 8 },
-          btn({ class: "st-btn-primary", onclick: openEditor }, "Edit"),
-          btn({ onclick: copySelectedJson }, "Copy"),
-          btn({}, "Export"),
-          btn({ onclick: openEditor }, "Open")
+          btn({ class: "st-btn-primary", onclick: copySelectedJson }, "Copia JSON"),
+          btn({ onclick: exportSelectedJson }, "Esporta JSON")
         )
       )
       : _.div({ class: "tl-db-empty" }, "Seleziona un record per ispezionare il JSON.")
@@ -648,7 +482,7 @@ const renderFooter = () => {
   const memory = formatBytes(explorerState.stores.reduce((sum, store) => sum + store.records.reduce((recordSum, record) => recordSum + record.size, 0), 0));
   return _.footer(
     { class: "tl-db-footer" },
-    _.span(dot({ class: "is-online" }), "IndexedDB connected"),
+    _.span(dot({ class: "is-online" }), "SQLite via TL Core"),
     _.span(`Query ${explorerState.queryTime} ms`),
     _.span(`${totalLoaded} records loaded`),
     _.span(`Memory ${memory}`),
@@ -680,6 +514,5 @@ const mountExplorer = () => {
   root.replaceChildren(renderShell());
 };
 
-applySampleFallback();
 mountExplorer();
-loadIndexedDb();
+loadSqlite();

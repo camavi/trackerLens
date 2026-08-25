@@ -3,6 +3,24 @@ window.TrackerLensConnectionsStore = (() => {
   const CONNECTION_STORE = "tl_connections";
   const PAGE_STORE = "tl_pages";
   const WIDGET_STORE = "tl_widgets";
+  let desktopSqliteMode = null;
+
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
+  const usesDesktopSqlite = async () => {
+    if (desktopSqliteMode !== null) return desktopSqliteMode;
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw new Error("SQLite desktop bridge unavailable.");
+      return (desktopSqliteMode = false);
+    }
+    try {
+      desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
+    } catch (error) {
+      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw error;
+      desktopSqliteMode = false;
+    }
+    return desktopSqliteMode;
+  };
 
   const normalizeText = (value, fallback = "") => {
     if (value === null || value === undefined) return fallback;
@@ -33,6 +51,7 @@ window.TrackerLensConnectionsStore = (() => {
     });
 
   const ensureStore = async () => {
+    if (await usesDesktopSqlite()) return { close() {} };
     const db = await openDb();
     if (db.objectStoreNames.contains(CONNECTION_STORE)) return db;
 
@@ -42,6 +61,7 @@ window.TrackerLensConnectionsStore = (() => {
   };
 
   const readAll = async (storeName) => {
+    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
     const db = await ensureStore();
     try {
       if (!db.objectStoreNames.contains(storeName)) return [];
@@ -58,6 +78,7 @@ window.TrackerLensConnectionsStore = (() => {
 
   const readRecord = async (storeName, id) => {
     if (!id) return null;
+    if (await usesDesktopSqlite()) return (await readAll(storeName)).find((record) => record.id === id) || null;
     const db = await ensureStore();
     try {
       if (!db.objectStoreNames.contains(storeName)) return null;
@@ -73,6 +94,10 @@ window.TrackerLensConnectionsStore = (() => {
   };
 
   const write = async (storeName, record) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
+      return record;
+    }
     const db = await ensureStore();
     try {
       return await new Promise((resolve, reject) => {
@@ -86,6 +111,10 @@ window.TrackerLensConnectionsStore = (() => {
   };
 
   const remove = async (id) => {
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: [id] });
+      return id;
+    }
     const db = await ensureStore();
     try {
       return await new Promise((resolve, reject) => {
@@ -101,6 +130,10 @@ window.TrackerLensConnectionsStore = (() => {
   const removeMany = async (ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
+    if (await usesDesktopSqlite()) {
+      await desktopPersistence().deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: uniqueIds });
+      return uniqueIds;
+    }
     const db = await ensureStore();
     try {
       return await new Promise((resolve, reject) => {
