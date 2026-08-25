@@ -4,7 +4,7 @@ body {
   overflow: hidden;
 }
 
-.tl-indexeddb-root {
+.tl-sqlite-root {
   min-height: 100vh;
   color: var(--tl-text);
   background: #03080d;

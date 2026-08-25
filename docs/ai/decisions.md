@@ -27,7 +27,7 @@ Last updated: 2026-08-25.
 - Runtime Manager wraps the existing JavaScript controller instead of duplicating it. Only a registered runtime may execute; unavailable future runtimes fail before the existing task callback runs.
 - Python POC execution is Main-process owned, opt-in and standard-library-only. The renderer receives narrow TL Core commands, never process/DB handles; POC success does not authorize migration of existing nodes.
 - The first Python Flow node is a development-only `Python Test` processor. It owns no persistence, shares the existing Event Bus and has explicit output, error and status channels; the node is absent unless Electron POC mode is enabled.
-- SQLite is the sole Electron desktop persistence target and current product authority, owned by TL Core. IndexedDB is disposable development/browser-compatibility residue, never a desktop fallback or rollback path. Python/renderer/package runtimes receive neither a database handle nor raw SQL.
+- SQLite is the sole Electron desktop persistence target and product authority, owned by TL Core. Python/renderer/package runtimes receive neither a database handle nor raw SQL.
 
 ## Knowledge Answer Ownership
 

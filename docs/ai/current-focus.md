@@ -15,11 +15,11 @@ Custom Node Packages are the next product/architecture path after the AI Agent l
 
 ## Current Work
 
-- Electron desktop persistence is SQLite-only by product decision. IndexedDB is disposable development residue, not a fallback, migration source or rollback path. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime now use TL Core SQLite. Remaining IndexedDB references are legacy browser/diagnostic code to delete or isolate from the desktop build.
-- `database.html` is now the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle or arbitrary SQL reaches the renderer. If the Electron bridge is absent it fails visibly instead of using IndexedDB or demo data. The UI exposes only inspection, copy and local JSON export—not mutation actions.
-- The old Settings IndexedDB migration/recovery preview has been deleted. Settings now obtains desktop persistence status directly from `trackers.desktop.persistence.getStatus()` and no longer contains import, shadow, activation or recovery controls.
-- Flow Map no longer exposes an IndexedDB source node. Storage uses `Save SQLite Record` with `sqlite.write`, and manifest normalization upgrades the remaining legacy `indexeddb.read/write` metadata to SQLite permission tokens.
-- `StorageRuntime` no longer contains IndexedDB open/upgrade/write code. It requires the TL Core SQLite bridge and fails explicitly outside the desktop application.
+- Electron desktop persistence is SQLite-only by product decision. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime use TL Core SQLite.
+- `database.html` is the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle, arbitrary SQL or demo-data fallback reaches the renderer. The UI exposes only inspection, copy and local JSON export—not mutation actions.
+- Settings obtains desktop persistence status directly from `trackers.desktop.persistence.getStatus()` and contains no import, shadow, activation or recovery controls.
+- Flow Map storage uses `Save SQLite Record` with `sqlite.write`; old persisted manifest tokens are normalized to SQLite permissions only when loaded.
+- `StorageRuntime` requires the TL Core SQLite bridge and fails explicitly outside the desktop application.
 
 - Connected Node Tool Protocol v1 is being defined so Agent/LLM nodes can inspect connected nodes, plan tool calls, request full or partial document evidence, ask Dictionary/Event/Graph/Memory nodes for focused observations, verify answers from source-bearing evidence and only then respond or emit validated actions.
 - The protocol is being kept MCP-ready: TL node tools should map cleanly to MCP tools/resources, while TL remains the local runtime owner and all mutation still goes through safe executor/preflight.
@@ -290,7 +290,7 @@ Knowledge Graph Query baseline is complete:
 Flow Map library separation baseline is complete:
 
 - global sidebar `Flow Map` now opens `libraryFlowmap.html` instead of a single workspace flow;
-- `libraryFlowmap.html` lists local `.tlflow` Flow Maps from IndexedDB and opens `flowMap.html?workspaceId=...`;
+- `libraryFlowmap.html` lists local `.tlflow` Flow Maps from SQLite and opens `flowMap.html?workspaceId=...`;
 - Flow Map library sidebar filters by searchable categories, while sorting is in the result toolbar;
 - Flow Map library `Nuovo Flow Map` opens a CMSwift creation dialog for title, description, category, color and version, then creates dedicated `tl_pages` and `tl_flows` records;
 - Flow Map library cards include a confirmed delete action for the local flow, scoped runtime graph, channels, events, logs and connections;
@@ -344,7 +344,7 @@ Runtime contract base is complete:
 - Existing runtime links can reopen `Connection Mapping` from Edge Inspector and persist mapping edits back to connection/dependency metadata;
 - Flow Map topbar includes a `Mapping Test` diagnostic that creates Manual JSON -> Preview with a BTC `json-map` transform and emits a mapped test payload.
 - Flow Map topbar includes a `Storage Test` diagnostic that creates Manual JSON -> Save SQLite Record, emits through EventBus and verifies the mapped record persisted to SQLite.
-- Storage node Inspector now shows the latest persisted IndexedDB record payload with copy/refresh actions.
+- Storage node Inspector now shows the latest persisted SQLite record payload with copy/refresh actions.
 
 Step 5 base is complete:
 
@@ -428,7 +428,7 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 
 - Knowledge requirements audited after API/backend Step 4 was verified by the user;
 - existing AI memory, runtime storage and provider registry were audited before adding new stores;
-- Knowledge remains local-first, workspace-scoped and IndexedDB-based;
+- Knowledge remains local-first, workspace-scoped and SQLite-based;
 - `tl_knowledge_documents`, chunks, embeddings, entities, relations, queries, sources and metrics store constants were added;
 - `core/runtime/knowledge-runtime.js` adds local stores, document creation, chunking, local deterministic vectors, cosine RAG search and EventBus integration;
 - Flow Map now loads/syncs `TrackerLensKnowledgeRuntime` in page and worker contexts;
@@ -493,8 +493,8 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Quote extraction now rejects digit-heavy fragments and page/chapter artifacts such as `112 L’`, requiring at least two lexical words before a quote entity can enter the graph.
 - Symbol extraction now rejects generic all-caps Italian words such as `ABITA`, `COMPIUTO`, `MEDIANTE` and `SANGUE`; only technical/acronym-like tokens such as `HIV`, `AIDS`, `API`, `RAG` or tokens with digit/separator markers are kept as symbols.
 - Entity extraction cleanup now falls back to the document id found on input chunks when `payload.documentId` is absent, so stale entities from the same document are removed on regeneration instead of lingering in graph exports.
-- Knowledge Graph snapshots now apply the same weak-entity and stopword filters as extraction, so stale low-quality entities already stored in IndexedDB are not counted or rendered even before a full extractor rerun.
-- Knowledge Graph inspector/View Graph now applies the same UI-side weak-entity filter before rendering or `Copy Data`, so raw IndexedDB entities such as stale all-caps symbols do not leak back into graph exports.
+- Knowledge Graph snapshots now apply the same weak-entity and stopword filters as extraction, so stale low-quality entities already stored in SQLite are not counted or rendered even before a full extractor rerun.
+- Knowledge Graph inspector/View Graph now applies the same UI-side weak-entity filter before rendering or `Copy Data`, so raw SQLite entities such as stale all-caps symbols do not leak back into graph exports.
 - View Graph export now has two explicit actions: `Copy Graph` exports only connected entities/relations, while `Copy With Isolated` includes filtered isolated entities for full audit exports.
 - View Graph canvas now opens zoomed out at 85% with no default selected node, keeps non-focused nodes more readable when a node is selected and clears focus by clicking the canvas background.
 - View Graph canvas now disposes pending animation frames and pointer handlers before rerender/close, preventing repeated dialog opens from leaving active canvas work behind.
@@ -519,11 +519,11 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 - Flow Map refresh now guards against overlapping `loadRuntime` calls and avoids restarting an already-running runtime worker for the same workspace, reducing renderer pressure from the 15s auto-refresh loop.
 - Flow Map startup supports `repair=knowledge-graph`, which removes stale Knowledge Graph sample nodes/edges/events/logs and oversized runtime records for the selected workspace before the first render; runtime event/log payloads are also capped for UI rendering.
 - Flow Map startup also supports `repair=hard`, a workspace-scoped runtime graph reset for plugin workspaces with corrupt node/edge records that crash after first render.
-- Added standalone `flowMapRepair.html`, a minimal IndexedDB repair page that does not load Flow Map and can delete all records referencing a corrupted workspace, including pages/widgets/runtime/knowledge stores.
+- Added standalone `flowMapRepair.html`, a minimal SQLite repair page that does not load Flow Map and can clear records referencing a corrupted workspace, including pages/widgets/runtime/knowledge collections.
 - Knowledge Graph View now falls back to the latest snapshot document in the node collection when the node config still points to an older/sample `documentId`, so uploaded-document graphs are visible without manually editing node config.
 - Knowledge Graph Debug/View now surfaces `Configured document`, `Latest snapshot document`, `Viewing document`, and a document status flag so stale config vs latest snapshot mismatches are visible.
 - Flow Map canvas now uses world-unit node coordinates instead of viewport-percent placement for newly generated nodes, with viewport-aware edge canvas drawing and per-node width persisted in `flowPosition.width` via a node resize handle.
-- Flow Map world-canvas follow-up is user-verified: new Flow Maps render/delete `Flow In` and `Flow Out`, Sample Test presets no longer overlap, and IndexedDB version-change warnings after DB reset were confirmed non-blocking in the tested flow.
+- Flow Map world-canvas follow-up is user-verified: new Flow Maps render/delete `Flow In` and `Flow Out`, and Sample Test presets no longer overlap.
 - Reasoning Composer attribution/LLM follow-up: `source` intent is preserved for "chi dice/spiega/rivela..." queries, source evidence is boosted and wider snippets are preserved, and `Knowledge Reasoning Composer` now supports `compositionMode` (`rules`, `llm`, `hybrid`) where the LLM can propose answer focus and selected quotes while runtime validation preserves local evidence. LLM-proposed boundaries are no longer accepted.
 - Reasoning Composer answer ownership follow-up: removed the `source` answer guardrails that forced short speaker-only answers or post-processed AI output. TL now keeps `source` intent for chunk selection, ordering and evidence grounding, but passes the focused evidence to the downstream LLM without deciding final verbosity or wording; the user's prompt controls whether the answer is brief or detailed.
 - Reasoning Composer evidence-pack follow-up: focused evidence is cleaned before reaching the answer LLM. Composer trims leading/trailing chunk fragments on sentence/dialogue boundaries, deduplicates overlapping evidence blocks and removes repeated `Focused source excerpt` joins. LLM-proposed boundaries are ignored entirely; TL still owns only evidence quality and grounding, while final answer shape remains provider-owned.
@@ -650,11 +650,11 @@ Target behavior:
 - keep existing graph-builder work as reusable infrastructure and validation, not disposable code;
 - dictionary entries should update when documents are regenerated and be removed with document cleanup; base behavior is implemented in `knowledge-dict-1`;
 - Flow Maps and Knowledge Graphs should remain isolated unless the user explicitly links or promotes dictionary knowledge;
-- debug panels should make dictionary terms, type candidates, aliases, evidence and promotion scope inspectable without raw IndexedDB access.
+- debug panels should make dictionary terms, type candidates, aliases, evidence and promotion scope inspectable without raw database access.
 
 ## Required Updates When Work Changes
 
-- Electron + Python migration: the Phase 5 managed Python POC now includes a `Python Test` Flow Map processor behind `TL_ENABLE_PYTHON_POC=1`. `Text Input -> Python Test -> Preview` uses a persistent standard-library worker and existing Event Bus output/error/status channels; existing JS nodes and renderer IndexedDB retain their ownership.
+- Electron + Python migration: the Phase 5 managed Python POC now includes a `Python Test` Flow Map processor behind `TL_ENABLE_PYTHON_POC=1`. `Text Input -> Python Test -> Preview` uses a persistent standard-library worker and existing Event Bus output/error/status channels; existing JS nodes retain their ownership while persistence stays in TL Core SQLite.
 - Electron + Python migration: Phase 6/7 base is complete. `tl_python_sdk.py` exposes explicit handler registration plus safe execution context/log/progress/cancellation, and `RuntimeManager.resolveCapability` maps `text.transform` to the feature-gated Python runtime without exposing language choice to callers.
 - Update this file.
 - Update `docs/ai/task-registry.md`.

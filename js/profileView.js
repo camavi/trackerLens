@@ -658,7 +658,7 @@ const renderFooter = () =>
     _.span("Uptime: 2h 47m 32s"),
     _.span("Memory: 68%"),
     _.span("Cache: Hit 98%"),
-    _.span("IndexedDB: Connected"),
+    _.span("SQLite: Connected"),
     _.span("Last Update: 12:32:20"),
     _.span({ class: "tl-profile-footer-spark" }, ...Array.from({ length: 13 }, (item, index) => _.i({ style: { "--h": `${18 + ((index * 19) % 42)}%` } })))
   );

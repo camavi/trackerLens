@@ -654,7 +654,7 @@ const renderMain = () => {
       { class: "tl-library-content" },
       renderToolbar(items),
       flowLibraryState.loading
-        ? renderStateCard({ iconName: "hourglass_top", title: "Caricamento Flow Map", text: "Lettura dei flow runtime salvati in IndexedDB." })
+        ? renderStateCard({ iconName: "hourglass_top", title: "Caricamento Flow Map", text: "Lettura dei flow runtime salvati in SQLite." })
         : flowLibraryState.error
           ? renderStateCard({ iconName: "warning", title: "Libreria Flow Map non disponibile", text: flowLibraryState.error, action: btn({ class: "st-btn-primary", onclick: loadFlowLibrary }, icon("refresh", "sm"), "Riprova") })
           : items.length

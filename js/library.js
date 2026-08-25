@@ -687,7 +687,7 @@ const renderLoadingState = () =>
       { class: "tl-empty-card" },
       _.div({ class: "tl-empty-icon" }, icon("hourglass_top", "md")),
       _.h2("Caricamento libreria"),
-      _.p("Lettura di workspace e box locali da IndexedDB.")
+      _.p("Lettura di workspace e box locali da SQLite.")
     )
   );
 
@@ -763,7 +763,7 @@ const loadLibrary = async () => {
 
   try {
     const report = await window.TrackerLensLocalLibrary.inspect();
-    console.info("[TrackerLens IndexedDB]", report);
+    console.info("[TrackerLens SQLite]", report);
     const items = await window.TrackerLensLocalLibrary.listLibraryItems();
     const favoriteIds = await loadFavoriteIds()
       .catch((error) => {
@@ -780,7 +780,7 @@ const loadLibrary = async () => {
     console.error(error);
     libraryState.widgets = [];
     libraryState.loading = false;
-    libraryState.error = error?.message || "Errore durante la lettura di IndexedDB.";
+    libraryState.error = error?.message || "Errore durante la lettura di SQLite.";
   }
 
   mountLibrary();

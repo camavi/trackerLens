@@ -25,7 +25,7 @@ window.TrackerLensSandboxPolicy = (() => {
     { pattern: /\bdocument\.cookie\b/, reason: "cookie non consentiti" },
     { pattern: /\blocalStorage\b/, reason: "localStorage diretto non consentito" },
     { pattern: /\bsessionStorage\b/, reason: "sessionStorage diretto non consentito" },
-    { pattern: /\bindexedDB\b/, reason: "IndexedDB diretto non consentito" },
+    { pattern: /\b(?:DatabaseSync|node:sqlite|better-sqlite3|sqlite3)\b/i, reason: "SQLite diretto non consentito: usare le API ristrette di TL Core" },
     { pattern: /\bnavigator\.mediaDevices\b/, reason: "media devices non consentiti" },
     { pattern: /\bshowOpenFilePicker\b|\bshowSaveFilePicker\b/, reason: "filesystem picker non consentito" },
   ];

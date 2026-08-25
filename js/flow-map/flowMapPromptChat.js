@@ -8793,7 +8793,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           icon("auto_awesome", "md"),
           _.div(
             _.strong(draft.activeChat?.title || "Prompt to Flow Map"),
-            _.span(`Workspace: ${currentWorkspaceName()} · storico persistente IndexedDB`)
+            _.span(`Workspace: ${currentWorkspaceName()} · storico persistente SQLite`)
           ),
           _.button(
             {

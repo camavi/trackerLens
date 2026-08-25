@@ -29,7 +29,7 @@ let aiRuntimeMeta = {
   error: "",
   queryMs: 0,
   lastUpdate: "",
-  indexedDb: "Loading",
+  storage: "Loading",
 };
 
 let metrics = [
@@ -187,13 +187,13 @@ const buildRuntimeViewModel = (data, queryMs = 0) => {
       error: "",
       queryMs,
       lastUpdate: timeLabel(latestUpdate),
-      indexedDb: data.stores?.length ? "Connected" : "Empty",
+      storage: data.stores?.length ? "Connected" : "Empty",
     },
     metrics: [
-      { label: "Modelli Attivi", value: formatNumber(activeProviders), delta: `${data.providers.length} configurati`, source: "IndexedDB", tone: "gold", icon: "psychology" },
-      { label: "AI Jobs Attivi", value: formatNumber(runningJobs), delta: `${data.jobs.length} totali`, source: "IndexedDB", tone: "green", icon: "radar" },
+      { label: "Modelli Attivi", value: formatNumber(activeProviders), delta: `${data.providers.length} configurati`, source: "SQLite", tone: "gold", icon: "psychology" },
+      { label: "AI Jobs Attivi", value: formatNumber(runningJobs), delta: `${data.jobs.length} totali`, source: "SQLite", tone: "green", icon: "radar" },
       { label: "Richieste AI / min", value: formatNumber(requestEstimate), delta: "stima locale", source: "Runtime", tone: "blue", icon: "rocket_launch" },
-      { label: "Token Utilizzati (oggi)", value: formatNumber(tokenTotal), delta: data.jobs.length ? "da tl_ai_jobs" : "nessun job", source: data.jobs.length ? "IndexedDB" : "idle", tone: "gold", icon: "database" },
+      { label: "Token Utilizzati (oggi)", value: formatNumber(tokenTotal), delta: data.jobs.length ? "da tl_ai_jobs" : "nessun job", source: data.jobs.length ? "SQLite" : "idle", tone: "gold", icon: "database" },
       { label: "Success Rate", value: `${successRate.toFixed(1)}%`, delta: `${completedJobs} completati`, source: data.jobs.length ? "AI Jobs" : "Stimato", tone: "green", icon: "verified_user" },
       { label: "Error Rate", value: `${errorRate.toFixed(1)}%`, delta: `${errorJobs} errori`, source: data.jobs.length ? "AI Jobs" : "idle", tone: "red", icon: "report" },
       { label: "Costo Stimato (oggi)", value: "$0.00", delta: "pricing non collegato", source: "Planned", tone: "gold", icon: "toll" },
@@ -709,7 +709,7 @@ const openProviderEditorDialog = (provider = null) => {
 const probeProvider = async (provider) => {
   const current = providerOf(provider);
   if (!current?.id || current.placeholder) return;
-  aiRuntimeMeta = { ...aiRuntimeMeta, indexedDb: `Probe ${current.name}` };
+  aiRuntimeMeta = { ...aiRuntimeMeta, storage: `Probe ${current.name}` };
   mountAiRuntime();
   await window.TrackerLensAiRuntimeStore?.probeProvider?.(current.raw || current);
   await refreshAiRuntime();
@@ -1362,7 +1362,7 @@ const renderAnalytics = () =>
       _.Grid(
         { cols: "repeat(4, minmax(0, 1fr))", gap: 8 },
         _.div(_.span("Jobs Attivi"), _.strong(metrics[1]?.value || "0"), _.em(metrics[1]?.delta || "")),
-        _.div(_.span("Query"), _.strong(`${aiRuntimeMeta.queryMs || 0}ms`), _.em("IndexedDB")),
+        _.div(_.span("Query"), _.strong(`${aiRuntimeMeta.queryMs || 0}ms`), _.em("SQLite")),
         _.div(_.span("Token Totali"), _.strong(metrics[3]?.value || "0"), _.em(metrics[3]?.delta || "")),
         _.div(_.span("Costo Stimato"), _.strong(metrics[6]?.value || "$0.00"), _.em(metrics[6]?.delta || ""))
       ),
@@ -1390,7 +1390,7 @@ const renderFooter = () =>
     _.span(`Agents: ${agents.length}`),
     _.span(`Jobs: ${jobs.length}`),
     _.span(`Memory: ${memory.length}`),
-    _.span(`IndexedDB: ${aiRuntimeMeta.indexedDb}`),
+    _.span(`SQLite: ${aiRuntimeMeta.storage}`),
     _.span(`Last Update: ${aiRuntimeMeta.lastUpdate || "Mai"}`),
     renderSpark("green", 28)
   );
@@ -1429,7 +1429,7 @@ const refreshAiRuntime = async () => {
       error: error?.message || "Errore caricamento runtime AI",
       queryMs: Math.max(1, Math.round(performance.now() - started)),
       lastUpdate: timeLabel(new Date()),
-      indexedDb: "Error",
+      storage: "Error",
     };
   }
   mountAiRuntime();
@@ -1440,7 +1440,7 @@ const probeLocalAiProviders = async () => {
     ...aiRuntimeMeta,
     loading: true,
     error: "",
-    indexedDb: "Probing local AI",
+    storage: "Probing local AI",
   };
   mountAiRuntime();
   try {
@@ -1449,7 +1449,7 @@ const probeLocalAiProviders = async () => {
     aiRuntimeMeta = {
       ...aiRuntimeMeta,
       error: error?.message || "Errore probe provider locali",
-      indexedDb: "Probe error",
+      storage: "Probe error",
     };
   }
   await refreshAiRuntime();

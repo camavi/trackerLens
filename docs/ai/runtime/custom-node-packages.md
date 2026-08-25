@@ -111,7 +111,7 @@ Marketplace verification should inspect:
 
 - `eval`, `new Function`, dynamic import of remote code
 - `fetch`, `WebSocket`, external network calls
-- localStorage, IndexedDB and other local persistence use
+- browser storage and direct SQLite access outside TL Core
 - file access requests
 - hidden credential collection
 - undeclared permission use
@@ -149,4 +149,3 @@ Sandboxing is defense-in-depth, not a full guarantee.
 5. Local Dev Mode: folder/zip upload for developers, always marked `local-dev` or `community`.
 6. Official Marketplace: signed package registry with AI/static verification and `verified` trust level.
 7. Versioning/migrations: update installed custom nodes without breaking existing Flow Map configs.
-

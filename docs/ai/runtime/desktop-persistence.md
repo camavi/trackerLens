@@ -7,7 +7,7 @@ Last updated: 2026-08-25.
 
 ## Decision
 
-SQLite is the only persistent store for the Electron desktop application. TL Core is its sole owner. IndexedDB is not a source of truth, is not a rollback mechanism and must not be introduced into new desktop code.
+SQLite is the only persistent store for the Electron desktop application. TL Core is its sole owner.
 
 The database belongs to TL Core. Electron Main supplies only the app-data path and the validated IPC adapter. Renderer code, JavaScript workers and Python workers never receive a database handle or arbitrary SQL capability.
 
@@ -55,13 +55,11 @@ Required indexes: `(store_name, id)` unique, `(store_name, workspace_id)`, `upda
 
 ## Persistence Mode
 
-Desktop mode is `desktop-sqlite`. It is Core-owned and never supplied by a renderer URL, worker or Python option. New desktop persistence APIs must fail clearly when unavailable; they must not fall back to IndexedDB.
+Desktop mode is `desktop-sqlite`. It is Core-owned and never supplied by a renderer URL, worker or Python option. New desktop persistence APIs must fail clearly when unavailable.
 
-## Transition Policy
+## Product Policy
 
-This repository is development-only and its existing IndexedDB data is disposable. Do not create a recovery bundle, backup manifest, shadow comparison or rollback path for it. Existing IndexedDB stores may be ignored or removed once their calling module has been moved to the SQLite repository.
-
-The transition is code-based, not data-migration-based: replace direct IndexedDB calls collection group by collection group with narrow Core repository operations. Every desktop write has one authority—SQLite—never dual-write. The application must not report completion until all active desktop callers have left IndexedDB.
+This repository is development-only. SQLite is the sole persistence authority: do not add recovery, shadow, rollback or browser-database paths. Every desktop write has one owner—TL Core SQLite—never a dual-write path.
 
 ## Current Implementation
 
@@ -69,21 +67,21 @@ Implemented foundation:
 
 - `core/desktop/desktop-persistence.cjs` owns SQLite schema/integrity and allow-listed record operations through Node's built-in `node:sqlite`.
 - Electron Main supplies only the private app-data path. Preload exposes named commands and never a database path, handle or raw SQL.
-- `database.html` is the read-only SQLite Explorer in Electron. It requests the allow-listed collection catalog and records through TL Core, so developers can inspect logical collections and JSON payloads without opening the database file or executing SQL from the renderer. It requires that bridge: it has no operational IndexedDB or demo-data fallback; the former IndexedDB open/read implementation and sample records have been removed. Its actions are limited to selection, copy and local JSON export—never editing, deleting, duplicating or importing records.
+- `database.html` is the read-only SQLite Explorer in Electron. It requests the allow-listed collection catalog and records through TL Core, so developers can inspect logical collections and JSON payloads without opening the database file or executing SQL from the renderer. It requires that bridge and has no demo-data fallback. Its actions are limited to selection, copy and local JSON export—never editing, deleting, duplicating or importing records.
 - `database.html` loads only its UI framework, configuration, sidebar and Explorer script. It does not load graph, cache, package, editor or other persistence runtime modules.
-- `TrackerLensRuntimeGraphStore`, `RuntimeSnapshotStore`, `TrackerLensEventLogStore`, `TrackerLensConnectionsStore`, `TrackerLensChannelRegistry`, `TrackerLensLocalLibrary`, `TrackerLensBoxEditorDialog`, `TrackerLensBoxPerformanceMonitor`, `TrackerLensTimeTravelStore`, `TrackerLensKnowledgeRuntime`, `StorageRuntime` and the legacy-compatible `DatabaseIndexedDB` Workspace adapter use the Core SQLite boundary for desktop persistence. `StorageRuntime` is SQLite-only and has no browser IndexedDB branch.
-- Browser-oriented IndexedDB implementations still exist in modules not yet moved. They are temporary migration debt, not a valid desktop fallback.
-- Runtime manifest permissions normalize the old `indexeddb.read` / `indexeddb.write` tokens to `sqlite.read` / `sqlite.write`, including persisted legacy manifests. New palette nodes must declare the SQLite tokens directly.
+- `TrackerLensRuntimeGraphStore`, `RuntimeSnapshotStore`, `TrackerLensEventLogStore`, `TrackerLensConnectionsStore`, `TrackerLensChannelRegistry`, `TrackerLensLocalLibrary`, `TrackerLensBoxEditorDialog`, `TrackerLensBoxPerformanceMonitor`, `TrackerLensTimeTravelStore`, `TrackerLensKnowledgeRuntime`, `StorageRuntime` and the `SQLiteRepository` workspace adapter use the Core SQLite boundary for desktop persistence. `StorageRuntime` is SQLite-only.
+- No browser-oriented persistence implementation participates in desktop persistence.
+- Runtime manifest permissions accept old persisted tokens and normalize them to `sqlite.read` / `sqlite.write` at load time. New palette nodes must declare the SQLite tokens directly.
 
 ## Acceptance Tests
 
 - Core rejects unknown persistence commands, paths, store names and raw-SQL requests.
 - SQLite integrity and allow-listed record reads/writes/deletions are covered by automated tests.
-- A desktop Flow Map smoke test must prove that no first-group read or mutation opens IndexedDB.
-- Each remaining collection group must move all readers and writers together before IndexedDB usage is deleted.
+- A desktop Flow Map smoke test must prove that Core-owned persistence is reachable only through the restricted preload bridge.
+- Every active desktop collection group has its readers and writers on SQLite; only old persisted manifest metadata is normalized during loading.
 
 ## Explicit Non-goals
 
 - No replication, sync service, cloud backup or multi-device conflict resolution.
 - No use of SQLite by Python or arbitrary package code.
-- No new IndexedDB desktop persistence paths.
+- No browser-side persistence paths.

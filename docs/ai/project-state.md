@@ -46,7 +46,7 @@ The core product direction is:
 - Runtime Manager base is active for Flow Map node execution. It registers JavaScript only and delegates to the existing node-controller task path, preserving current Worker/Event Bus behavior.
 - A managed Python development POC exists behind `TL_ENABLE_PYTHON_POC=1`. It is a persistent, isolated standard-library worker used only for protocol validation, not a production Python node runtime.
 - Electron POC mode adds one feature-gated `Python Test` processor. It uses the managed worker through TL Core and has no direct persistence access.
-- SQLite is the desktop authority. Flow Map Graph Store and snapshot first-cohort operations are routed through TL Core; remaining direct IndexedDB calls are implementation debt to remove, not a fallback.
+- SQLite is the desktop authority. All active desktop persistence routes through TL Core; renderer code has no direct browser-database fallback.
 
 ## Current Risk Areas
 

@@ -18,7 +18,7 @@ const connectionTypes = [
   { name: "WebSocket", color: "lime", icon: "settings_input_antenna", count: 24 },
   { name: "RSS Feed", color: "orange", icon: "rss_feed", count: 18 },
   { name: "AI Connector", color: "gold", icon: "psychology", count: 31 },
-  { name: "IndexedDB", color: "slate", icon: "database", count: 22 },
+  { name: "SQLite", color: "slate", icon: "database", count: 22 },
   { name: "MCP Connection", color: "indigo", icon: "lan", count: 11 },
 ];
 
@@ -171,11 +171,11 @@ const sampleConnections = [
   {
     id: "conn_01H7X9K8A1B9",
     name: "DB Write Connection",
-    type: "IndexedDB",
+    type: "SQLite",
     from: "AI Analyzer",
     fromKind: "boxLens",
-    to: "IndexedDB",
-    targetMeta: "tl_widgets store",
+    to: "SQLite",
+    targetMeta: "tl_widgets collection",
     status: "active",
     lastTest: "2 min fa",
     result: "Write OK",
@@ -185,7 +185,7 @@ const sampleConnections = [
     retries: 1,
     createdAt: "2026-04-26T17:55:00.000Z",
     updatedAt: "2026-05-11T12:41:50.000Z",
-    endpoint: "indexeddb://TrackersLens/tl_widgets",
+    endpoint: "sqlite://TrackersLens/tl_widgets",
   },
 ];
 
@@ -558,9 +558,9 @@ const testConnection = async (connection) => {
       result = response?.status ? `${response.status} ${response.statusText || "OK"}` : "Richiesta inviata";
     } else if (/^wss?:\/\//i.test(connection.endpoint)) {
       result = "WebSocket configurato";
-    } else if (/^indexeddb:\/\//i.test(connection.endpoint)) {
+    } else if (/^sqlite:\/\//i.test(connection.endpoint)) {
       await window.TrackerLensConnectionsStore.list();
-      result = "IndexedDB OK";
+      result = "SQLite OK";
     } else {
       result = "Collegamento locale OK";
     }
@@ -838,7 +838,7 @@ const renderMiniSpark = (item) => {
 const renderTableView = () => {
   const items = visibleConnections();
   if (connectionState.loading) {
-    return _.div({ class: "tl-link-empty" }, "Caricamento collegamenti da IndexedDB...");
+    return _.div({ class: "tl-link-empty" }, "Caricamento collegamenti da SQLite...");
   }
 
   if (connectionState.error) {
@@ -1259,7 +1259,7 @@ const endpointIcon = (name) => {
   const value = String(name || "").toLowerCase();
   if (value.startsWith("wss://") || value.startsWith("ws://")) return "sensors";
   if (value.startsWith("event-bus://")) return "hub";
-  if (value.startsWith("indexeddb://")) return "database";
+  if (value.startsWith("sqlite://")) return "database";
   if (value.startsWith("local://")) return "memory";
   if (value.startsWith("http://") || value.startsWith("https://")) return "api";
   return "link";

@@ -25,7 +25,7 @@ Last updated: 2026-06-11.
 
 ## Runtime Files
 
-- `runtime/stores.md`: IndexedDB stores and ownership.
+- `runtime/stores.md`: SQLite collections and ownership.
 - `runtime/channels.md`: channel registry and event bus.
 - `runtime/dependencies.md`: dependency safety model.
 - `runtime/connected-node-tools.md`: Agent/LLM protocol for discovering and querying connected node tools.

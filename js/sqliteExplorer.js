@@ -509,7 +509,7 @@ const renderShell = () =>
   );
 
 const mountExplorer = () => {
-  const root = document.getElementById("tl-indexeddb-root");
+  const root = document.getElementById("tl-sqlite-root");
   if (!root) return;
   root.replaceChildren(renderShell());
 };

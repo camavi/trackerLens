@@ -31,6 +31,6 @@ The Core allow-lists those commands and validates external URLs/import-plan stor
 - Electron Main: windows, lifecycle, CSP, navigation policy and OS adapter calls.
 - TL Core: allow-listed desktop command contract and runtime ownership metadata.
 - Renderer JS Worker: existing JS runtime execution.
-- Renderer IndexedDB: existing local persistence.
+- Renderer persistence: restricted TL Core SQLite bridge only.
 
 `runtime.getStatus()` is intentionally descriptive only during Phase 2. Runtime migration, app-data migration and Python are later phases.

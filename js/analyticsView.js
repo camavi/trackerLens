@@ -42,7 +42,7 @@ const fallbackTrackers = [
 ];
 
 const fallbackServices = [
-  ["IndexedDB", "Online", "online", "database"],
+  ["SQLite", "Online", "online", "database"],
   ["WebSocket", "Online", "online", "settings_input_antenna"],
   ["API Services", "Online", "online", "api"],
   ["Cache System", "Online", "online", "cached"],
@@ -86,7 +86,7 @@ const analyticsState = {
     totalLabel: "2.45 GB",
     quotaLabel: "/ 5 GB",
     percent: 72,
-    lines: ["IndexedDB 1.78 GB (72%)", "Cache 420 MB (17%)", "Logs 180 MB (7%)", "Altri 80 MB (4%)"],
+    lines: ["SQLite 1.78 GB (72%)", "Cache 420 MB (17%)", "Logs 180 MB (7%)", "Altri 80 MB (4%)"],
   },
   workspaces: [
     ["Trading Dashboard", 92],
@@ -100,7 +100,7 @@ const analyticsState = {
     uptime: "runtime locale",
     memory: "256 MB",
     cache: "Cache warm",
-    indexedDb: "IndexedDB connected",
+    storage: "SQLite connected",
     lastUpdate: "12:32:18",
   },
 };
@@ -426,7 +426,7 @@ const buildAnalyticsData = async () => {
       uptime: "runtime locale",
       memory: formatBytes(usage),
       cache: storage ? "Storage API ok" : "Storage stimato",
-      indexedDb: dbOnline ? "SQLite connected" : "SQLite empty",
+      storage: dbOnline ? "SQLite connected" : "SQLite empty",
       lastUpdate: timeLabel(lastItems[0]?.at || new Date()),
     },
   };
@@ -749,7 +749,7 @@ const renderFooter = () =>
     _.span(`Uptime ${analyticsState.footer.uptime}`),
     _.span(`Memory ${analyticsState.footer.memory}`),
     _.span(analyticsState.footer.cache),
-    _.span(analyticsState.footer.indexedDb),
+    _.span(analyticsState.footer.storage),
     _.span(`Last Update ${analyticsState.footer.lastUpdate}`)
   );
 
@@ -847,7 +847,7 @@ const mountAnalytics = async () => {
     Object.assign(analyticsState, {
       loading: false,
       error: error?.message || "Dati reali non disponibili",
-      footer: { ...analyticsState.footer, indexedDb: "SQLite error", lastUpdate: timeLabel(new Date()) },
+      footer: { ...analyticsState.footer, storage: "SQLite error", lastUpdate: timeLabel(new Date()) },
     });
     setLiveEvents(analyticsState.liveEvents);
     setMetrics(analyticsState.metrics);

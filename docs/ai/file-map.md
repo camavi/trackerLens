@@ -56,7 +56,7 @@ Last updated: 2026-08-25.
 - `CMSwift/`: UI framework.
 - `js/tl-sidebar.js`, `css/tl-sidebar.css`: standard sidebar.
 - `js/TlConfig.js`: store constants and app config.
-- SQLite status diagnostics are read directly from the restricted TL Core preload bridge by `js/settingsView.js`; no renderer-side IndexedDB preview helper remains.
+- SQLite status diagnostics are read directly from the restricted TL Core preload bridge by `js/settingsView.js`.
 
 ## Electron Desktop Shell
 
@@ -64,7 +64,7 @@ Last updated: 2026-08-25.
 - `electron/main.cjs`: desktop lifecycle, secure BrowserWindow, CSP, validated IPC and navigation policy.
 - `electron/preload.cjs`: minimal renderer bridge; it must not expose Node.js, filesystem or unrestricted IPC.
 - `core/desktop/tl-core.cjs`: Electron-independent allow-listed desktop command boundary.
-- `core/desktop/desktop-persistence.cjs`: Core-owned SQLite schema, diagnostic import planning and fixture-only import adapter.
+- `core/desktop/desktop-persistence.cjs`: Core-owned SQLite schema and allow-listed collection operations.
 - `core/runtime/node-execution-contract.js`: versioned multi-runtime manifest/request/result normalization.
 - `core/runtime/runtime-manager.js`: runtime registry, JavaScript execution routing and health status.
 - `core/desktop/managed-python-runtime.cjs`: managed Python POC process adapter.
@@ -74,4 +74,4 @@ Last updated: 2026-08-25.
 - `test/tl-core.test.cjs`: unit tests for the desktop boundary.
 - `test/electron-preload-smoke.cjs`: Electron renderer smoke test for the sandboxed preload bridge.
 - `test/python-poc.test.cjs`: Python POC protocol tests.
-- `docs/ai/runtime/desktop-persistence.md`: SQLite target, IndexedDB inventory, migration/cutover and rollback contract.
+- `docs/ai/runtime/desktop-persistence.md`: SQLite-only desktop persistence contract.

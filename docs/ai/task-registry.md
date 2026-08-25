@@ -15,7 +15,7 @@ Risk: High because browser-extension persistence, Chrome-specific APIs, runtime 
 
 Current sub-steps:
 
-- Inventory: map extension entry points, current JS runtime, persistent IndexedDB/localStorage data, browser APIs and existing export/recovery paths.
+- Inventory: map extension entry points, current JS runtime, browser APIs and existing export/recovery paths.
 - Baseline: verify the current repository state and available regression coverage before introducing dependencies or changing architecture.
 - Migration design: define the Electron shell, secure bridge, app-data SQLite and first isolated Python-node proof of concept only after the assessment is approved. Desktop data is disposable during development; no rollback path is required.
 - Electron shell: base implemented. `electron/main.cjs` loads the existing Flow Map UI with context isolation, renderer sandboxing, Node integration disabled, navigation/window hardening and a restrictive preload API.
@@ -27,10 +27,9 @@ Current sub-steps:
 - Python POC: implemented. A persistent JSON Lines worker supports an isolated text-transform capability with request IDs, progress/log events, invalid-input errors, cancellation, timeout and crash isolation. In POC Electron mode, `Python Test` appears in the Processor palette and uses explicit input/output/error/status channels plus Cancel/Restart controls. It is disabled outside that mode and does not alter existing JS nodes.
 - Python Node SDK: implemented as a built-in standard-library-only foundation. `@node`, `NodeContext`, log/progress/cancellation and normalized outputs are available; it intentionally has no direct storage, filesystem, network, memory or knowledge access.
 - Capability routing: implemented as a base. Node manifests declare `text.transform`, and Runtime Manager resolves the feature-gated Python executor through `resolveCapability` rather than requiring callers to choose Python. Additional capabilities/packages remain future work.
-- Desktop persistence diagnostic preview has been retired with the discarded migration/recovery route. `core/desktop/desktop-persistence.cjs` owns the private SQLite document schema and integrity test; the CMSwift Settings panel reads only Core SQLite status through the restricted preload bridge. No renderer-side IndexedDB export/plan helper remains and no raw SQL/DB handle is exposed.
-- Legacy IndexedDB inspection helpers remain only while direct callers are being removed; they are not part of the desktop persistence product or a recovery path.
+- Desktop persistence diagnostic preview has been retired. `core/desktop/desktop-persistence.cjs` owns the private SQLite document schema and integrity test; the CMSwift Settings panel reads only Core SQLite status through the restricted preload bridge. No raw SQL/DB handle is exposed.
 - Marketplace trust catalog classification: `tl_marketplace_trust` is recognized as a known later-cohort operational store, not an unclassified/dynamic store and not part of the first import cohort.
-- Desktop SQLite authority: Electron initializes Core-owned SQLite at startup. TL Core exposes allow-listed graph/observation/page/widget/connection/channel/Knowledge reads (optionally workspace-scoped), upserts and ID-targeted deletions plus validated `tl_history`/`tl_storage_*` runtime buckets, rejecting raw SQL and filesystem/database handles. Flow Map Graph Store, snapshot, Event Log Store, Connections Store, Channel Registry, Local Library, Box Editor, Workspace editor adapter, Performance Monitor, Time Travel, Knowledge and Storage Runtime use SQLite. Remaining IndexedDB references are legacy browser/diagnostic code to delete or isolate from the desktop build.
+- Desktop SQLite authority: Electron initializes Core-owned SQLite at startup. TL Core exposes allow-listed graph/observation/page/widget/connection/channel/Knowledge reads (optionally workspace-scoped), upserts and ID-targeted deletions plus validated `tl_history`/`tl_storage_*` runtime buckets, rejecting raw SQL and filesystem/database handles. Flow Map Graph Store, snapshot, Event Log Store, Connections Store, Channel Registry, Local Library, Box Editor, Workspace editor adapter, Performance Monitor, Time Travel, Knowledge and Storage Runtime use SQLite.
 - SQLite Explorer: `database.html` now reads the allow-listed collection catalog and record JSON through TL Core in Electron. It is an inspection surface only: it never exposes a SQLite file path, database handle or arbitrary SQL to the renderer.
 
 ### TASK-029: Custom Node Packages
@@ -95,7 +94,7 @@ Risk: Medium/High because it adds a first-class runtime type and new local persi
 
 Current sub-steps:
 
-- Step 1 Knowledge stores and models: base implemented with local IndexedDB stores.
+- Step 1 Knowledge stores and models: base implemented with local SQLite collections managed by TL Core.
 - Step 2 Document Store + Chunk Processor: base runtime handlers implemented; topbar Knowledge Test sample added and user-verified.
 - Step 3 Embedding Generator + cosine similarity: local deterministic vectors implemented and provider-backed embeddings wired through existing AI provider profiles with local fallback.
 - Step 4 RAG Search node: base local search implemented and user-verified with clean single-result sample context.
@@ -353,7 +352,7 @@ Main files:
 - Embedded Flow Map read-only preview: alias body action opens a fitted graph dialog showing current source nodes by name/type, configured IN/OUT ports and their connections without editing controls; the Flow Map File menu can export the full graph preview as JPG.
 - Flow Map canvas interaction refinement: natural wheel pan, Ctrl-wheel zoom with live percentage, center marker, wider cable canvas, graph-fit minimap with live draggable viewport and minimize control, Shift-drag downstream node groups and Alt/Option-click quick delete.
 - Flow Map world canvas pass: newly generated nodes use world-unit coordinates instead of viewport-percent positions, the edge canvas follows the visible world viewport, and node width can be resized per node and persisted in `flowPosition.width`.
-- Flow Map world canvas verification: user confirmed new Flow Map boundary nodes can be deleted, Sample Test layouts are correct and the IndexedDB reset warnings are not blocking.
+- Flow Map world canvas verification: user confirmed new Flow Map boundary nodes can be deleted and Sample Test layouts are correct.
 - Flow Map minimap color pass: runtime minimap markers inherit each node tone color.
 - Flow Map minimap shape pass: minimap markers are rectangular and scale to rendered node height after first paint, including collapsed nodes.
 - Flow Map recursive delete action: node delete dialog can force-delete the selected node plus every downstream child node.
@@ -483,6 +482,6 @@ Main files:
 
 - Endpoint research hardening follow-up: browser-test explicit OpenAPI discovery from Flow Map AI Chat after routing fix and add provider scoring only from fetched documentation.
 - Background/service-worker persistence when pages are closed.
-- Electron SQLite development repository foundation: TL Core now offers only allow-listed first-cohort candidate record reads, upserts and deletions; it remains separate from the active renderer IndexedDB runtime until Flow Map's Graph Engine, snapshot and write paths are moved together.
+- Electron SQLite development repository foundation: TL Core offers allow-listed first-cohort candidate record reads, upserts and deletions; Flow Map's Graph Engine, snapshot and write paths now use the same SQLite authority.
 - Cloud sync, if explicitly prioritized.
 - Workspace templates and AI-generated workspaces after runtime core is stable.

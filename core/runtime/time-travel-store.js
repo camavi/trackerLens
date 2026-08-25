@@ -132,7 +132,6 @@ window.TrackerLensTimeTravelStore = (() => {
     STORE,
     capture,
     diffSnapshots,
-    ensureDb,
     latest,
     list,
     readAllStore,
