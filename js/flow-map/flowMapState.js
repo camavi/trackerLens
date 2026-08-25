@@ -523,31 +523,7 @@ const readRuntimeStore = async (storeName) => {
   if (storeName === runtimeStoreName("TL_EVENTS", "tl_events") && eventStore?.listEvents) return eventStore.listEvents();
   if (storeName === runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs") && eventStore?.listFlowLogs) return eventStore.listFlowLogs();
   if (window.TrackerLensRuntimeGraphStore?.readAll) return window.TrackerLensRuntimeGraphStore.readAll(storeName);
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      read.onsuccess = (readEvent) => {
-        db.close();
-        resolve(Array.from(readEvent.target.result || []));
-      };
-      read.onerror = (readEvent) => {
-        db.close();
-        reject(readEvent.target.error || new Error(`Errore lettura ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-  });
+  throw new Error("Flow Map richiede il repository SQLite runtime.");
 };
 
 const readScopedRuntimeStore = async (storeName, workspaceId = "") => {
@@ -558,31 +534,7 @@ const readScopedRuntimeStore = async (storeName, workspaceId = "") => {
 
 const readRuntimeRecord = async (storeName, id) => {
   if (!id) return null;
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve(null);
-        return;
-      }
-      const read = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-      read.onsuccess = (readEvent) => {
-        db.close();
-        resolve(readEvent.target.result || null);
-      };
-      read.onerror = (readEvent) => {
-        db.close();
-        reject(readEvent.target.error || new Error(`Errore lettura ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-  });
+  return (await readRuntimeStore(storeName)).find((record) => record.id === id) || null;
 };
 
 const writeRuntimeRecord = async (storeName, record) => {
@@ -594,31 +546,11 @@ const writeRuntimeRecord = async (storeName, record) => {
   if (storeName === runtimeStoreName("TL_FLOW_LOGS", "tl_flow_logs") && eventStore?.recordFlowLog) {
     return eventStore.recordFlowLog(record);
   }
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
+  if (window.TrackerLensRuntimeGraphStore?.putRecords) {
+    await window.TrackerLensRuntimeGraphStore.putRecords(storeName, [record]);
+    return record;
   }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        reject(new Error(`Store ${storeName} non disponibile`));
-        return;
-      }
-      const write = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-      write.onsuccess = () => {
-        db.close();
-        resolve(record);
-      };
-      write.onerror = (writeEvent) => {
-        db.close();
-        reject(writeEvent.target.error || new Error(`Errore salvataggio ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-  });
+  throw new Error("Flow Map richiede il repository SQLite runtime.");
 };
 
 const deleteWorkspaceScopedRecords = async (storeName, workspaceId = "") => {
@@ -633,33 +565,7 @@ const deleteWorkspaceScopedRecords = async (storeName, workspaceId = "") => {
     return window.TrackerLensEventLogStore.deleteRecords(storeName, ids);
   }
   if (window.TrackerLensRuntimeGraphStore?.deleteRecords) return window.TrackerLensRuntimeGraphStore.deleteRecords(storeName, ids);
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readwrite");
-      const store = transaction.objectStore(storeName);
-      ids.forEach((id) => store.delete(id));
-      transaction.oncomplete = () => {
-        db.close();
-        resolve(ids);
-      };
-      transaction.onerror = (deleteEvent) => {
-        db.close();
-        reject(deleteEvent.target.error || new Error(`Errore cleanup ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-  });
+  throw new Error("Flow Map richiede il repository SQLite runtime.");
 };
 
 const deleteRuntimeRecordsWhere = async (storeName, predicate = () => false) => {
@@ -670,33 +576,7 @@ const deleteRuntimeRecordsWhere = async (storeName, predicate = () => false) => 
     return window.TrackerLensEventLogStore.deleteRecords(storeName, ids);
   }
   if (window.TrackerLensRuntimeGraphStore?.deleteRecords) return window.TrackerLensRuntimeGraphStore.deleteRecords(storeName, ids);
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readwrite");
-      const store = transaction.objectStore(storeName);
-      ids.forEach((id) => store.delete(id));
-      transaction.oncomplete = () => {
-        db.close();
-        resolve(ids);
-      };
-      transaction.onerror = (deleteEvent) => {
-        db.close();
-        reject(deleteEvent.target.error || new Error(`Errore cleanup ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-  });
+  throw new Error("Flow Map richiede il repository SQLite runtime.");
 };
 
 const isKnowledgeGraphSampleRecord = (record = {}) => {

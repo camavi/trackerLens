@@ -1,5 +1,4 @@
 window.TrackerLensPortableRuntime = (() => {
-  const DB_NAME = "TrackersLens";
   const WIDGET_STORE = "tl_widgets";
   const PAGE_STORE = "tl_pages";
   const RUNTIME_STORES = {
@@ -18,74 +17,24 @@ window.TrackerLensPortableRuntime = (() => {
   const safeName = (value = "trackers-lens") =>
     normalizeText(value, "trackers-lens").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "") || "trackers-lens";
 
-  const createStores = (db) => {
-    if (!db.objectStoreNames.contains(WIDGET_STORE)) {
-      db.createObjectStore(WIDGET_STORE, { keyPath: "id" }).createIndex("content", "content", { unique: false });
-    }
-    if (!db.objectStoreNames.contains(PAGE_STORE)) {
-      db.createObjectStore(PAGE_STORE, { keyPath: "id" }).createIndex("content", "content", { unique: false });
-    }
-    Object.values(RUNTIME_STORES).forEach((storeName) => {
-      if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName, { keyPath: "id" });
-    });
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createStores(event.target.result);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB portable runtime"));
-    });
-
   const ensureDb = async () => {
-    const db = await openDb();
-    const required = [WIDGET_STORE, PAGE_STORE, ...Object.values(RUNTIME_STORES)];
-    if (required.every((storeName) => db.objectStoreNames.contains(storeName))) return db;
-    const version = db.version + 1;
-    db.close();
-    return openDb(version);
+    const persistence = window.trackers?.desktop?.persistence;
+    if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords) throw new Error("Portable Runtime richiede il bridge SQLite dell'app desktop.");
+    if ((await persistence.getStatus())?.mode !== "desktop-sqlite") throw new Error("Portable Runtime richiede SQLite nell'app desktop.");
+    return persistence;
   };
 
   const read = async (storeName, id) => {
-    const db = await ensureDb();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return null;
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-        request.onsuccess = (event) => resolve(event.target.result || null);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await (await ensureDb()).readDevelopmentRecords({ storeName })).find((record) => record.id === id) || null;
   };
 
   const readAll = async (storeName) => {
-    const db = await ensureDb();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await ensureDb()).readDevelopmentRecords({ storeName });
   };
 
   const write = async (storeName, record) => {
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureDb()).writeDevelopmentRecords({ storeName, records: [record] });
+    return record;
   };
 
   const writeMany = async (storeName, records = []) => Promise.all((records || []).filter((record) => record?.id).map((record) => write(storeName, record)));

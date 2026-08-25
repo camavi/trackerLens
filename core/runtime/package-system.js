@@ -1,5 +1,4 @@
 window.TrackerLensPackageSystem = (() => {
-  const DB_NAME = "TrackersLens";
   const STORE_PACKAGES = "tl_packages";
   const STORE_LOCK = "tl_package_lock";
   const SCHEMA_VERSION = "1.0.0";
@@ -8,61 +7,22 @@ window.TrackerLensPackageSystem = (() => {
   const normalizeText = (value, fallback = "") => value === null || value === undefined ? fallback : String(value).trim() || fallback;
   const safeName = (value = "") => normalizeText(value, "trackers-package").toLowerCase().replace(/[^a-z0-9@/._-]+/g, "-");
 
-  const createStores = (db) => {
-    if (!db.objectStoreNames.contains(STORE_PACKAGES)) {
-      const packages = db.createObjectStore(STORE_PACKAGES, { keyPath: "id" });
-      packages.createIndex("name", "name", { unique: false });
-      packages.createIndex("type", "type", { unique: false });
-      packages.createIndex("status", "status", { unique: false });
-      packages.createIndex("updatedAt", "updatedAt", { unique: false });
-    }
-    if (!db.objectStoreNames.contains(STORE_LOCK)) {
-      const lock = db.createObjectStore(STORE_LOCK, { keyPath: "id" });
-      lock.createIndex("packageId", "packageId", { unique: false });
-      lock.createIndex("workspaceId", "workspaceId", { unique: false });
-    }
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createStores(event.target.result);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura package system"));
-    });
-
+  const persistence = () => window.trackers?.desktop?.persistence || null;
   const ensureDb = async () => {
-    const db = await openDb();
-    if (db.objectStoreNames.contains(STORE_PACKAGES) && db.objectStoreNames.contains(STORE_LOCK)) return db;
-    const version = db.version + 1;
-    db.close();
-    return openDb(version);
+    const bridge = persistence();
+    if (!bridge?.getStatus || !bridge?.readDevelopmentRecords || !bridge?.writeDevelopmentRecords) throw new Error("Package System richiede SQLite nell'app desktop.");
+    if ((await bridge.getStatus())?.mode !== "desktop-sqlite") throw new Error("Package System richiede SQLite nell'app desktop.");
+    return bridge;
   };
 
   const write = async (storeName, record) => {
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const bridge = await ensureDb();
+    await bridge.writeDevelopmentRecords({ storeName, records: [record] });
+    return record;
   };
 
   const readAll = async (storeName) => {
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await ensureDb()).readDevelopmentRecords({ storeName });
   };
 
   const packageId = (manifest = {}) => `${safeName(manifest.name)}@${normalizeText(manifest.version, "0.1.0")}`;

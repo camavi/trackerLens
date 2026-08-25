@@ -1,5 +1,4 @@
 window.TrackerLensChannelRegistry = (() => {
-  const DB_NAME = "TrackersLens";
   const config = () => (typeof tlConfig !== "undefined" ? tlConfig : window.tlConfig) || {};
   const tableName = (key, fallback) => config()?.TABLES?.[key] || fallback;
 
@@ -29,15 +28,13 @@ window.TrackerLensChannelRegistry = (() => {
     }
     return desktopSqliteMode;
   };
-
-  const STORE_DEFINITIONS = [
-    { name: STORES.channels, columns: [{ name: "workspaceId" }, { name: "name" }, { name: "status" }, { name: "producerNodeId" }] },
-    { name: STORES.widgets, columns: [{ name: "content" }] },
-    { name: STORES.pages, columns: [{ name: "content" }] },
-    { name: STORES.connections, columns: [{ name: "workspaceId" }, { name: "status" }, { name: "updatedAt" }] },
-    { name: STORES.runtimeNodes, columns: [{ name: "workspaceId" }, { name: "type" }, { name: "sourceRef" }, { name: "updatedAt" }] },
-    { name: STORES.runtimeDependencies, columns: [{ name: "workspaceId" }, { name: "sourceNodeId" }, { name: "targetNodeId" }, { name: "updatedAt" }] },
-  ];
+  const ensureStores = async () => {
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) {
+      throw new Error("Channel Registry richiede SQLite nell'app desktop.");
+    }
+    return persistence;
+  };
 
   const normalizeText = (value, fallback = "") => {
     if (value === null || value === undefined) return fallback;
@@ -59,112 +56,27 @@ window.TrackerLensChannelRegistry = (() => {
   const channelId = ({ workspaceId = "global", name }) =>
     `channel_${String(workspaceId || "global").replace(/[^A-Za-z0-9_-]/g, "_")}_${safeChannelName(name).replace(/[^A-Za-z0-9_-]/g, "_")}`;
 
-  const createIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column.name)) {
-        store.createIndex(column.name, column?.keyPath ?? column.name, column?.options ?? { unique: false });
-      }
-    });
-  };
-
-  const createMissingStores = (db) => {
-    STORE_DEFINITIONS.forEach((definition) => {
-      if (db.objectStoreNames.contains(definition.name)) return;
-      createIndexes(db.createObjectStore(definition.name, { keyPath: "id" }), definition.columns);
-    });
-  };
-
-  const bindVersionChange = (db) => {
-    db.onversionchange = () => {
-      db.close();
-      console.warn("IndexedDB channel registry chiuso per consentire aggiornamento da un'altra scheda.");
-    };
-    return db;
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createMissingStores(event.target.result);
-      request.onsuccess = (event) => resolve(bindVersionChange(event.target.result));
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB channel registry"));
-      request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-    });
-
-  const ensureStores = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
-      await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
-    }
-
-    const db = await openDb();
-    const hasAllStores = STORE_DEFINITIONS.every((definition) => db.objectStoreNames.contains(definition.name));
-    if (hasAllStores) return db;
-
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
-  };
-
   const readAll = async (storeName) => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
-    const db = await ensureStores();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Channel Registry richiede SQLite nell'app desktop.");
+    return persistence.readDevelopmentRecords({ storeName });
   };
 
   const putRecords = async (storeName, records = []) => {
     if (!records.length) return [];
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName, records });
-      return records;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        records.forEach((record) => store.put(record));
-        transaction.oncomplete = () => resolve(records);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore salvataggio ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) throw new Error("Channel Registry richiede SQLite nell'app desktop.");
+    await persistence.writeDevelopmentRecords({ storeName, records });
+    return records;
   };
 
   const deleteRecords = async (storeName, ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: uniqueIds });
-      return uniqueIds;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        uniqueIds.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => resolve(uniqueIds);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore cleanup ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.deleteDevelopmentRecords) throw new Error("Channel Registry richiede SQLite nell'app desktop.");
+    await persistence.deleteDevelopmentRecords({ storeName, ids: uniqueIds });
+    return uniqueIds;
   };
 
   const trackerOutputChannel = (tracker) =>

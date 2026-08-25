@@ -5,7 +5,6 @@ const dot = (tone = "online") => _.span({ class: `tl-settings-dot is-${tone}`, "
 const selectArrowSlot = { arrow: () => icon("keyboard_arrow_down", "sm") };
 const SETTINGS_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_SETTINGS : null) || "tl_settings";
 const SETTINGS_RECORD_ID = "global";
-const DB_NAME = (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const normalizeText = (value, fallback = "") => {
@@ -140,7 +139,7 @@ const settingSections = [
   { id: "general", title: "Generale", description: "Impostazioni generali del sistema", icon: "tune", target: "general", meta: "Workspace • Lingua" },
   { id: "ai", title: "AI & Modelli", description: "Provider, modelli e preferenze AI", icon: "psychology", target: "ai", meta: "Provider • Local AI" },
   { id: "connections", title: "Connessioni", description: "API, WebSocket e integrazioni", icon: "hub", target: "connections", meta: "Timeout • SSL" },
-  { id: "data", title: "Dati & Archiviazione", description: "IndexedDB, cache e backup", icon: "database", target: "storage", meta: "Storage • Cache" },
+  { id: "data", title: "Dati & Archiviazione", description: "SQLite, cache e backup", icon: "database", target: "storage", meta: "Storage • Cache" },
   { id: "performance", title: "Performance", description: "Performance, limiti e ottimizzazioni", icon: "speed", target: "status", meta: "Runtime • Retention" },
   { id: "notifications", title: "Notifiche", description: "Avvisi, email e notifiche push", icon: "notifications", target: "notifications", meta: "Desktop • Email" },
   { id: "security", title: "Sicurezza", description: "Chiavi API, permessi e privacy", icon: "shield", target: "security", meta: "API Keys • Privacy" },
@@ -217,11 +216,6 @@ const writePath = (path, value) => {
   });
   target[keys.at(-1)] = value;
 };
-const dbRequest = (request) =>
-  new Promise((resolve, reject) => {
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("IndexedDB request failed"));
-  });
 const withTimeout = (promise, ms, label) =>
   Promise.race([
     promise,
@@ -229,72 +223,23 @@ const withTimeout = (promise, ms, label) =>
       window.setTimeout(() => resolve({ __timeout: true, label }), ms);
     }),
   ]);
-const openSettingsDb = (version) =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-    const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
-        const store = db.createObjectStore(SETTINGS_STORE, { keyPath: "id" });
-        store.createIndex("updatedAt", "updatedAt", { unique: false });
-      }
-    };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      db.onversionchange = () => db.close();
-      resolve(db);
-    };
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-    let blockedTimer = null;
-    request.onblocked = () => {
-      blockedTimer = window.setTimeout(() => reject(new Error("IndexedDB bloccato da un'altra scheda")), 1500);
-    };
-    const clearBlocked = () => {
-      if (blockedTimer) window.clearTimeout(blockedTimer);
-    };
-    const originalSuccess = request.onsuccess;
-    const originalError = request.onerror;
-    request.onsuccess = (event) => {
-      clearBlocked();
-      originalSuccess(event);
-    };
-    request.onerror = (event) => {
-      clearBlocked();
-      originalError(event);
-    };
-  });
+const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
 const ensureSettingsStore = async () => {
-  const db = await openSettingsDb();
-  if (db.objectStoreNames.contains(SETTINGS_STORE)) return db;
-  const nextVersion = db.version + 1;
-  db.close();
-  return openSettingsDb(nextVersion);
-};
-const readAllFromDb = (db, storeName) =>
-  new Promise((resolve, reject) => {
-    if (!db.objectStoreNames.contains(storeName)) {
-      resolve([]);
-      return;
-    }
-    const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-    request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-  });
-const getSettingsRecord = async () => {
-  const db = await ensureSettingsStore();
-  try {
-    if (!db.objectStoreNames.contains(SETTINGS_STORE)) return null;
-    return await dbRequest(db.transaction(SETTINGS_STORE, "readonly").objectStore(SETTINGS_STORE).get(SETTINGS_RECORD_ID));
-  } finally {
-    db.close();
+  const persistence = desktopPersistence();
+  if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) {
+    throw new Error("Impostazioni richiedono il bridge SQLite dell'app desktop.");
   }
+  const status = await persistence.getStatus();
+  if (status?.mode !== "desktop-sqlite") throw new Error("Impostazioni richiedono SQLite nell'app desktop.");
+  return persistence;
+};
+const readAllFromDb = (persistence, storeName) => persistence.readDevelopmentRecords({ storeName });
+const getSettingsRecord = async () => {
+  const persistence = await ensureSettingsStore();
+  return (await readAllFromDb(persistence, SETTINGS_STORE)).find((record) => record.id === SETTINGS_RECORD_ID) || null;
 };
 const saveSettings = async (silent = false) => {
-  const db = await ensureSettingsStore();
+  const persistence = await ensureSettingsStore();
   const now = new Date().toISOString();
   const record = {
     id: SETTINGS_RECORD_ID,
@@ -303,14 +248,12 @@ const saveSettings = async (silent = false) => {
     updatedAt: now,
   };
   try {
-    await dbRequest(db.transaction(SETTINGS_STORE, "readwrite").objectStore(SETTINGS_STORE).put(record));
+    await persistence.writeDevelopmentRecords({ storeName: SETTINGS_STORE, records: [record] });
     settingsState.updatedAt = new Date(now);
-    settingsState.notice = silent ? settingsState.notice : "Impostazioni salvate in IndexedDB";
+    settingsState.notice = silent ? settingsState.notice : "Impostazioni salvate in SQLite";
     settingsState.error = "";
   } catch (error) {
     settingsState.error = error?.message || "Errore salvataggio impostazioni";
-  } finally {
-    db.close();
   }
   patchSettingsRuntimeChrome();
 };
@@ -805,7 +748,7 @@ const renderStorage = () =>
       _.div(
         { class: "tl-settings-storage-lines" },
         ...[
-          ["IndexedDB", formatBytes(settingsState.storage.usage), "gold"],
+          ["SQLite", formatBytes(settingsState.storage.usage), "gold"],
           ["Cache", settingsState.stores.includes("tl_cache") ? "Store presente" : "N/D", "blue"],
           ["Logs", settingsState.stores.includes("tl_ai_logs") ? "tl_ai_logs" : "N/D", "gold"],
           ["Altri Dati", `${settingsState.stores.length} store`, "green"],
@@ -905,7 +848,7 @@ const runtimeServices = () => {
     ["Tracker Engine", settingsState.error ? "Warning" : "Attivo", settingsState.error ? "warn" : "online", "deployed_code"],
     ["WebSocket Server", hasConnections ? "Connesso" : "Idle", hasConnections ? "online" : "warn", "settings_ethernet"],
     ["Event Bus", "Attivo", "online", "hub"],
-    ["IndexedDB", settingsState.stores.includes(SETTINGS_STORE) ? "Connesso" : "Warning", settingsState.stores.includes(SETTINGS_STORE) ? "online" : "warn", "database"],
+    ["SQLite", settingsState.stores.includes(SETTINGS_STORE) ? "Connesso" : "Warning", settingsState.stores.includes(SETTINGS_STORE) ? "online" : "warn", "database"],
     ["Cache System", settingsState.stores.includes("tl_cache") ? "Attivo" : "N/D", settingsState.stores.includes("tl_cache") ? "online" : "warn", "inventory_2"],
     ["AI Engine", hasProviders ? "Attivo" : "Non configurato", hasProviders ? "online" : "warn", "psychology"],
     ["Notification System", settingsState.settings.notifications.desktop || settingsState.settings.notifications.email ? "Attivo" : "Inattivo", settingsState.settings.notifications.desktop || settingsState.settings.notifications.email ? "online" : "warn", "notifications_active"],
@@ -1093,7 +1036,7 @@ const renderFooter = () =>
   _.footer(
     { class: "tl-settings-footer", "data-settings-footer": "true" },
     _.span(dot(settingsState.error ? "error" : "online"), settingsState.error ? "System Warning" : "System Online"),
-    _.span(dot(settingsState.stores.includes(SETTINGS_STORE) ? "online" : "warn"), settingsState.stores.includes(SETTINGS_STORE) ? "IndexedDB Connected" : "IndexedDB Warning"),
+    _.span(dot(settingsState.stores.includes(SETTINGS_STORE) ? "online" : "warn"), settingsState.stores.includes(SETTINGS_STORE) ? "SQLite Connected" : "SQLite Warning"),
     _.span(`Memory Usage ${performance?.memory?.usedJSHeapSize ? formatBytes(performance.memory.usedJSHeapSize) : "N/D"}`),
     _.span(`Cache Status ${settingsState.stores.includes("tl_cache") ? "Available" : "N/D"}`),
     _.span(`Query ${settingsState.queryMs}ms`),
@@ -1158,14 +1101,9 @@ const loadSettingsStores = async () => {
   setSettingsSignal(clone(settingsState.settings));
   settingsState.createdAt = record?.createdAt || "";
 
-  const db = await ensureSettingsStore();
-  let fallbackConnections = [];
-  try {
-    settingsState.stores = Array.from(db.objectStoreNames || []);
-    fallbackConnections = await readAllFromDb(db, "tl_connections").catch(() => []);
-  } finally {
-    db.close();
-  }
+  const persistence = await ensureSettingsStore();
+  settingsState.stores = (await persistence.listDevelopmentStores()).map((store) => store.name);
+  const fallbackConnections = await readAllFromDb(persistence, "tl_connections").catch(() => []);
   const providersResult = await withTimeout(
     window.TrackerLensAiRuntimeStore?.list?.().catch(() => null) || Promise.resolve(null),
     1600,
@@ -1177,7 +1115,7 @@ const loadSettingsStores = async () => {
     : fallbackConnections;
   settingsState.connections = connectionsResult?.__timeout ? fallbackConnections : connectionsResult;
   if (providersResult?.__timeout || connectionsResult?.__timeout) {
-    settingsState.error = "Alcuni store IndexedDB non hanno risposto in tempo";
+    settingsState.error = "Alcuni repository SQLite non hanno risposto in tempo";
   }
   settingsState.queryMs = Math.max(1, Math.round(performance.now() - started));
 };
@@ -1262,23 +1200,18 @@ const resetSettings = async () => {
 };
 
 const clearStore = async (storeName) => {
-  const db = await ensureSettingsStore();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return 0;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readwrite").objectStore(storeName).clear();
-      request.onsuccess = () => resolve(1);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore pulizia ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  const persistence = await ensureSettingsStore();
+  const records = await readAllFromDb(persistence, storeName);
+  const ids = records.map((record) => record.id).filter(Boolean);
+  if (!ids.length) return 0;
+  await persistence.deleteDevelopmentRecords({ storeName, ids });
+  return ids.length;
 };
 
 const clearCacheStore = async () => {
   try {
-    const cleaned = await clearStore("tl_cache");
-    settingsState.notice = cleaned ? "Cache IndexedDB pulita" : "Store tl_cache non presente";
+    const cleaned = await clearStore("tl_offline_cache");
+    settingsState.notice = cleaned ? "Cache SQLite pulita" : "Cache SQLite già vuota";
   } catch (error) {
     settingsState.error = error?.message || "Errore pulizia cache";
   }

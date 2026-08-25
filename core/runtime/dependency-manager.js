@@ -1,5 +1,4 @@
 window.TrackerLensDependencyManager = (() => {
-  const DB_NAME = "TrackersLens";
   const tableName = (key, fallback) => {
     const config = typeof tlConfig !== "undefined" ? tlConfig : window.tlConfig;
     return config?.TABLES?.[key] || fallback;
@@ -18,19 +17,6 @@ window.TrackerLensDependencyManager = (() => {
     runtimeDependencies: tableName("TL_RUNTIME_DEPENDENCIES", "tl_runtime_dependencies"),
   };
 
-  const STORE_DEFINITIONS = [
-    { name: STORES.widgets, columns: [{ name: "content" }] },
-    { name: STORES.pages, columns: [{ name: "content" }] },
-    { name: STORES.connections, columns: [{ name: "workspaceId" }, { name: "status" }, { name: "updatedAt" }] },
-    { name: STORES.channels, columns: [{ name: "workspaceId" }, { name: "name" }, { name: "status" }, { name: "producerNodeId" }] },
-    { name: STORES.flows, columns: [{ name: "workspaceId" }, { name: "status" }, { name: "updatedAt" }] },
-    { name: STORES.events, columns: [{ name: "workspaceId" }, { name: "channel" }, { name: "eventType" }, { name: "createdAt" }] },
-    { name: STORES.flowLogs, columns: [{ name: "workspaceId" }, { name: "flowId" }, { name: "createdAt" }] },
-    { name: STORES.agents, columns: [{ name: "workspaceId" }, { name: "status" }, { name: "updatedAt" }] },
-    { name: STORES.runtimeNodes, columns: [{ name: "workspaceId" }, { name: "type" }, { name: "sourceRef" }, { name: "updatedAt" }] },
-    { name: STORES.runtimeDependencies, columns: [{ name: "workspaceId" }, { name: "sourceNodeId" }, { name: "targetNodeId" }, { name: "updatedAt" }] },
-  ];
-
   const contentOf = (record) =>
     record?.content && typeof record.content === "object" ? record.content : record || {};
 
@@ -39,97 +25,27 @@ window.TrackerLensDependencyManager = (() => {
     return String(value).trim() || fallback;
   };
 
-  const createIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column.name)) {
-        store.createIndex(column.name, column?.keyPath ?? column.name, column?.options ?? { unique: false });
-      }
-    });
-  };
-
-  const createMissingStores = (db) => {
-    STORE_DEFINITIONS.forEach((definition) => {
-      if (db.objectStoreNames.contains(definition.name)) return;
-      createIndexes(db.createObjectStore(definition.name, { keyPath: "id" }), definition.columns);
-    });
-  };
-
-  const bindVersionChange = (db) => {
-    db.onversionchange = () => {
-      db.close();
-      console.warn("IndexedDB runtime chiuso per consentire aggiornamento da un'altra scheda.");
-    };
-    return db;
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createMissingStores(event.target.result);
-      request.onsuccess = (event) => resolve(bindVersionChange(event.target.result));
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB runtime"));
-      request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-    });
-
   const ensureRuntimeStores = async () => {
-    const db = await openDb();
-    const hasAllStores = STORE_DEFINITIONS.every((definition) => db.objectStoreNames.contains(definition.name));
-    if (hasAllStores) return db;
-
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
+    const bridge = window.trackers?.desktop?.persistence;
+    if (!bridge?.getStatus || !bridge?.readDevelopmentRecords || !bridge?.writeDevelopmentRecords || !bridge?.deleteDevelopmentRecords) throw new Error("Dependency Manager richiede SQLite nell'app desktop.");
+    if ((await bridge.getStatus())?.mode !== "desktop-sqlite") throw new Error("Dependency Manager richiede SQLite nell'app desktop.");
+    return bridge;
   };
 
   const readAll = async (storeName) => {
-    const db = await ensureRuntimeStores();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await ensureRuntimeStores()).readDevelopmentRecords({ storeName });
   };
 
   const deleteRecords = async (storeName, ids = []) => {
     if (!ids.length) return [];
-    const db = await ensureRuntimeStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        ids.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => resolve(ids);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureRuntimeStores()).deleteDevelopmentRecords({ storeName, ids });
+    return ids;
   };
 
   const putRecords = async (storeName, records = []) => {
     if (!records.length) return [];
-    const db = await ensureRuntimeStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        records.forEach((record) => store.put(record));
-        transaction.oncomplete = () => resolve(records);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore aggiornamento ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureRuntimeStores()).writeDevelopmentRecords({ storeName, records });
+    return records;
   };
 
   const stringIncludesAny = (value, candidates) => {

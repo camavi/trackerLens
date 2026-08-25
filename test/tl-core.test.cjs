@@ -108,7 +108,7 @@ test("desktop persistence verifies a development first-cohort import without act
   assert.equal(persistence.deleteDevelopmentRecords({ storeName: "tl_pages", ids: ["page_2"] }).status, "development-delete-complete");
   assert.deepEqual(persistence.readDevelopmentRecords({ storeName: "tl_pages", workspaceId: "workspace_1" }), [{ id: "page_1", workspaceId: "workspace_1" }]);
   assert.equal(persistence.verifyDevelopmentBundle({ stores: { tl_pages: [{ id: "page_1", workspaceId: "workspace_1" }], tl_channels: [] } }).status, "shadow-match");
-  assert.throws(() => persistence.readDevelopmentRecords({ storeName: "tl_ai_memory" }), /Unsupported persistence store/);
+  assert.throws(() => persistence.readDevelopmentRecords({ storeName: "tl_unapproved_records" }), /Unsupported persistence store/);
   assert.equal(persistence.getStatus().mode, "desktop-sqlite");
   assert.equal(persistence.setDevelopmentRuntimeActive({ active: true }).mode, "desktop-sqlite");
   assert.equal(persistence.setDevelopmentRuntimeActive({ active: false }).mode, "desktop-sqlite");

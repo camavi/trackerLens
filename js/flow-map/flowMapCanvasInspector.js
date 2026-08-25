@@ -3263,33 +3263,8 @@ const storageInspectorStoreName = (node = {}) => {
 };
 
 const readStorageInspectorRecords = async (storeName = "tl_history") => {
-  if (!window.indexedDB) return [];
-  return new Promise((resolve) => {
-    const request = indexedDB.open("TrackersLens");
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve([]);
-          return;
-        }
-        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        read.onsuccess = () => {
-          db.close();
-          resolve(Array.isArray(read.result) ? read.result : []);
-        };
-        read.onerror = () => {
-          db.close();
-          resolve([]);
-        };
-      } catch (_) {
-        db.close();
-        resolve([]);
-      }
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  return persistence?.readDevelopmentRecords ? persistence.readDevelopmentRecords({ storeName }).catch(() => []) : [];
 };
 
 const loadStorageInspectorRecord = async (node = {}, { force = false } = {}) => {
@@ -3545,34 +3520,9 @@ const renderInspectorAiRag = (node = {}) => {
 };
 
 const readKnowledgeInspectorStore = async (storeName = "") => {
-  if (!window.indexedDB || !storeName) return [];
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
-  return new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve([]);
-          return;
-        }
-        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        read.onsuccess = () => {
-          db.close();
-          resolve(Array.isArray(read.result) ? read.result : []);
-        };
-        read.onerror = () => {
-          db.close();
-          resolve([]);
-        };
-      } catch (_) {
-        db.close();
-        resolve([]);
-      }
-    };
-  });
+  if (!storeName) return [];
+  const knowledgeRuntime = window.TrackerLensKnowledgeRuntime;
+  return knowledgeRuntime?.listStore ? knowledgeRuntime.listStore(storeName).catch(() => []) : [];
 };
 
 const deleteKnowledgeInspectorStoreRecords = async (storeName = "", ids = []) => {
@@ -3581,36 +3531,9 @@ const deleteKnowledgeInspectorStoreRecords = async (storeName = "", ids = []) =>
   if (window.TrackerLensKnowledgeRuntime?.deleteRecords) {
     return window.TrackerLensKnowledgeRuntime.deleteRecords(storeName, safeIds);
   }
-  if (!window.indexedDB) return [];
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
-  return new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve([]);
-          return;
-        }
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        safeIds.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => {
-          db.close();
-          resolve(safeIds);
-        };
-        transaction.onerror = () => {
-          db.close();
-          resolve([]);
-        };
-      } catch (_) {
-        db.close();
-        resolve([]);
-      }
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.deleteDevelopmentRecords) return [];
+  try { await persistence.deleteDevelopmentRecords({ storeName, ids: safeIds }); return safeIds; } catch { return []; }
 };
 
 const putKnowledgeInspectorStoreRecord = async (storeName = "", record = {}) => {
@@ -3618,35 +3541,9 @@ const putKnowledgeInspectorStoreRecord = async (storeName = "", record = {}) => 
   if (window.TrackerLensKnowledgeRuntime?.putRecord) {
     return window.TrackerLensKnowledgeRuntime.putRecord(storeName, record);
   }
-  if (!window.indexedDB) return null;
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
-  return new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve(null);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve(null);
-          return;
-        }
-        const transaction = db.transaction(storeName, "readwrite");
-        const write = transaction.objectStore(storeName).put(record);
-        write.onsuccess = () => {
-          db.close();
-          resolve(record);
-        };
-        write.onerror = () => {
-          db.close();
-          resolve(null);
-        };
-      } catch (_) {
-        db.close();
-        resolve(null);
-      }
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.writeDevelopmentRecords) return null;
+  try { await persistence.writeDevelopmentRecords({ storeName, records: [record] }); return record; } catch { return null; }
 };
 
 const knowledgeTableName = (key = "", fallback = "") =>

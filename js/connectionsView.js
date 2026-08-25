@@ -363,36 +363,11 @@ const connectionMatchesRuntimeFocus = (connection) => {
 const runtimeStoreName = (key, fallback) => tlConfig?.TABLES?.[key] || fallback;
 
 const readRuntimeStore = async (storeName) => {
-  if (window.TrackerLensRuntimeGraphStore?.ensureStores) {
-    await window.TrackerLensRuntimeGraphStore.ensureStores().then((db) => db?.close?.());
-  } else if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
-    await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const tx = db.transaction(storeName, "readonly");
-      const store = tx.objectStore(storeName);
-      const read = store.getAll();
-      read.onsuccess = (readEvent) => {
-        db.close();
-        resolve(Array.from(readEvent.target.result || []));
-      };
-      read.onerror = (readEvent) => {
-        db.close();
-        reject(readEvent.target.error || new Error(`Errore lettura ${storeName}`));
-      };
-    };
-    request.onerror = (event) => reject(event.target.error || new Error(`Errore apertura ${tlConfig.DB_NAME}`));
-    request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda"));
-  });
+  const graphStore = window.TrackerLensRuntimeGraphStore;
+  if (graphStore?.readAll) return graphStore.readAll(storeName);
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.readDevelopmentRecords) throw new Error("Connections richiede SQLite nell'app desktop.");
+  return persistence.readDevelopmentRecords({ storeName });
 };
 
 const loadRuntimeInspectorData = async () => {

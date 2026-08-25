@@ -161,29 +161,13 @@ const hostFrom = (value = "") => {
   }
 };
 
-const readStore = async (storeName) =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-    const request = indexedDB.open(tlConfig.DB_NAME);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const tx = db.transaction(storeName, "readonly");
-      const getAll = tx.objectStore(storeName).getAll();
-      getAll.onsuccess = (readEvent) => resolve(Array.from(readEvent.target.result || []));
-      getAll.onerror = (readEvent) => reject(readEvent.target.error || new Error(`Errore lettura ${storeName}`));
-      tx.oncomplete = () => db.close();
-      tx.onerror = () => db.close();
-    };
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-  });
+const readStore = async (storeName) => {
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.getStatus || !persistence.readDevelopmentRecords) throw new Error("Analytics richiede il bridge SQLite dell'app desktop.");
+  const status = await persistence.getStatus();
+  if (status?.mode !== "desktop-sqlite") throw new Error("Analytics richiede SQLite nell'app desktop.");
+  return persistence.readDevelopmentRecords({ storeName });
+};
 
 const getStorageEstimate = async () => {
   if (!navigator.storage?.estimate) return null;
@@ -393,13 +377,13 @@ const buildAnalyticsData = async () => {
     loading: false,
     error: "",
     queryMs,
-    source: dbOnline ? "indexeddb" : "empty",
+    source: dbOnline ? "sqlite" : "empty",
     metrics: [
-      { label: "Tracker Attivi", value: formatNumber(trackers.filter((item) => item.active).length), delta: `${trackers.length} totali`, source: "IndexedDB", tone: "gold", icon: "my_location" },
-      { label: "Connessioni Live", value: formatNumber(activeConnections.length), delta: `${connections.length} totali`, source: "IndexedDB", tone: "green", icon: "hub" },
+      { label: "Tracker Attivi", value: formatNumber(trackers.filter((item) => item.active).length), delta: `${trackers.length} totali`, source: "SQLite", tone: "gold", icon: "my_location" },
+      { label: "Connessioni Live", value: formatNumber(activeConnections.length), delta: `${connections.length} totali`, source: "SQLite", tone: "green", icon: "hub" },
       { label: "Richieste/min", value: formatNumber(requestEstimate), delta: "stima runtime", source: perfEventRate ? "Performance" : "Stimato", tone: "blue", icon: "lan" },
       { label: "Events/sec", value: perfEventRate.toFixed(2), delta: performanceRecords.length ? "runtime reale" : "in attesa", source: performanceRecords.length ? "Performance" : "idle", tone: "blue", icon: "speed" },
-      { label: "AI Jobs Attivi", value: formatNumber(aiItems.length), delta: `${aiItems.length ? "rilevati" : "0"}`, source: "IndexedDB", tone: "gold", icon: "psychology" },
+      { label: "AI Jobs Attivi", value: formatNumber(aiItems.length), delta: `${aiItems.length ? "rilevati" : "0"}`, source: "SQLite", tone: "gold", icon: "psychology" },
       { label: "Success Rate", value: `${successRate.toFixed(1)}%`, delta: `${activeConnections.length} ok`, source: connections.length ? "Connessioni" : "Stimato", tone: "green", icon: "donut_large" },
       { label: "Error Rate", value: `${errorRate.toFixed(1)}%`, delta: `${errorConnections.length} errori`, source: connections.length || perfEvents ? "Runtime" : "idle", tone: "red", icon: "error_outline" },
       { label: "Memoria Box", value: formatBytes(perfMemory), delta: performanceRecords.length ? "stimata" : "idle", source: performanceRecords.length ? "Performance" : "idle", tone: "gold", icon: "memory" },
@@ -408,7 +392,7 @@ const buildAnalyticsData = async () => {
     liveEvents,
     trackers: realTrackerRows.length ? realTrackerRows : fallbackTrackers,
     services: [
-      ["IndexedDB", dbOnline ? "Online" : "Vuoto", dbOnline ? "online" : "warn", "database"],
+      ["SQLite", dbOnline ? "Online" : "Vuoto", dbOnline ? "online" : "warn", "database"],
       ["WebSocket", connections.some((item) => item.type === "WebSocket") ? "Online" : "Idle", connections.some((item) => item.type === "WebSocket") ? "online" : "warn", "settings_input_antenna"],
       ["API Services", connections.some((item) => /api|endpoint/i.test(item.type)) ? "Online" : "Idle", connections.some((item) => /api|endpoint/i.test(item.type)) ? "online" : "warn", "api"],
       ["Cache System", storage ? "Online" : "Stimato", storage ? "online" : "warn", "cached"],
@@ -434,7 +418,7 @@ const buildAnalyticsData = async () => {
       totalLabel: formatBytes(usage),
       quotaLabel: `/ ${formatBytes(quota)}`,
       percent: storagePercent,
-      lines: [`IndexedDB ${formatBytes(usage)} (${storagePercent}%)`, `Widget ${formatNumber(widgets.length)} record`, `Workspace ${formatNumber(pages.length)} record`, `Collegamenti ${formatNumber(connections.length)} record`],
+      lines: [`SQLite ${formatBytes(usage)} (${storagePercent}%)`, `Widget ${formatNumber(widgets.length)} record`, `Workspace ${formatNumber(pages.length)} record`, `Collegamenti ${formatNumber(connections.length)} record`],
     },
     workspaces: workspaces.length ? workspaces : analyticsState.workspaces,
     footer: {
@@ -442,7 +426,7 @@ const buildAnalyticsData = async () => {
       uptime: "runtime locale",
       memory: formatBytes(usage),
       cache: storage ? "Storage API ok" : "Storage stimato",
-      indexedDb: dbOnline ? "IndexedDB connected" : "IndexedDB empty",
+      indexedDb: dbOnline ? "SQLite connected" : "SQLite empty",
       lastUpdate: timeLabel(lastItems[0]?.at || new Date()),
     },
   };
@@ -863,7 +847,7 @@ const mountAnalytics = async () => {
     Object.assign(analyticsState, {
       loading: false,
       error: error?.message || "Dati reali non disponibili",
-      footer: { ...analyticsState.footer, indexedDb: "IndexedDB error", lastUpdate: timeLabel(new Date()) },
+      footer: { ...analyticsState.footer, indexedDb: "SQLite error", lastUpdate: timeLabel(new Date()) },
     });
     setLiveEvents(analyticsState.liveEvents);
     setMetrics(analyticsState.metrics);

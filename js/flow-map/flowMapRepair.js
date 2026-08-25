@@ -2,7 +2,6 @@
   const params = new URLSearchParams(window.location.search);
   const workspaceId = String(params.get("workspaceId") || "workspace_global").trim() || "workspace_global";
   const mode = String(params.get("mode") || "hard").trim().toLowerCase();
-  const dbName = ((typeof tlConfig !== "undefined" ? tlConfig : window.tlConfig) || {}).DB_NAME || "TrackersLens";
   const tables = ((typeof tlConfig !== "undefined" ? tlConfig : window.tlConfig) || {}).TABLES || {};
   const output = document.getElementById("output");
   const scanButton = document.getElementById("scan");
@@ -51,12 +50,13 @@
     output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   };
 
-  const openDb = () => new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName);
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error(`Cannot open ${dbName}`));
-    request.onblocked = () => reject(new Error("IndexedDB is blocked by another tab. Close other Trackers Lens tabs and retry."));
-  });
+  const persistence = () => window.trackers?.desktop?.persistence;
+  const ensurePersistence = async () => {
+    const bridge = persistence();
+    if (!bridge?.getStatus || !bridge.readDevelopmentRecords || !bridge.deleteDevelopmentRecords) throw new Error("Flow Map Repair richiede SQLite nell'app desktop.");
+    if ((await bridge.getStatus())?.mode !== "desktop-sqlite") throw new Error("Flow Map Repair richiede SQLite nell'app desktop.");
+    return bridge;
+  };
 
   const valueMatchesWorkspace = (value) => {
     if (!value) return false;
@@ -86,39 +86,12 @@
     return false;
   };
 
-  const readMatchingFromStore = (db, storeName, predicate = recordMatchesWorkspace) => new Promise((resolve, reject) => {
-    if (!db.objectStoreNames.contains(storeName)) {
-      resolve({ store: storeName, skipped: true, records: [] });
-      return;
-    }
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const read = store.getAll();
-    read.onsuccess = () => {
-      const records = Array.from(read.result || []);
-      resolve({ store: storeName, records: records.filter(predicate) });
-    };
-    read.onerror = (event) => reject(event.target.error || new Error(`Cannot read ${storeName}`));
-  });
+  const readMatchingFromStore = async (storeName, predicate = recordMatchesWorkspace) => {
+    const records = await (await ensurePersistence()).readDevelopmentRecords({ storeName });
+    return { store: storeName, records: records.filter(predicate) };
+  };
 
-  const countStore = (db, storeName) => new Promise((resolve, reject) => {
-    if (!db.objectStoreNames.contains(storeName)) {
-      resolve({ store: storeName, skipped: true, records: [] });
-      return;
-    }
-    const transaction = db.transaction(storeName, "readonly");
-    const store = transaction.objectStore(storeName);
-    const read = store.getAll();
-    read.onsuccess = () => resolve({ store: storeName, records: Array.from(read.result || []) });
-    read.onerror = (event) => reject(event.target.error || new Error(`Cannot read ${storeName}`));
-  });
-
-  const wipeDatabase = () => new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(dbName);
-    request.onsuccess = () => resolve({ dbName, deleted: true });
-    request.onerror = (event) => reject(event.target.error || new Error(`Cannot delete ${dbName}`));
-    request.onblocked = () => reject(new Error("IndexedDB delete is blocked. Close every Trackers Lens tab and retry."));
-  });
+  const countStore = async (storeName) => ({ store: storeName, records: await (await ensurePersistence()).readDevelopmentRecords({ storeName }) });
 
   const clearLocalStorage = () => {
     const deleted = [];
@@ -145,10 +118,10 @@
       lastScan = {
         workspaceId,
         mode,
-        token: `DELETE ${dbName}`,
-        stores: [],
+        token: "DELETE FLOWMAP SQLITE",
+        stores: allFlowMapStoreNames.map((store) => ({ store, deleteIds: [] })),
         deletedTotal: "database",
-        warning: `This will delete the entire ${dbName} IndexedDB database.`,
+        warning: "This will clear the managed Flow Map SQLite collections.",
       };
       write(lastScan);
       confirmInput.placeholder = lastScan.token;
@@ -156,15 +129,10 @@
       scanButton.disabled = false;
       return lastScan;
     }
-    const db = await openDb();
     try {
       const targetStores = isGlobalFlowMapMode() ? allFlowMapStoreNames : storeNames;
       const stores = [];
-      for (const storeName of targetStores) {
-        stores.push(isGlobalFlowMapMode()
-          ? await countStore(db, storeName)
-          : await readMatchingFromStore(db, storeName));
-      }
+      for (const storeName of targetStores) stores.push(isGlobalFlowMapMode() ? await countStore(storeName) : await readMatchingFromStore(storeName));
       const localStorageKeys = Object.keys(localStorage || {}).filter((key) =>
         isGlobalFlowMapMode() ? key.startsWith("tl_flow_") || key.includes("flow") : key.includes(workspaceId));
       lastScan = {
@@ -186,10 +154,7 @@
       confirmInput.placeholder = lastScan.token;
       button.disabled = false;
       return lastScan;
-    } finally {
-      db.close();
-      scanButton.disabled = false;
-    }
+    } finally { scanButton.disabled = false; }
   };
 
   const downloadBackup = (payload = {}) => {
@@ -204,19 +169,12 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const deleteRecordsFromStore = (db, storeName, ids = [], clear = false) => new Promise((resolve, reject) => {
-    if (!db.objectStoreNames.contains(storeName)) {
-      resolve({ store: storeName, skipped: true, deleted: 0 });
-      return;
-    }
-    const transaction = db.transaction(storeName, "readwrite");
-    const store = transaction.objectStore(storeName);
-    const summary = { store: storeName, deleted: clear ? "all" : ids.length, cleared: clear };
-    if (clear) store.clear();
-    else ids.forEach((id) => store.delete(id));
-    transaction.oncomplete = () => resolve(summary);
-    transaction.onerror = (event) => reject(event.target.error || new Error(`Cannot delete from ${storeName}`));
-  });
+  const deleteRecordsFromStore = async (storeName, ids = [], clear = false) => {
+    const bridge = await ensurePersistence();
+    const targetIds = clear ? (await bridge.readDevelopmentRecords({ storeName })).map((record) => record.id).filter(Boolean) : ids;
+    await bridge.deleteDevelopmentRecords({ storeName, ids: targetIds });
+    return { store: storeName, deleted: clear ? "all" : targetIds.length, cleared: clear };
+  };
 
   const repair = async () => {
     if (!lastScan) {
@@ -230,23 +188,16 @@
     button.disabled = true;
     scanButton.disabled = true;
     write(`Deleting ${workspaceId} (${mode})...`);
-    if (isWipeDbMode()) {
-      const result = await wipeDatabase();
-      write({ mode, ...result, repairedAt: new Date().toISOString() });
-      button.disabled = false;
-      return result;
-    }
-    const db = await openDb();
     try {
       const backupStores = [];
       const deleteResults = [];
       for (const item of lastScan.stores || []) {
         const ids = item.deleteIds || item.ids || [];
         const records = isGlobalFlowMapMode()
-          ? (await countStore(db, item.store)).records
-          : (await readMatchingFromStore(db, item.store)).records;
+          ? (await countStore(item.store)).records
+          : (await readMatchingFromStore(item.store)).records;
         backupStores.push({ store: item.store, records });
-        deleteResults.push(await deleteRecordsFromStore(db, item.store, ids, isGlobalFlowMapMode()));
+        deleteResults.push(await deleteRecordsFromStore(item.store, ids, isGlobalFlowMapMode() || isWipeDbMode()));
       }
       downloadBackup({ workspaceId, mode, stores: backupStores, localStorageKeys: lastScan.localStorageKeys, createdAt: new Date().toISOString() });
       const localStorageKeys = clearLocalStorage();
@@ -260,10 +211,7 @@
       };
       write(result);
       return result;
-    } finally {
-      db.close();
-      button.disabled = false;
-    }
+    } finally { button.disabled = false; }
   };
 
   workspaceLabel.textContent = workspaceId;

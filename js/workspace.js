@@ -101,13 +101,7 @@ const lensTemplateAssets = [
   searchText: [asset.name, asset.category, asset.description, asset.boxType, "boxLens"].join(" ").toLowerCase(),
 }));
 
-const db = new DatabaseIndexedDB({
-  dbName: tlConfig.DB_NAME,
-  startTables: [
-    { name: tlConfig.TABLES.TL_WIDGETS, columns: [{ name: "content" }] },
-    { name: tlConfig.TABLES.TL_PAGES, columns: [{ name: "content" }] },
-  ],
-});
+const db = new SQLiteRepository();
 
 const gridPresets = {
   columns: [24, 32, 48, 64],
@@ -796,28 +790,12 @@ const trackerDialogInputValue = (eventOrValue) => {
   return eventOrValue || "";
 };
 
-const workspaceFlowMapDbName = () => (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
 const workspaceFlowMapStoreName = (key, fallback) => (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.[key] : null) || fallback;
 
-const openWorkspaceFlowMapDb = () =>
-  new Promise((resolve, reject) => {
-    const request = indexedDB.open(workspaceFlowMapDbName());
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB Flow Map"));
-  });
-
 const readWorkspaceFlowMapStore = async (storeName) => {
-  const openedDb = await openWorkspaceFlowMapDb();
-  try {
-    if (!openedDb.objectStoreNames.contains(storeName)) return [];
-    return await new Promise((resolve, reject) => {
-      const request = openedDb.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
-  } finally {
-    openedDb.close();
-  }
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.readDevelopmentRecords) throw new Error("Workspace richiede SQLite nell'app desktop.");
+  return persistence.readDevelopmentRecords({ storeName });
 };
 
 const workspaceFlowMapContentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};

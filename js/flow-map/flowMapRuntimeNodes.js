@@ -4950,35 +4950,13 @@ const readRuntimeDefaultAiSettings = async () => {
     maxTokens: 2048,
     localFirst: true,
   };
-  if (!window.indexedDB) {
-    runtimeDefaultAiSettingsCache = fallback;
-    return runtimeDefaultAiSettingsCache;
-  }
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
   const storeName = window.tlConfig?.TABLES?.TL_SETTINGS || "tl_settings";
-  runtimeDefaultAiSettingsCache = await new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve(fallback);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve(fallback);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readonly");
-      const store = transaction.objectStore(storeName);
-      const get = store.get("global");
-      get.onsuccess = () => {
-        db.close();
-        resolve({ ...fallback, ...(get.result?.settings?.ai || {}) });
-      };
-      get.onerror = () => {
-        db.close();
-        resolve(fallback);
-      };
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  const records = persistence?.readDevelopmentRecords
+    ? await persistence.readDevelopmentRecords({ storeName }).catch(() => [])
+    : [];
+  const record = records?.find((item) => item.id === "global");
+  runtimeDefaultAiSettingsCache = { ...fallback, ...(record?.settings?.ai || {}) };
   return runtimeDefaultAiSettingsCache;
 };
 
@@ -7157,31 +7135,8 @@ const readRuntimeKnowledgeStore = async (storeName = "") => {
   if (window.TrackerLensKnowledgeRuntime?.listStore) {
     return window.TrackerLensKnowledgeRuntime.listStore(storeName).catch(() => []);
   }
-  if (!window.indexedDB) return [];
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
-  return new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve([]);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readonly");
-      const store = transaction.objectStore(storeName);
-      const all = store.getAll();
-      all.onsuccess = () => {
-        db.close();
-        resolve(Array.isArray(all.result) ? all.result : []);
-      };
-      all.onerror = () => {
-        db.close();
-        resolve([]);
-      };
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  return persistence?.readDevelopmentRecords ? persistence.readDevelopmentRecords({ storeName }).catch(() => []) : [];
 };
 
 const deleteRuntimeKnowledgeStoreRecords = async (storeName = "", ids = []) => {
@@ -7191,31 +7146,12 @@ const deleteRuntimeKnowledgeStoreRecords = async (storeName = "", ids = []) => {
     await window.TrackerLensKnowledgeRuntime.deleteRecords(storeName, safeIds);
     return safeIds.length;
   }
-  if (!window.indexedDB) return 0;
-  const dbName = window.tlConfig?.DB_NAME || "TrackersLens";
-  return new Promise((resolve) => {
-    const request = indexedDB.open(dbName);
-    request.onerror = () => resolve(0);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve(0);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readwrite");
-      const store = transaction.objectStore(storeName);
-      safeIds.forEach((id) => store.delete(id));
-      transaction.oncomplete = () => {
-        db.close();
-        resolve(safeIds.length);
-      };
-      transaction.onerror = () => {
-        db.close();
-        resolve(0);
-      };
-    };
-  });
+  try {
+    await window.trackers?.desktop?.persistence?.deleteDevelopmentRecords?.({ storeName, ids: safeIds });
+    return safeIds.length;
+  } catch {
+    return 0;
+  }
 };
 
 const knowledgeDocumentStoreImpactForDelete = async (node = {}) => {

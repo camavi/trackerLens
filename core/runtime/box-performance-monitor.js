@@ -1,5 +1,4 @@
 window.TrackerLensBoxPerformanceMonitor = (() => {
-  const DB_NAME = "TrackersLens";
   const STORE = "tl_box_performance";
   let desktopSqliteMode = null;
   const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
@@ -9,6 +8,13 @@ window.TrackerLensBoxPerformanceMonitor = (() => {
     if (!persistence?.getStatus) return (desktopSqliteMode = false);
     try { desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite"; } catch (_) { desktopSqliteMode = false; }
     return desktopSqliteMode;
+  };
+  const ensureDb = async () => {
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords || !persistence.writeDevelopmentRecords) {
+      throw new Error("Performance Monitor richiede SQLite nell'app desktop.");
+    }
+    return persistence;
   };
   const SCHEMA_VERSION = "1.0.0";
   const WINDOW_MS = 60 * 1000;
@@ -42,75 +48,23 @@ window.TrackerLensBoxPerformanceMonitor = (() => {
     return eventCount ? "healthy" : "idle";
   };
 
-  const createStores = (db) => {
-    if (db.objectStoreNames.contains(STORE)) return;
-    const store = db.createObjectStore(STORE, { keyPath: "id" });
-    store.createIndex("workspaceId", "workspaceId", { unique: false });
-    store.createIndex("boxId", "boxId", { unique: false });
-    store.createIndex("status", "status", { unique: false });
-    store.createIndex("updatedAt", "updatedAt", { unique: false });
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createStores(event.target.result);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura performance monitor"));
-    });
-
-  const ensureDb = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    const db = await openDb();
-    if (db.objectStoreNames.contains(STORE)) return db;
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
-  };
-
   const write = async (record) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName: STORE, records: [record] });
-      return record;
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) {
+      throw new Error("Performance Monitor richiede SQLite nell'app desktop.");
     }
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORE, "readwrite").objectStore(STORE).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio performance box"));
-      });
-    } finally {
-      db.close();
-    }
+    await persistence.writeDevelopmentRecords({ storeName: STORE, records: [record] });
+    return record;
   };
 
   const list = async ({ workspaceId = "", boxId = "" } = {}) => {
-    if (await usesDesktopSqlite()) {
-      return (await desktopPersistence().readDevelopmentRecords({ storeName: STORE, workspaceId }))
-        .filter((record) => !boxId || record.boxId === boxId)
-        .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) {
+      throw new Error("Performance Monitor richiede SQLite nell'app desktop.");
     }
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORE, "readonly").objectStore(STORE).getAll();
-        request.onsuccess = (event) => {
-          const records = Array.from(event.target.result || [])
-            .filter((record) => !workspaceId || record.workspaceId === workspaceId)
-            .filter((record) => !boxId || record.boxId === boxId)
-            .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
-          resolve(records);
-        };
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura performance box"));
-      });
-    } finally {
-      db.close();
-    }
+    return (await persistence.readDevelopmentRecords({ storeName: STORE, workspaceId }))
+      .filter((record) => !boxId || record.boxId === boxId)
+      .sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
   };
 
   const summarizeWindow = ({ events = [], boxId = "", workspaceId = "global", stat = {}, sample = {} } = {}) => {

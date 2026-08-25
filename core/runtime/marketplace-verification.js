@@ -1,5 +1,4 @@
 window.TrackerLensMarketplaceVerification = (() => {
-  const DB_NAME = "TrackersLens";
   const TRUST_STORE = "tl_marketplace_trust";
   const TRUST_SCHEMA_VERSION = "1.0.0";
   const VERIFIED_CREATORS = new Set(["trackers-lens", "trackerlens", "local"]);
@@ -45,56 +44,21 @@ window.TrackerLensMarketplaceVerification = (() => {
     return `fallback-${Math.abs(hash).toString(16)}`;
   };
 
-  const createStores = (db) => {
-    if (db.objectStoreNames.contains(TRUST_STORE)) return;
-    const store = db.createObjectStore(TRUST_STORE, { keyPath: "id" });
-    store.createIndex("assetId", "assetId", { unique: false });
-    store.createIndex("assetType", "assetType", { unique: false });
-    store.createIndex("status", "status", { unique: false });
-    store.createIndex("trustLevel", "trustLevel", { unique: false });
-    store.createIndex("updatedAt", "updatedAt", { unique: false });
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createStores(event.target.result);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura marketplace trust store"));
-    });
-
+  const persistence = () => window.trackers?.desktop?.persistence || null;
   const ensureDb = async () => {
-    const db = await openDb();
-    if (db.objectStoreNames.contains(TRUST_STORE)) return db;
-    const version = db.version + 1;
-    db.close();
-    return openDb(version);
+    const bridge = persistence();
+    if (!bridge?.getStatus || !bridge?.readDevelopmentRecords || !bridge?.writeDevelopmentRecords) throw new Error("Marketplace Verification richiede SQLite nell'app desktop.");
+    if ((await bridge.getStatus())?.mode !== "desktop-sqlite") throw new Error("Marketplace Verification richiede SQLite nell'app desktop.");
+    return bridge;
   };
 
   const readAllReports = async () => {
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(TRUST_STORE, "readonly").objectStore(TRUST_STORE).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura trust reports"));
-      });
-    } finally {
-      db.close();
-    }
+    return (await ensureDb()).readDevelopmentRecords({ storeName: TRUST_STORE });
   };
 
   const writeReport = async (report) => {
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(TRUST_STORE, "readwrite").objectStore(TRUST_STORE).put(report);
-        request.onsuccess = () => resolve(report);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore scrittura trust report"));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureDb()).writeDevelopmentRecords({ storeName: TRUST_STORE, records: [report] });
+    return report;
   };
 
   const creatorProfile = (asset = {}) => {

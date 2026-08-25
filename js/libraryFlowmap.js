@@ -25,7 +25,6 @@ const selectArrowSlot = {
   arrow: () => icon("keyboard_arrow_down", "sm"),
 };
 
-const DB_NAME = (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
 const PAGE_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_PAGES : null) || "tl_pages";
 const FLOW_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FLOWS : null) || "tl_flows";
 const NODE_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_RUNTIME_NODES : null) || "tl_runtime_nodes";
@@ -34,16 +33,6 @@ const CHANNEL_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CHA
 const EVENT_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_EVENTS : null) || "tl_events";
 const FLOW_LOG_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FLOW_LOGS : null) || "tl_flow_logs";
 const CONNECTION_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CONNECTIONS : null) || "tl_connections";
-const FLOW_LIBRARY_STORE_DEFINITIONS = [
-  { name: PAGE_STORE },
-  { name: FLOW_STORE, indexes: ["workspaceId", "status", "updatedAt"] },
-  { name: NODE_STORE, indexes: ["workspaceId", "type", "updatedAt"] },
-  { name: DEPENDENCY_STORE, indexes: ["workspaceId", "sourceNodeId", "targetNodeId", "updatedAt"] },
-  { name: CHANNEL_STORE, indexes: ["workspaceId"] },
-  { name: EVENT_STORE, indexes: ["workspaceId"] },
-  { name: FLOW_LOG_STORE, indexes: ["workspaceId"] },
-  { name: CONNECTION_STORE, indexes: ["workspaceId"] },
-];
 
 const normalizeText = (value, fallback = "") => value === null || value === undefined ? fallback : String(value).trim() || fallback;
 const openChromePage = (url) => window.location.assign(url);
@@ -79,125 +68,46 @@ const recordUiColor = (record = {}) => {
   return validHexColor(ui.color) ? ui.color : validHexColor(record.color) ? record.color : "";
 };
 
-const openDb = () =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME);
-    request.onupgradeneeded = (event) => createMissingFlowLibraryStores(event.target.result);
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-  });
-
-const createMissingFlowLibraryStores = (db) => {
-  FLOW_LIBRARY_STORE_DEFINITIONS.forEach((definition) => {
-    if (db.objectStoreNames.contains(definition.name)) return;
-    const store = db.createObjectStore(definition.name, { keyPath: "id" });
-    (definition.indexes || []).forEach((index) => store.createIndex(index, index, { unique: false }));
-  });
-};
-
-const ensureFlowLibraryStores = async (storeNames = []) => {
-  const db = await openDb();
-  const required = storeNames.length ? storeNames : FLOW_LIBRARY_STORE_DEFINITIONS.map((definition) => definition.name);
-  if (required.every((storeName) => db.objectStoreNames.contains(storeName))) return db;
-  const nextVersion = db.version + 1;
-  db.close();
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, nextVersion);
-    request.onupgradeneeded = (event) => createMissingFlowLibraryStores(event.target.result);
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore aggiornamento IndexedDB Flow Map"));
-    request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-  });
+const ensureFlowLibraryStores = async () => {
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) throw new Error("Library Flow Map richiede SQLite nell'app desktop.");
+  if ((await persistence.getStatus())?.mode !== "desktop-sqlite") throw new Error("Library Flow Map richiede SQLite nell'app desktop.");
+  return persistence;
 };
 
 const readAll = async (storeName) => {
-  const db = await openDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return [];
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  return (await ensureFlowLibraryStores()).readDevelopmentRecords({ storeName });
 };
 
 const readRecord = async (storeName, id) => {
   if (!storeName || !id) return null;
-  const db = await openDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-      request.onsuccess = (event) => resolve(event.target.result || null);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  return (await readAll(storeName)).find((record) => record.id === id) || null;
 };
 
 const writeRecord = async (storeName, record) => {
   if (!storeName || !record?.id) return null;
-  const db = await ensureFlowLibraryStores([storeName]);
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-      request.onsuccess = () => resolve(record);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  await (await ensureFlowLibraryStores()).writeDevelopmentRecords({ storeName, records: [record] });
+  return record;
 };
 
 const deleteRecord = async (storeName, id) => {
   if (!storeName || !id) return null;
-  const db = await openDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readwrite").objectStore(storeName).delete(id);
-      request.onsuccess = () => resolve(id);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  await (await ensureFlowLibraryStores()).deleteDevelopmentRecords({ storeName, ids: [id] });
+  return id;
 };
 
 const deleteScopedRecords = async (storeName, workspaceId = "") => {
   if (!storeName || !workspaceId) return [];
-  const db = await openDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return [];
-    const records = await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
+  const persistence = await ensureFlowLibraryStores();
+  {
+    const records = await persistence.readDevelopmentRecords({ storeName });
     const ids = records
       .filter((record) => record?.workspaceId === workspaceId || record?.id === workspaceId)
       .map((record) => record.id)
       .filter(Boolean);
     if (!ids.length) return [];
-    await new Promise((resolve, reject) => {
-      const transaction = db.transaction(storeName, "readwrite");
-      const store = transaction.objectStore(storeName);
-      ids.forEach((id) => store.delete(id));
-      transaction.oncomplete = () => resolve(ids);
-      transaction.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-    });
+    await persistence.deleteDevelopmentRecords({ storeName, ids });
     return ids;
-  } finally {
-    db.close();
   }
 };
 

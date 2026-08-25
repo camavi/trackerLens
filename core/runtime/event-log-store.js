@@ -1,5 +1,4 @@
 window.TrackerLensEventLogStore = (() => {
-  const DB_NAME = "TrackersLens";
   const config = () => (typeof tlConfig !== "undefined" ? tlConfig : window.tlConfig) || {};
   const tableName = (key, fallback) => config()?.TABLES?.[key] || fallback;
 
@@ -8,10 +7,6 @@ window.TrackerLensEventLogStore = (() => {
     flowLogs: tableName("TL_FLOW_LOGS", "tl_flow_logs"),
   };
 
-  const STORE_DEFINITIONS = [
-    { name: STORES.events, columns: [{ name: "workspaceId" }, { name: "channel" }, { name: "eventType" }, { name: "createdAt" }] },
-    { name: STORES.flowLogs, columns: [{ name: "workspaceId" }, { name: "flowId" }, { name: "createdAt" }] },
-  ];
   const DEFAULT_RETENTION = {
     eventLimit: 0,
     flowLogLimit: 0,
@@ -24,125 +19,38 @@ window.TrackerLensEventLogStore = (() => {
   const usesDesktopSqlite = async () => {
     if (desktopSqliteMode !== null) return desktopSqliteMode;
     const persistence = desktopPersistence();
-    if (!persistence?.getStatus) {
-      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw new Error("SQLite desktop bridge unavailable.");
-      return (desktopSqliteMode = false);
-    }
+    if (!persistence?.getStatus) throw new Error("Event Log richiede SQLite nell'app desktop.");
     try {
       desktopSqliteMode = (await persistence.getStatus())?.mode === "desktop-sqlite";
     } catch (error) {
-      if (typeof navigator !== "undefined" && /Electron\//i.test(navigator.userAgent || "")) throw error;
-      desktopSqliteMode = false;
+      throw error;
     }
+    if (!desktopSqliteMode) throw new Error("Event Log richiede SQLite nell'app desktop.");
     return desktopSqliteMode;
   };
 
-  const createIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column.name)) {
-        store.createIndex(column.name, column?.keyPath ?? column.name, column?.options ?? { unique: false });
-      }
-    });
-  };
-
-  const createMissingStores = (db) => {
-    STORE_DEFINITIONS.forEach((definition) => {
-      if (db.objectStoreNames.contains(definition.name)) return;
-      createIndexes(db.createObjectStore(definition.name, { keyPath: "id" }), definition.columns);
-    });
-  };
-
-  const bindVersionChange = (db) => {
-    db.onversionchange = () => {
-      db.close();
-      console.warn("IndexedDB event log chiuso per consentire aggiornamento da un'altra scheda.");
-    };
-    return db;
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createMissingStores(event.target.result);
-      request.onsuccess = (event) => resolve(bindVersionChange(event.target.result));
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB event log"));
-      request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-    });
-
   const ensureStores = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    if (window.TrackerLensDependencyManager?.ensureRuntimeStores) {
-      await window.TrackerLensDependencyManager.ensureRuntimeStores().then((db) => db?.close?.());
-    }
-
-    const db = await openDb();
-    const hasAllStores = STORE_DEFINITIONS.every((definition) => db.objectStoreNames.contains(definition.name));
-    if (hasAllStores) return db;
-
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
+    await usesDesktopSqlite();
+    return desktopPersistence();
   };
 
   const write = async (storeName, record) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
-      return record;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore salvataggio ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureStores()).writeDevelopmentRecords({ storeName, records: [record] });
+    return record;
   };
 
   const deleteRecords = async (storeName, ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: uniqueIds });
-      return uniqueIds;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        uniqueIds.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => resolve(uniqueIds);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore cleanup ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureStores()).deleteDevelopmentRecords({ storeName, ids: uniqueIds });
+    return uniqueIds;
   };
 
   const clearStore = async (storeName) => {
-    if (await usesDesktopSqlite()) {
-      const records = await desktopPersistence().readDevelopmentRecords({ storeName });
-      await deleteRecords(storeName, records.map((record) => record.id));
-      return storeName;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).clear();
-        request.onsuccess = () => resolve(storeName);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore reset ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = await ensureStores();
+    const records = await persistence.readDevelopmentRecords({ storeName });
+    await deleteRecords(storeName, records.map((record) => record.id));
+    return storeName;
   };
 
   const clearAll = async () => {
@@ -154,69 +62,28 @@ window.TrackerLensEventLogStore = (() => {
   };
 
   const readRetentionPolicy = async () => {
-    if (await usesDesktopSqlite()) {
-      const settings = await desktopPersistence().readDevelopmentRecords({ storeName: SETTINGS_STORE });
-      const record = settings.find((item) => item.id === SETTINGS_RECORD_ID) || {};
-      const storage = record.settings?.storage || record.content?.settings?.storage || {};
-      const eventLimit = Number(storage.runtimeEventLimit ?? DEFAULT_RETENTION.eventLimit);
-      const flowLogLimit = Number(storage.runtimeFlowLogLimit ?? DEFAULT_RETENTION.flowLogLimit);
-      return {
-        eventLimit: Number.isFinite(eventLimit) && eventLimit > 0 ? Math.floor(eventLimit) : 0,
-        flowLogLimit: Number.isFinite(flowLogLimit) && flowLogLimit > 0 ? Math.floor(flowLogLimit) : 0,
-      };
-    }
-    const db = await ensureStores();
-    try {
-      if (!db.objectStoreNames.contains(SETTINGS_STORE)) return { ...DEFAULT_RETENTION };
-      const settings = await new Promise((resolve) => {
-        const request = db.transaction(SETTINGS_STORE, "readonly").objectStore(SETTINGS_STORE).get(SETTINGS_RECORD_ID);
-        request.onsuccess = (event) => resolve(event.target.result?.settings || {});
-        request.onerror = () => resolve({});
-      });
-      const storage = settings?.storage || {};
-      const eventLimit = Number(storage.runtimeEventLimit ?? DEFAULT_RETENTION.eventLimit);
-      const flowLogLimit = Number(storage.runtimeFlowLogLimit ?? DEFAULT_RETENTION.flowLogLimit);
-      return {
-        eventLimit: Number.isFinite(eventLimit) && eventLimit > 0 ? Math.floor(eventLimit) : 0,
-        flowLogLimit: Number.isFinite(flowLogLimit) && flowLogLimit > 0 ? Math.floor(flowLogLimit) : 0,
-      };
-    } finally {
-      db.close();
-    }
+    const settings = await (await ensureStores()).readDevelopmentRecords({ storeName: SETTINGS_STORE });
+    const record = settings.find((item) => item.id === SETTINGS_RECORD_ID) || {};
+    const storage = record.settings?.storage || record.content?.settings?.storage || {};
+    const eventLimit = Number(storage.runtimeEventLimit ?? DEFAULT_RETENTION.eventLimit);
+    const flowLogLimit = Number(storage.runtimeFlowLogLimit ?? DEFAULT_RETENTION.flowLogLimit);
+    return {
+      eventLimit: Number.isFinite(eventLimit) && eventLimit > 0 ? Math.floor(eventLimit) : 0,
+      flowLogLimit: Number.isFinite(flowLogLimit) && flowLogLimit > 0 ? Math.floor(flowLogLimit) : 0,
+    };
   };
 
   const pruneByScope = async ({ storeName, workspaceId = "global", channel = "", limit = 0 }) => {
     const explicitLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 0;
     if (!explicitLimit) return false;
-    if (await usesDesktopSqlite()) {
-      const records = await desktopPersistence().readDevelopmentRecords({ storeName, workspaceId });
-      const ids = records
-        .filter((record) => !channel || record.channel === channel)
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-        .slice(explicitLimit)
-        .map((record) => record.id);
-      await deleteRecords(storeName, ids);
-      return true;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        const request = store.getAll();
-        request.onsuccess = (event) => {
-          const records = Array.from(event.target.result || [])
-            .filter((record) => record.workspaceId === workspaceId)
-            .filter((record) => !channel || record.channel === channel)
-            .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-          records.slice(explicitLimit).forEach((record) => store.delete(record.id));
-        };
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore cleanup ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const records = await (await ensureStores()).readDevelopmentRecords({ storeName, workspaceId });
+    const ids = records
+      .filter((record) => !channel || record.channel === channel)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(explicitLimit)
+      .map((record) => record.id);
+    await deleteRecords(storeName, ids);
+    return true;
   };
 
   const cleanupEvents = ({ workspaceId = "global", channel = "", limit = 0 } = {}) =>
@@ -360,33 +227,9 @@ window.TrackerLensEventLogStore = (() => {
     return log;
   };
 
-  const listEvents = async () => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName: STORES.events });
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORES.events, "readonly").objectStore(STORES.events).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura eventi runtime"));
-      });
-    } finally {
-      db.close();
-    }
-  };
+  const listEvents = async () => (await ensureStores()).readDevelopmentRecords({ storeName: STORES.events });
 
-  const listFlowLogs = async () => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName: STORES.flowLogs });
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORES.flowLogs, "readonly").objectStore(STORES.flowLogs).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura flow logs runtime"));
-      });
-    } finally {
-      db.close();
-    }
-  };
+  const listFlowLogs = async () => (await ensureStores()).readDevelopmentRecords({ storeName: STORES.flowLogs });
 
   return {
     STORES,

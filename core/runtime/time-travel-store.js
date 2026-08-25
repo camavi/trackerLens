@@ -1,5 +1,4 @@
 window.TrackerLensTimeTravelStore = (() => {
-  const DB_NAME = "TrackersLens";
   const STORE = "tl_time_travel_snapshots";
   let desktopSqliteMode = null;
   const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
@@ -15,106 +14,35 @@ window.TrackerLensTimeTravelStore = (() => {
   const now = () => new Date().toISOString();
   const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
 
-  const createStores = (db) => {
-    if (db.objectStoreNames.contains(STORE)) return;
-    const store = db.createObjectStore(STORE, { keyPath: "id" });
-    store.createIndex("workspaceId", "workspaceId", { unique: false });
-    store.createIndex("reason", "reason", { unique: false });
-    store.createIndex("createdAt", "createdAt", { unique: false });
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => createStores(event.target.result);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura time travel store"));
-    });
-
-  const ensureDb = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    const db = await openDb();
-    if (db.objectStoreNames.contains(STORE)) return db;
-    const version = db.version + 1;
-    db.close();
-    return openDb(version);
-  };
-
   const write = async (record) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName: STORE, records: [record] });
-      return record;
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) {
+      throw new Error("Time Travel richiede SQLite nell'app desktop.");
     }
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORE, "readwrite").objectStore(STORE).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore scrittura time travel snapshot"));
-      });
-    } finally {
-      db.close();
-    }
+    await persistence.writeDevelopmentRecords({ storeName: STORE, records: [record] });
+    return record;
   };
 
   const readAllStore = async (storeName) => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
-    const db = await ensureDb();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Time Travel richiede SQLite nell'app desktop.");
+    return persistence.readDevelopmentRecords({ storeName });
   };
 
   const replaceStore = async (storeName, records = []) => {
-    if (await usesDesktopSqlite()) {
-      const existing = await desktopPersistence().readDevelopmentRecords({ storeName });
-      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: existing.map((record) => record.id) });
-      await desktopPersistence().writeDevelopmentRecords({ storeName, records: records.filter((record) => record?.id) });
-      return { storeName, restored: records.length, skipped: false };
-    }
-    const db = await ensureDb();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return { storeName, restored: 0, skipped: true };
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        store.clear();
-        records.filter((record) => record?.id).forEach((record) => store.put(record));
-        transaction.oncomplete = () => resolve({ storeName, restored: records.length, skipped: false });
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore restore ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords || !persistence?.deleteDevelopmentRecords || !persistence?.writeDevelopmentRecords) throw new Error("Time Travel richiede SQLite nell'app desktop.");
+    const existing = await persistence.readDevelopmentRecords({ storeName });
+    await persistence.deleteDevelopmentRecords({ storeName, ids: existing.map((record) => record.id) });
+    await persistence.writeDevelopmentRecords({ storeName, records: records.filter((record) => record?.id) });
+    return { storeName, restored: records.length, skipped: false };
   };
 
   const list = async ({ workspaceId = "" } = {}) => {
-    if (await usesDesktopSqlite()) {
-      return (await desktopPersistence().readDevelopmentRecords({ storeName: STORE, workspaceId }))
-        .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
-    }
-    const db = await ensureDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORE, "readonly").objectStore(STORE).getAll();
-        request.onsuccess = (event) => {
-          const records = Array.from(event.target.result || [])
-            .filter((record) => !workspaceId || record.workspaceId === workspaceId)
-            .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
-          resolve(records);
-        };
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura time travel snapshots"));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Time Travel richiede SQLite nell'app desktop.");
+    return (await persistence.readDevelopmentRecords({ storeName: STORE, workspaceId }))
+      .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
   };
 
   const capture = async ({ workspaceId = "global", reason = "manual", label = "", state = null } = {}) => {

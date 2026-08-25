@@ -2,7 +2,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const instances = new Map();
   const tokenUsageTotals = new Map();
   const graphAutoClearRuns = new Set();
-  const DB_NAME = window.tlConfig?.DB_NAME || "TrackersLens";
 
   const tableName = (key, fallback) => window.tlConfig?.TABLES?.[key] || fallback;
   const STORES = {
@@ -28,19 +27,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return desktopSqliteMode;
   };
 
-  const STORE_DEFINITIONS = [
-    { name: STORES.documents, columns: ["workspaceId", "sourceId", "status", "createdAt", "updatedAt"] },
-    { name: STORES.chunks, columns: ["workspaceId", "documentId", "sourceId", "createdAt"] },
-    { name: STORES.embeddings, columns: ["workspaceId", "documentId", "chunkId", "provider", "model", "createdAt"] },
-    { name: STORES.entities, columns: ["workspaceId", "documentId", "chunkId", "entityType", "createdAt"] },
-    { name: STORES.relations, columns: ["workspaceId", "sourceEntityId", "targetEntityId", "relationType", "createdAt"] },
-    { name: STORES.dictionary, columns: ["workspaceId", "documentId", "collectionId", "language", "term", "lemma", "scope", "createdAt"] },
-    { name: STORES.events, columns: ["workspaceId", "documentId", "collectionId", "chunkId", "eventType", "sequence", "createdAt"] },
-    { name: STORES.structured, columns: ["workspaceId", "collectionId", "schemaId", "recordType", "parentId", "worldId", "createdAt"] },
-    { name: STORES.queries, columns: ["workspaceId", "query", "status", "createdAt"] },
-    { name: STORES.sources, columns: ["workspaceId", "sourceType", "status", "createdAt"] },
-    { name: STORES.metrics, columns: ["workspaceId", "metric", "createdAt"] },
-  ];
 
   const nowIso = () => new Date().toISOString();
   const safeId = (value = "knowledge") =>
@@ -77,114 +63,33 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
   };
 
-  const createIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column)) store.createIndex(column, column, { unique: false });
-    });
-  };
-
-  const ensureIndexedDbStores = () => new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      const missing = STORE_DEFINITIONS.filter((definition) => !db.objectStoreNames.contains(definition.name));
-      if (!missing.length) {
-        resolve(db);
-        return;
-      }
-      const nextVersion = db.version + 1;
-      db.close();
-      const upgrade = indexedDB.open(DB_NAME, nextVersion);
-      upgrade.onerror = (errorEvent) => reject(errorEvent.target.error || new Error("Errore upgrade IndexedDB Knowledge"));
-      upgrade.onupgradeneeded = (upgradeEvent) => {
-        const upgradeDb = upgradeEvent.target.result;
-        STORE_DEFINITIONS.forEach((definition) => {
-          if (upgradeDb.objectStoreNames.contains(definition.name)) return;
-          createIndexes(upgradeDb.createObjectStore(definition.name, { keyPath: "id" }), definition.columns);
-        });
-      };
-      upgrade.onsuccess = (upgradeEvent) => resolve(upgradeEvent.target.result);
-    };
-  });
-
   const ensureStores = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    return ensureIndexedDbStores();
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) {
+      throw new Error("Knowledge Runtime richiede SQLite nell'app desktop.");
+    }
+    return persistence;
   };
 
   const putRecord = async (storeName, record = {}) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
-      return record;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        transaction.objectStore(storeName).put(record);
-        transaction.oncomplete = () => resolve(record);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureStores()).writeDevelopmentRecords({ storeName, records: [record] });
+    return record;
   };
 
   const listStore = async (storeName) => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readonly");
-        const request = transaction.objectStore(storeName).getAll();
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await ensureStores()).readDevelopmentRecords({ storeName });
   };
 
   const getRecord = async (storeName, id = "") => {
     if (!id) return null;
-    if (await usesDesktopSqlite()) return (await listStore(storeName)).find((record) => record.id === id) || null;
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readonly");
-        const request = transaction.objectStore(storeName).get(id);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await listStore(storeName)).find((record) => record.id === id) || null;
   };
 
   const deleteRecords = async (storeName, ids = []) => {
     const safeIds = [...new Set((ids || []).filter(Boolean).map(String))];
     if (!safeIds.length) return [];
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().deleteDevelopmentRecords({ storeName, ids: safeIds });
-      return safeIds;
-    }
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readwrite");
-        const store = transaction.objectStore(storeName);
-        safeIds.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => resolve(safeIds);
-        transaction.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    await (await ensureStores()).deleteDevelopmentRecords({ storeName, ids: safeIds });
+    return safeIds;
   };
 
   const byWorkspace = (records = [], workspaceId = "workspace_global") =>

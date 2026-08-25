@@ -187,28 +187,12 @@ const listExistingAiAgents = async () => {
   return [];
 };
 
-const flowMapDbName = () => (typeof tlConfig !== "undefined" ? tlConfig.DB_NAME : null) || "TrackersLens";
 const flowMapStoreName = (key, fallback) => (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.[key] : null) || fallback;
 
-const openFlowMapLocalDb = () =>
-  new Promise((resolve, reject) => {
-    const request = indexedDB.open(flowMapDbName());
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB Flow Map"));
-  });
-
 const readFlowMapLocalStore = async (storeName) => {
-  const db = await openFlowMapLocalDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return [];
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.readDevelopmentRecords) throw new Error("Flow Map richiede SQLite nell'app desktop.");
+  return persistence.readDevelopmentRecords({ storeName });
 };
 
 const flowMapContentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};

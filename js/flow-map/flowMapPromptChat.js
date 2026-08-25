@@ -36,52 +36,21 @@ const flowPromptChatTitle = (prompt = "") => {
   return value.length > 64 ? `${value.slice(0, 61)}...` : value || "Nuova chat";
 };
 
-const flowPromptOpenDb = (version = undefined) =>
-  new Promise((resolve, reject) => {
-    const request = version ? indexedDB.open(tlConfig.DB_NAME, version) : indexedDB.open(tlConfig.DB_NAME);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      const storeName = FLOW_PROMPT_CHAT_STORE();
-      if (!db.objectStoreNames.contains(storeName)) {
-        const store = db.createObjectStore(storeName, { keyPath: "id" });
-        store.createIndex("workspaceId", "workspaceId", { unique: false });
-        store.createIndex("updatedAt", "updatedAt", { unique: false });
-      }
-    };
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura storico AI Flow Chat"));
-    request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-  });
-
 const flowPromptEnsureChatStore = async () => {
-  if (!window.indexedDB) throw new Error("IndexedDB non disponibile");
-  const db = await flowPromptOpenDb();
-  if (db.objectStoreNames.contains(FLOW_PROMPT_CHAT_STORE())) return db;
-  const nextVersion = db.version + 1;
-  db.close();
-  return flowPromptOpenDb(nextVersion);
+  const persistence = window.trackers?.desktop?.persistence;
+  if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) throw new Error("AI Flow Chat richiede il bridge SQLite dell'app desktop.");
+  if ((await persistence.getStatus())?.mode !== "desktop-sqlite") throw new Error("AI Flow Chat richiede SQLite nell'app desktop.");
+  return persistence;
 };
 
 const flowPromptListChats = async (workspaceId = currentWorkspaceId()) => {
-  const db = await flowPromptEnsureChatStore();
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(FLOW_PROMPT_CHAT_STORE(), "readonly").objectStore(FLOW_PROMPT_CHAT_STORE()).getAll();
-      request.onsuccess = (event) => resolve(
-        Array.from(event.target.result || [])
-          .filter((chat) => chat.workspaceId === workspaceId)
-          .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
-      );
-      request.onerror = (event) => reject(event.target.error || new Error("Errore lettura storico AI Flow Chat"));
-    });
-  } finally {
-    db.close();
-  }
+  return (await (await flowPromptEnsureChatStore()).readDevelopmentRecords({ storeName: FLOW_PROMPT_CHAT_STORE(), workspaceId }))
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
 };
 
 const flowPromptSaveChat = async (chat = {}) => {
   if (!chat?.id) return null;
-  const db = await flowPromptEnsureChatStore();
+  const persistence = await flowPromptEnsureChatStore();
   const record = {
     workspaceId: currentWorkspaceId(),
     title: "Nuova chat",
@@ -90,29 +59,14 @@ const flowPromptSaveChat = async (chat = {}) => {
     ...chat,
     updatedAt: flowPromptNow(),
   };
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(FLOW_PROMPT_CHAT_STORE(), "readwrite").objectStore(FLOW_PROMPT_CHAT_STORE()).put(record);
-      request.onsuccess = () => resolve(record);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio AI Flow Chat"));
-    });
-  } finally {
-    db.close();
-  }
+  await persistence.writeDevelopmentRecords({ storeName: FLOW_PROMPT_CHAT_STORE(), records: [record] });
+  return record;
 };
 
 const flowPromptDeleteChat = async (chatId = "") => {
   if (!chatId) return false;
-  const db = await flowPromptEnsureChatStore();
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(FLOW_PROMPT_CHAT_STORE(), "readwrite").objectStore(FLOW_PROMPT_CHAT_STORE()).delete(chatId);
-      request.onsuccess = () => resolve(true);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore eliminazione AI Flow Chat"));
-    });
-  } finally {
-    db.close();
-  }
+  await (await flowPromptEnsureChatStore()).deleteDevelopmentRecords({ storeName: FLOW_PROMPT_CHAT_STORE(), ids: [chatId] });
+  return true;
 };
 
 const flowPromptNewChat = (workspaceId = currentWorkspaceId()) => ({

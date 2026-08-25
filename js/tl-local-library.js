@@ -1,5 +1,4 @@
 window.TrackerLensLocalLibrary = (() => {
-  const DB_NAME = "TrackersLens";
   const WIDGET_STORE = "tl_widgets";
   const PAGE_STORE = "tl_pages";
   let desktopSqliteMode = null;
@@ -36,43 +35,10 @@ window.TrackerLensLocalLibrary = (() => {
     return content.type === "flowmap" || content.kind === "flowmap" || content.format === "tlflow" || record?.format === "tlflow";
   };
 
-  const openDb = () =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = indexedDB.open(DB_NAME);
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        db.onversionchange = () => {
-          db.close();
-          console.warn("IndexedDB libreria chiuso per consentire aggiornamento da un'altra scheda.");
-        };
-        resolve(db);
-      };
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-    });
-
   const readAll = async (storeName) => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
-    const db = await openDb();
-
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(storeName, "readonly");
-        const store = transaction.objectStore(storeName);
-        const request = store.getAll();
-
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Local Library richiede SQLite nell'app desktop.");
+    return persistence.readDevelopmentRecords({ storeName });
   };
 
   const normalizeWidgetAsset = (record, index) => {
@@ -185,43 +151,8 @@ window.TrackerLensLocalLibrary = (() => {
   };
 
   const inspect = async () => {
-    if (await usesDesktopSqlite()) {
-      const [widgets, pages] = await Promise.all([readAll(WIDGET_STORE), readAll(PAGE_STORE)]);
-      return { name: "trackers-lens.sqlite", version: "tl-desktop-persistence/v1", stores: [WIDGET_STORE, PAGE_STORE], counts: { [WIDGET_STORE]: widgets.length, [PAGE_STORE]: pages.length }, origin: "tl-core", href: window.location.href };
-    }
-    const db = await openDb();
-
-    try {
-      const stores = Array.from(db.objectStoreNames || []);
-      const counts = {};
-
-      await Promise.all(stores.map((storeName) =>
-        new Promise((resolve) => {
-          const transaction = db.transaction(storeName, "readonly");
-          const store = transaction.objectStore(storeName);
-          const request = store.count();
-          request.onsuccess = (event) => {
-            counts[storeName] = event.target.result || 0;
-            resolve();
-          };
-          request.onerror = () => {
-            counts[storeName] = "errore";
-            resolve();
-          };
-        })
-      ));
-
-      return {
-        name: db.name,
-        version: db.version,
-        stores,
-        counts,
-        origin: window.location.origin,
-        href: window.location.href,
-      };
-    } finally {
-      db.close();
-    }
+    const [widgets, pages] = await Promise.all([readAll(WIDGET_STORE), readAll(PAGE_STORE)]);
+    return { name: "trackers-lens.sqlite", version: "tl-desktop-persistence/v1", stores: [WIDGET_STORE, PAGE_STORE], counts: { [WIDGET_STORE]: widgets.length, [PAGE_STORE]: pages.length }, origin: "tl-core", href: window.location.href };
   };
 
   return {

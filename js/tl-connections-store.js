@@ -1,5 +1,4 @@
 window.TrackerLensConnectionsStore = (() => {
-  const DB_NAME = "TrackersLens";
   const CONNECTION_STORE = "tl_connections";
   const PAGE_STORE = "tl_pages";
   const WIDGET_STORE = "tl_widgets";
@@ -27,125 +26,38 @@ window.TrackerLensConnectionsStore = (() => {
     return String(value).trim() || fallback;
   };
 
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains(CONNECTION_STORE)) {
-          const store = db.createObjectStore(CONNECTION_STORE, { keyPath: "id" });
-          store.createIndex("workspaceId", "workspaceId", { unique: false });
-          store.createIndex("type", "type", { unique: false });
-          store.createIndex("status", "status", { unique: false });
-          store.createIndex("updatedAt", "updatedAt", { unique: false });
-        }
-      };
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-      request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda"));
-    });
-
-  const ensureStore = async () => {
-    if (await usesDesktopSqlite()) return { close() {} };
-    const db = await openDb();
-    if (db.objectStoreNames.contains(CONNECTION_STORE)) return db;
-
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
-  };
-
   const readAll = async (storeName) => {
-    if (await usesDesktopSqlite()) return desktopPersistence().readDevelopmentRecords({ storeName });
-    const db = await ensureStore();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return [];
-
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Connections Store richiede SQLite nell'app desktop.");
+    return persistence.readDevelopmentRecords({ storeName });
   };
 
   const readRecord = async (storeName, id) => {
     if (!id) return null;
-    if (await usesDesktopSqlite()) return (await readAll(storeName)).find((record) => record.id === id) || null;
-    const db = await ensureStore();
-    try {
-      if (!db.objectStoreNames.contains(storeName)) return null;
-
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-        request.onsuccess = (event) => resolve(event.target.result || null);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    return (await readAll(storeName)).find((record) => record.id === id) || null;
   };
 
   const write = async (storeName, record) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName, records: [record] });
-      return record;
-    }
-    const db = await ensureStore();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-        request.onsuccess = () => resolve(record);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore salvataggio ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) throw new Error("Connections Store richiede SQLite nell'app desktop.");
+    await persistence.writeDevelopmentRecords({ storeName, records: [record] });
+    return record;
   };
 
   const remove = async (id) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: [id] });
-      return id;
-    }
-    const db = await ensureStore();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(CONNECTION_STORE, "readwrite").objectStore(CONNECTION_STORE).delete(id);
-        request.onsuccess = () => resolve(id);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore eliminazione collegamento"));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.deleteDevelopmentRecords) throw new Error("Connections Store richiede SQLite nell'app desktop.");
+    await persistence.deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: [id] });
+    return id;
   };
 
   const removeMany = async (ids = []) => {
     const uniqueIds = [...new Set(ids.filter(Boolean).map(String))];
     if (!uniqueIds.length) return [];
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: uniqueIds });
-      return uniqueIds;
-    }
-    const db = await ensureStore();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(CONNECTION_STORE, "readwrite");
-        const store = transaction.objectStore(CONNECTION_STORE);
-        uniqueIds.forEach((id) => store.delete(id));
-        transaction.oncomplete = () => resolve(uniqueIds);
-        transaction.onerror = (event) => reject(event.target.error || new Error("Errore cleanup collegamenti workspace"));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.deleteDevelopmentRecords) throw new Error("Connections Store richiede SQLite nell'app desktop.");
+    await persistence.deleteDevelopmentRecords({ storeName: CONNECTION_STORE, ids: uniqueIds });
+    return uniqueIds;
   };
 
   const workspaceConnectionKey = (connection = {}) => {

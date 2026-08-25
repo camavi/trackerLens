@@ -1561,33 +1561,8 @@ const waitForMinimumTestAnimation = async (startedAt = "") => {
 };
 
 const readStorageRuntimeRecords = async (storeName = "tl_history") => {
-  if (!window.indexedDB) return [];
-  return new Promise((resolve) => {
-    const request = indexedDB.open("TrackersLens");
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve([]);
-          return;
-        }
-        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        read.onsuccess = () => {
-          db.close();
-          resolve(Array.isArray(read.result) ? read.result : []);
-        };
-        read.onerror = () => {
-          db.close();
-          resolve([]);
-        };
-      } catch (_) {
-        db.close();
-        resolve([]);
-      }
-    };
-  });
+  const persistence = window.trackers?.desktop?.persistence;
+  return persistence?.readDevelopmentRecords ? persistence.readDevelopmentRecords({ storeName }).catch(() => []) : [];
 };
 
 const waitForStorageRuntimeRecord = async ({ storeName = "tl_history", nodeId = "", runId = "", timeoutMs = 3000 } = {}) => {
@@ -1604,33 +1579,8 @@ const waitForStorageRuntimeRecord = async ({ storeName = "tl_history", nodeId = 
 };
 
 const readKnowledgeRuntimeRecords = async (storeName = "tl_knowledge_queries") => {
-  if (!window.indexedDB) return [];
-  return new Promise((resolve) => {
-    const request = indexedDB.open("TrackersLens");
-    request.onerror = () => resolve([]);
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      try {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.close();
-          resolve([]);
-          return;
-        }
-        const read = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-        read.onsuccess = () => {
-          db.close();
-          resolve(Array.isArray(read.result) ? read.result : []);
-        };
-        read.onerror = () => {
-          db.close();
-          resolve([]);
-        };
-      } catch (_) {
-        db.close();
-        resolve([]);
-      }
-    };
-  });
+  const knowledgeRuntime = window.TrackerLensKnowledgeRuntime;
+  return knowledgeRuntime?.listStore ? knowledgeRuntime.listStore(storeName).catch(() => []) : [];
 };
 
 const waitForKnowledgeQueryRecord = async ({ workspaceId = "", query = "", timeoutMs = 4000 } = {}) => {

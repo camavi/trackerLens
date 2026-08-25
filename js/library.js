@@ -100,87 +100,43 @@ const assetColorStyle = (color = "#38bdf8") => ({
 
 const contentOf = (record) => record?.content && typeof record.content === "object" ? record.content : record || {};
 
-const openLibraryDb = () =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME);
-    request.onsuccess = (event) => resolve(event.target.result);
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB libreria"));
-  });
+const libraryPersistence = () => window.trackers?.desktop?.persistence || null;
+const ensureLibraryPersistence = async () => {
+  const persistence = libraryPersistence();
+  if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) throw new Error("Libreria richiede SQLite nell'app desktop.");
+  if ((await persistence.getStatus())?.mode !== "desktop-sqlite") throw new Error("Libreria richiede SQLite nell'app desktop.");
+  return persistence;
+};
 
 const readLibraryRecord = async (storeName, id) => {
   if (!storeName || !id) return null;
-  const db = await openLibraryDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
-      request.onsuccess = (event) => resolve(event.target.result || null);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  return (await (await ensureLibraryPersistence()).readDevelopmentRecords({ storeName })).find((record) => record.id === id) || null;
 };
 
 const writeLibraryRecord = async (storeName, record) => {
   if (!storeName || !record?.id) return null;
-  const db = await openLibraryDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(record);
-      request.onsuccess = () => resolve(record);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore scrittura ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  await (await ensureLibraryPersistence()).writeDevelopmentRecords({ storeName, records: [record] });
+  return record;
 };
 
 const deleteLibraryRecord = async (storeName, id) => {
   if (!storeName || !id) return null;
-  const db = await openLibraryDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return null;
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readwrite").objectStore(storeName).delete(id);
-      request.onsuccess = () => resolve(id);
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-    });
-  } finally {
-    db.close();
-  }
+  await (await ensureLibraryPersistence()).deleteDevelopmentRecords({ storeName, ids: [id] });
+  return id;
 };
 
 const deleteScopedLibraryRecords = async (storeName, workspaceId = "") => {
   if (!storeName || !workspaceId) return [];
-  const db = await openLibraryDb();
-  try {
-    if (!db.objectStoreNames.contains(storeName)) return [];
-    const records = await new Promise((resolve, reject) => {
-      const request = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
+  const persistence = await ensureLibraryPersistence();
+  {
+    const records = await persistence.readDevelopmentRecords({ storeName });
     const ids = records
       .filter((record) => record?.workspaceId === workspaceId || record?.id === workspaceId)
       .map((record) => record.id)
       .filter(Boolean);
     if (!ids.length) return [];
-    await new Promise((resolve, reject) => {
-      const transaction = db.transaction(storeName, "readwrite");
-      const store = transaction.objectStore(storeName);
-      ids.forEach((id) => store.delete(id));
-      transaction.oncomplete = () => resolve(ids);
-      transaction.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-    });
+    await persistence.deleteDevelopmentRecords({ storeName, ids });
     return ids;
-  } finally {
-    db.close();
   }
 };
 
@@ -288,61 +244,17 @@ const scanMarketplaceTrust = async () => {
   }
 };
 
-const openSettingsDb = (version = undefined) =>
-  new Promise((resolve, reject) => {
-    if (!window.indexedDB) {
-      reject(new Error("IndexedDB non disponibile"));
-      return;
-    }
-
-    const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
-        db.createObjectStore(SETTINGS_STORE, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = (event) => {
-      const db = event.target.result;
-      db.onversionchange = () => {
-        db.close();
-        console.warn("IndexedDB preferiti libreria chiuso per consentire aggiornamento da un'altra scheda.");
-      };
-      resolve(db);
-    };
-    request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB preferiti"));
-    request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda."));
-  });
-
-const ensureSettingsStore = async () => {
-  const db = await openSettingsDb();
-  if (db.objectStoreNames.contains(SETTINGS_STORE)) return db;
-
-  const nextVersion = db.version + 1;
-  db.close();
-  return openSettingsDb(nextVersion);
-};
+const ensureSettingsStore = ensureLibraryPersistence;
 
 const loadFavoriteIds = async () => {
-  const db = await ensureSettingsStore();
-
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(SETTINGS_STORE, "readonly").objectStore(SETTINGS_STORE).get(FAVORITES_RECORD_ID);
-      request.onsuccess = (event) => {
-        const record = event.target.result || {};
-        const ids = Array.isArray(record.favoriteIds) ? record.favoriteIds : Array.isArray(record.items) ? record.items : [];
-        resolve(new Set(ids.filter(Boolean).map(String)));
-      };
-      request.onerror = (event) => reject(event.target.error || new Error("Errore lettura preferiti"));
-    });
-  } finally {
-    db.close();
-  }
+  const records = await (await ensureSettingsStore()).readDevelopmentRecords({ storeName: SETTINGS_STORE });
+  const record = records.find((item) => item.id === FAVORITES_RECORD_ID) || {};
+  const ids = Array.isArray(record.favoriteIds) ? record.favoriteIds : Array.isArray(record.items) ? record.items : [];
+  return new Set(ids.filter(Boolean).map(String));
 };
 
 const saveFavoriteIds = async () => {
-  const db = await ensureSettingsStore();
+  const persistence = await ensureSettingsStore();
   const record = {
     id: FAVORITES_RECORD_ID,
     type: "libraryFavorites",
@@ -350,15 +262,7 @@ const saveFavoriteIds = async () => {
     updatedAt: new Date().toISOString(),
   };
 
-  try {
-    await new Promise((resolve, reject) => {
-      const request = db.transaction(SETTINGS_STORE, "readwrite").objectStore(SETTINGS_STORE).put(record);
-      request.onsuccess = () => resolve(record);
-      request.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio preferiti"));
-    });
-  } finally {
-    db.close();
-  }
+  await persistence.writeDevelopmentRecords({ storeName: SETTINGS_STORE, records: [record] });
 };
 
 const isFavorite = (item) => libraryState.favoriteIds.has(String(item.id));

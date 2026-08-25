@@ -1,9 +1,5 @@
 window.TrackerLensBoxEditorDialog = (() => {
   const WIDGET_STORE = () => tlConfig.TABLES.TL_WIDGETS;
-  const STORES = () => [
-    { name: tlConfig.TABLES.TL_WIDGETS, columns: [{ name: "content" }] },
-    { name: tlConfig.TABLES.TL_PAGES, columns: [{ name: "content" }] },
-  ];
   let desktopSqliteMode = null;
   const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
   const usesDesktopSqlite = async () => {
@@ -29,112 +25,18 @@ window.TrackerLensBoxEditorDialog = (() => {
       runtimeVersion: box.runtimeVersion || ">=0.1.0",
     };
 
-  const createStoreIndexes = (store, columns = []) => {
-    columns.forEach((column) => {
-      if (!store.indexNames.contains(column.name)) {
-        store.createIndex(column.name, column?.keyPath ?? column.name, column?.options ?? { unique: false });
-      }
-    });
-  };
-
-  const createMissingStores = (dbInstance) => {
-    STORES().forEach((table) => {
-      if (!dbInstance.objectStoreNames.contains(table.name)) {
-        createStoreIndexes(dbInstance.createObjectStore(table.name, { keyPath: "id" }), table.columns);
-      }
-    });
-  };
-
-  const bindVersionChange = (dbInstance) => {
-    dbInstance.onversionchange = () => {
-      dbInstance.close();
-      console.warn("IndexedDB box editor dialog chiuso per consentire aggiornamento da un'altra scheda.");
-    };
-    return dbInstance;
-  };
-
-  const openDb = () =>
-    new Promise((resolve, reject) => {
-      const request = indexedDB.open(tlConfig.DB_NAME);
-      let blockedTimer = null;
-      const clearBlockedTimer = () => {
-        if (blockedTimer) clearTimeout(blockedTimer);
-      };
-
-      request.onupgradeneeded = (event) => createMissingStores(event.target.result);
-      request.onsuccess = (event) => {
-        clearBlockedTimer();
-        const openedDb = bindVersionChange(event.target.result);
-        const hasStores = STORES().every((table) => openedDb.objectStoreNames.contains(table.name));
-        if (hasStores) {
-          resolve(openedDb);
-          return;
-        }
-
-        const nextVersion = openedDb.version + 1;
-        openedDb.close();
-        const upgradeRequest = indexedDB.open(tlConfig.DB_NAME, nextVersion);
-        let upgradeBlockedTimer = null;
-        const clearUpgradeBlockedTimer = () => {
-          if (upgradeBlockedTimer) clearTimeout(upgradeBlockedTimer);
-        };
-        upgradeRequest.onupgradeneeded = (upgradeEvent) => createMissingStores(upgradeEvent.target.result);
-        upgradeRequest.onsuccess = (upgradeEvent) => {
-          clearUpgradeBlockedTimer();
-          resolve(bindVersionChange(upgradeEvent.target.result));
-        };
-        upgradeRequest.onerror = (upgradeEvent) => {
-          clearUpgradeBlockedTimer();
-          reject(upgradeEvent.target.error || new Error("Errore aggiornamento IndexedDB"));
-        };
-        upgradeRequest.onblocked = () => {
-          upgradeBlockedTimer = setTimeout(() => reject(new Error("IndexedDB bloccato da un'altra scheda.")), 8000);
-        };
-      };
-      request.onerror = (event) => {
-        clearBlockedTimer();
-        reject(event.target.error || new Error("Errore apertura IndexedDB"));
-      };
-      request.onblocked = () => {
-        blockedTimer = setTimeout(() => reject(new Error("IndexedDB bloccato da un'altra scheda.")), 8000);
-      };
-    });
-
   const getWidgetRecord = async (id) => {
     if (!id) return null;
-    if (await usesDesktopSqlite()) return (await desktopPersistence().readDevelopmentRecords({ storeName: WIDGET_STORE() })).find((record) => record.id === id) || null;
-    const db = await openDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(WIDGET_STORE(), "readonly");
-        const store = transaction.objectStore(WIDGET_STORE());
-        const request = store.get(id);
-        request.onsuccess = (event) => resolve(event.target.result || null);
-        request.onerror = (event) => reject(event.target.error || new Error("Errore lettura box"));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.readDevelopmentRecords) throw new Error("Box Editor richiede SQLite nell'app desktop.");
+    return (await persistence.readDevelopmentRecords({ storeName: WIDGET_STORE() })).find((record) => record.id === id) || null;
   };
 
   const putWidgetRecord = async (payload) => {
-    if (await usesDesktopSqlite()) {
-      await desktopPersistence().writeDevelopmentRecords({ storeName: WIDGET_STORE(), records: [payload] });
-      return payload;
-    }
-    const db = await openDb();
-    try {
-      return await new Promise((resolve, reject) => {
-        const transaction = db.transaction(WIDGET_STORE(), "readwrite");
-        const store = transaction.objectStore(WIDGET_STORE());
-        store.put(payload);
-        transaction.oncomplete = () => resolve(payload);
-        transaction.onerror = (event) => reject(event.target.error || new Error("Errore salvataggio box"));
-        transaction.onabort = (event) => reject(event.target.error || new Error("Salvataggio box annullato"));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = desktopPersistence();
+    if (!await usesDesktopSqlite() || !persistence?.writeDevelopmentRecords) throw new Error("Box Editor richiede SQLite nell'app desktop.");
+    await persistence.writeDevelopmentRecords({ storeName: WIDGET_STORE(), records: [payload] });
+    return payload;
   };
 
   const normalizeText = (value, fallback = "") => {

@@ -1,5 +1,4 @@
 window.TrackerLensAiRuntimeStore = (() => {
-  const DB_NAME = "TrackersLens";
   const STORES = {
     providers: "tl_ai_providers",
     agents: "tl_ai_agents",
@@ -44,18 +43,6 @@ window.TrackerLensAiRuntimeStore = (() => {
       icon: "dns",
     },
   ];
-  const STORE_INDEXES = {
-    [STORES.providers]: ["status", "updatedAt"],
-    [STORES.agents]: ["status", "updatedAt", "workspaceId"],
-    [STORES.runtime]: ["status", "updatedAt", "workspaceId", "templateId"],
-    [STORES.jobs]: ["status", "updatedAt", "workspaceId", "agentId"],
-    [STORES.logs]: ["status", "updatedAt", "workspaceId", "agentId"],
-    [STORES.memory]: ["status", "updatedAt", "scope", "workspaceId", "agentId", "kind"],
-    [STORES.prompts]: ["status", "updatedAt", "workspaceId"],
-    [STORES.promptFlows]: ["status", "updatedAt", "workspaceId"],
-    [STORES.metrics]: ["status", "updatedAt", "workspaceId", "agentId"],
-  };
-
   const normalizeText = (value, fallback = "") => {
     if (value === null || value === undefined) return fallback;
     return String(value).trim() || fallback;
@@ -67,101 +54,39 @@ window.TrackerLensAiRuntimeStore = (() => {
   const safeId = (value = "") => normalizeText(value, "memory").replace(/[^A-Za-z0-9_-]/g, "_");
   const providerKey = (provider = {}) => normalizeText(provider.id || provider.provider || provider.name).toLowerCase();
 
-  const createIndexes = (store, indexes = []) => {
-    indexes.forEach((indexName) => {
-      if (!store.indexNames.contains(indexName)) {
-        store.createIndex(indexName, indexName, { unique: false });
-      }
-    });
-  };
-
-  const openDb = (version = undefined) =>
-    new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("IndexedDB non disponibile"));
-        return;
-      }
-
-      const request = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        Object.entries(STORE_INDEXES).forEach(([storeName, indexes]) => {
-          const store = db.objectStoreNames.contains(storeName)
-            ? event.target.transaction.objectStore(storeName)
-            : db.createObjectStore(storeName, { keyPath: "id" });
-          createIndexes(store, indexes);
-        });
-      };
-      request.onsuccess = (event) => {
-        const db = event.target.result;
-        db.onversionchange = () => db.close();
-        resolve(db);
-      };
-      request.onerror = (event) => reject(event.target.error || new Error("Errore apertura IndexedDB"));
-      request.onblocked = () => reject(new Error("IndexedDB bloccato da un'altra scheda"));
-    });
+  const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
 
   const ensureStores = async () => {
-    const db = await openDb();
-    const missing = Object.values(STORES).filter((storeName) => !db.objectStoreNames.contains(storeName));
-    const missingIndexes = Object.entries(STORE_INDEXES).some(([storeName, indexes]) => {
-      if (!db.objectStoreNames.contains(storeName)) return true;
-      const transaction = db.transaction(storeName, "readonly");
-      const store = transaction.objectStore(storeName);
-      return indexes.some((indexName) => !store.indexNames.contains(indexName));
-    });
-    if (!missing.length && !missingIndexes) return db;
-
-    const nextVersion = db.version + 1;
-    db.close();
-    return openDb(nextVersion);
+    const persistence = desktopPersistence();
+    if (!persistence?.getStatus || !persistence.readDevelopmentRecords || !persistence.writeDevelopmentRecords || !persistence.deleteDevelopmentRecords) {
+      throw new Error("AI Runtime richiede il bridge SQLite dell'app desktop.");
+    }
+    const status = await persistence.getStatus();
+    if (status?.mode !== "desktop-sqlite") throw new Error("AI Runtime richiede SQLite nell'app desktop.");
+    return persistence;
   };
 
-  const readAllFromDb = (db, storeName) =>
-    new Promise((resolve, reject) => {
-      if (!db.objectStoreNames.contains(storeName)) {
-        resolve([]);
-        return;
-      }
-
-      const transaction = db.transaction(storeName, "readonly");
-      const request = transaction.objectStore(storeName).getAll();
-      request.onsuccess = (event) => resolve(Array.from(event.target.result || []));
-      request.onerror = (event) => reject(event.target.error || new Error(`Errore lettura ${storeName}`));
-    });
+  const readAllFromDb = async (persistence, storeName) =>
+    persistence.readDevelopmentRecords({ storeName });
 
   const write = async (storeName, record) => {
-    const db = await ensureStores();
-    try {
-      const now = new Date().toISOString();
-      const payload = {
-        ...record,
-        id: normalizeText(record.id, `${storeName}_${Date.now()}`),
-        updatedAt: now,
-        createdAt: normalizeText(record.createdAt, now),
-      };
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).put(payload);
-        request.onsuccess = () => resolve(payload);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore salvataggio ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = await ensureStores();
+    const now = new Date().toISOString();
+    const payload = {
+      ...record,
+      id: normalizeText(record.id, `${storeName}_${Date.now()}`),
+      updatedAt: now,
+      createdAt: normalizeText(record.createdAt, now),
+    };
+    await persistence.writeDevelopmentRecords({ storeName, records: [payload] });
+    return payload;
   };
 
   const deleteRecord = async (storeName, id) => {
     if (!id) return null;
-    const db = await ensureStores();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(storeName, "readwrite").objectStore(storeName).delete(id);
-        request.onsuccess = () => resolve(id);
-        request.onerror = (event) => reject(event.target.error || new Error(`Errore eliminazione ${storeName}`));
-      });
-    } finally {
-      db.close();
-    }
+    const persistence = await ensureStores();
+    await persistence.deleteDevelopmentRecords({ storeName, ids: [id] });
+    return id;
   };
 
   const statusTone = (value = "") => {
@@ -467,12 +392,8 @@ window.TrackerLensAiRuntimeStore = (() => {
   };
 
   const readMemoryRecords = async () => {
-    const db = await ensureStores();
-    try {
-      return (await readAllFromDb(db, STORES.memory)).map(normalizeMemory);
-    } finally {
-      db.close();
-    }
+    const persistence = await ensureStores();
+    return (await readAllFromDb(persistence, STORES.memory)).map(normalizeMemory);
   };
 
   const memoryQueryScore = (item = {}, query = "") => {
@@ -574,20 +495,16 @@ window.TrackerLensAiRuntimeStore = (() => {
   const localProviderDefaults = () => LOCAL_PROVIDER_DEFS.map((provider) => ({ ...provider }));
 
   const seedLocalProviders = async () => {
-    const db = await ensureStores();
-    try {
-      const existing = (await readAllFromDb(db, STORES.providers)).map(normalizeProvider);
-      const existingKeys = new Set(existing.map(providerKey));
-      const missing = LOCAL_PROVIDER_DEFS.filter((provider) => !existingKeys.has(providerKey(provider)));
-      await Promise.all(missing.map((provider) => write(STORES.providers, {
-        ...provider,
-        status: "idle",
-        localFirst: true,
-      })));
-      return { created: missing.length, existing: existing.length };
-    } finally {
-      db.close();
-    }
+    const persistence = await ensureStores();
+    const existing = (await readAllFromDb(persistence, STORES.providers)).map(normalizeProvider);
+    const existingKeys = new Set(existing.map(providerKey));
+    const missing = LOCAL_PROVIDER_DEFS.filter((provider) => !existingKeys.has(providerKey(provider)));
+    await Promise.all(missing.map((provider) => write(STORES.providers, {
+      ...provider,
+      status: "idle",
+      localFirst: true,
+    })));
+    return { created: missing.length, existing: existing.length };
   };
 
   const providerHealthUrl = (provider = {}) => {
@@ -637,22 +554,21 @@ window.TrackerLensAiRuntimeStore = (() => {
   };
 
   const list = async () => {
-    const db = await ensureStores();
-    try {
-      const [providerRecords, agentRecords, runtimeRecords, jobRecords, logRecords, memoryRecords, promptRecords, promptFlowRecords, metricRecords, widgetRecords, pageRecords, connectionRecords] = await Promise.all([
-        readAllFromDb(db, STORES.providers),
-        readAllFromDb(db, STORES.agents),
-        readAllFromDb(db, STORES.runtime),
-        readAllFromDb(db, STORES.jobs),
-        readAllFromDb(db, STORES.logs),
-        readAllFromDb(db, STORES.memory),
-        readAllFromDb(db, STORES.prompts),
-        readAllFromDb(db, STORES.promptFlows),
-        readAllFromDb(db, STORES.metrics),
-        readAllFromDb(db, "tl_widgets"),
-        readAllFromDb(db, "tl_pages"),
-        window.TrackerLensConnectionsStore?.list?.() || readAllFromDb(db, "tl_connections"),
-      ]);
+    const persistence = await ensureStores();
+    const [providerRecords, agentRecords, runtimeRecords, jobRecords, logRecords, memoryRecords, promptRecords, promptFlowRecords, metricRecords, widgetRecords, pageRecords, connectionRecords] = await Promise.all([
+      readAllFromDb(persistence, STORES.providers),
+      readAllFromDb(persistence, STORES.agents),
+      readAllFromDb(persistence, STORES.runtime),
+      readAllFromDb(persistence, STORES.jobs),
+      readAllFromDb(persistence, STORES.logs),
+      readAllFromDb(persistence, STORES.memory),
+      readAllFromDb(persistence, STORES.prompts),
+      readAllFromDb(persistence, STORES.promptFlows),
+      readAllFromDb(persistence, STORES.metrics),
+      readAllFromDb(persistence, "tl_widgets"),
+      readAllFromDb(persistence, "tl_pages"),
+      window.TrackerLensConnectionsStore?.list?.() || readAllFromDb(persistence, "tl_connections"),
+    ]);
       const widgets = widgetRecords.map(normalizeWidget);
       const pages = pageRecords.map(normalizeWorkspace);
       const connections = connectionRecords;
@@ -675,27 +591,24 @@ window.TrackerLensAiRuntimeStore = (() => {
       const providers = [...normalizedProviders, ...seededLocalProviders]
         .sort((a, b) => (Number(a.priority) || 100) - (Number(b.priority) || 100));
 
-      return {
-        providers,
-        agents,
-        jobs: jobRecords.map(normalizeJob),
-        logs: logRecords.map(normalizeLog),
-        memory: [
-          ...scopeSummaryMemory(memoryRecordsNormalized),
-          ...storedMemory.slice(0, 8),
-          ...derivedMemory(widgets, pages, connections),
-        ],
-        promptFlows: [...promptRecords, ...promptFlowRecords].map(normalizePromptFlow),
-        runtime: runtimeRecords.map(normalizeRuntimeAgent),
-        metrics: metricRecords.map(normalizeMetric),
-        widgets,
-        pages,
-        connections,
-        stores: BASE_STORES.concat(Object.values(STORES)),
-      };
-    } finally {
-      db.close();
-    }
+    return {
+      providers,
+      agents,
+      jobs: jobRecords.map(normalizeJob),
+      logs: logRecords.map(normalizeLog),
+      memory: [
+        ...scopeSummaryMemory(memoryRecordsNormalized),
+        ...storedMemory.slice(0, 8),
+        ...derivedMemory(widgets, pages, connections),
+      ],
+      promptFlows: [...promptRecords, ...promptFlowRecords].map(normalizePromptFlow),
+      runtime: runtimeRecords.map(normalizeRuntimeAgent),
+      metrics: metricRecords.map(normalizeMetric),
+      widgets,
+      pages,
+      connections,
+      stores: BASE_STORES.concat(Object.values(STORES)),
+    };
   };
 
   return {
