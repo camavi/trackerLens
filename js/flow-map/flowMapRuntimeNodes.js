@@ -2431,19 +2431,27 @@ const requestClearPreviewNodePayload = (node = {}) => {
   dialog.open();
 };
 
+const parsePreviewJsonString = (value = "") => {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  const fenced = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+  const candidate = (fenced?.[1] || text).trim();
+  if (!candidate || !/^[{\[]/.test(candidate)) return null;
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    return null;
+  }
+};
+
 const previewValueText = (value, mode = "auto") => {
   if (mode === "raw") return typeof value === "string" ? value : prettyRuntimeValue(value);
-  if (mode === "json") {
-    if (typeof value === "string") {
-      try {
-        return JSON.stringify(JSON.parse(value), null, 2);
-      } catch (_) {
-        return value;
-      }
-    }
-    return prettyRuntimeValue(value);
+  if (typeof value === "string") {
+    const parsed = parsePreviewJsonString(value);
+    if (parsed !== null) return JSON.stringify(parsed, null, 2);
+    return value;
   }
-  return typeof value === "string" ? value : prettyRuntimeValue(value);
+  return prettyRuntimeValue(value);
 };
 
 const escapePreviewHtml = (value = "") =>
@@ -2541,11 +2549,7 @@ const previewCodeBlock = ({ text = "", mode = "auto", query = "", activeMatch = 
 
 const previewGraphSourceValue = (value) => {
   if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value);
-  } catch (_) {
-    return value;
-  }
+  return parsePreviewJsonString(value) ?? value;
 };
 
 const previewGraphKind = (value) => {
