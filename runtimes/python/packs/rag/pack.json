@@ -18,6 +18,16 @@
       "version": "==0.3.11"
     }
   ],
+  "models": [
+    {
+      "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "revision": "b8ef00830037f9868450f778081ea683e900fe39",
+      "dimensions": 384,
+      "languages": 50,
+      "license": "Apache-2.0",
+      "localOnlyAfterInstall": true
+    }
+  ],
   "capabilities": [
     "knowledge.rag.retrieve",
     "text.semantic_search",

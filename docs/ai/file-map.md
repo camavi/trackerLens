@@ -55,6 +55,7 @@ Last updated: 2026-08-25.
 
 - `CMSwift/`: UI framework.
 - `js/tl-sidebar.js`, `css/tl-sidebar.css`: standard sidebar.
+- `pythonRuntime.html`, `js/pythonRuntimeView.js`, `css/pythonRuntimeView.css`: dedicated transparent management page for Core-registered Python environments, packs and models.
 - `js/TlConfig.js`: store constants and app config.
 - SQLite status diagnostics are read directly from the restricted TL Core preload bridge by `js/settingsView.js`.
 
@@ -69,6 +70,8 @@ Last updated: 2026-08-25.
 - `core/runtime/python-pack-resolver.cjs`: Core-side read-only resolution of declared Python dependency packs; it never installs packages.
 - `core/runtime/runtime-manager.js`: runtime registry, JavaScript execution routing and health status.
 - `core/desktop/managed-python-runtime.cjs`: managed Python process adapter used by the POC and the feature-gated NLP development worker.
+- `core/desktop/python-runtime-catalog.cjs`: Core-only inventory/removal adapter for declared Python packs, managed environments and registered local model directories; returns safe metadata only and never renderer-visible paths.
+- `core/desktop/managed-python-pack-installer.cjs`: Core-only transactional installer for allow-listed trusted packs; creates/reuses a managed venv, installs only a declared lockfile and downloads only declared revision-pinned models after confirmation.
 - `runtimes/python/tl_python_worker.py`: JSON Lines worker with POC handlers and an environment-gated local Sentence Transformers embedding handler.
 - `runtimes/python/tl_python_sdk.py`: minimal capability-scoped Python node SDK.
 - `core/runtime/processor-runtime.js`: owns the Flow Map `Python Test` processor bridge and its Event Bus output/error/status events.

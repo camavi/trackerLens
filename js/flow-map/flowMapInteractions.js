@@ -137,7 +137,42 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
     });
   }
   await loadRuntime();
+  await promptMissingManagedPythonPack(node, item);
   return node || null;
+};
+
+const promptMissingManagedPythonPack = async (node = {}, item = {}) => {
+  const execution = node.metadata?.manifest?.execution || node.execution || item.manifest?.execution || null;
+  const python = execution?.dependencies?.python;
+  const subtype = String(node.metadata?.subtype || node.metadata?.manifest?.subtype || "").toLowerCase();
+  const requiredByDefault = Boolean(python?.requiredByDefault || execution?.runtime === "python" || subtype === "rag-search");
+  if (!python || !requiredByDefault || !window.trackers?.runtime?.pythonPacks?.resolve) return;
+  const resolution = await window.trackers.runtime.pythonPacks.resolve(execution).catch(() => null);
+  if (resolution?.status === "ready" || !resolution?.installPlan?.packId) return;
+  const packId = resolution.installPlan.packId;
+  const requirements = (python.requirements || []).map((item) => `${item.name} ${item.version}`).join(", ");
+  const dialog = _.Dialog({
+    class: "tl-flow-python-pack-dialog",
+    panelClass: "tl-flow-python-pack-panel",
+    size: "md",
+    title: "Questo Nodo richiede Python",
+    subtitle: node.label || node.id,
+    icon: "memory",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-python-pack-copy" },
+      _.p(`Il pack ${packId} non è installato. Questo Nodo non potrà essere eseguito finché il requisito non sarà disponibile.`),
+      _.div(_.span("Ambiente"), _.strong(python.environment)),
+      _.div(_.span("Moduli bloccati"), _.code(requirements || "N/D")),
+      _.p("Puoi installarlo ora: TL mostrerà il piano completo, l’uso della rete e il modello dichiarato prima della conferma finale.")
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ onclick: close }, "Non ora"),
+      btn({ class: "st-btn-primary", onclick: () => window.TrackerLensSidebar?.navigate?.(`pythonRuntime.html?pack=${encodeURIComponent(packId)}&install=1`) }, icon("download", "sm"), "Installa")
+    )
+  });
+  dialog.open();
 };
 
 const isExistingLibraryPaletteItem = (item = {}) =>

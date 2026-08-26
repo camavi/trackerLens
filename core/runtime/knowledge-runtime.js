@@ -1177,14 +1177,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           revision: result.outputs.revision || "",
         };
       } catch (error) {
-        return {
-          vector: tokenVector(text, localDimensions),
-          provider: "local-hash",
-          model: "tl-local-hash-v1",
-          generatedBy: "local-browser",
-          fallbackReason: error?.message || "python-nlp-unavailable",
-          requestedRuntime: "python-local",
-        };
+        throw Object.assign(new Error(`Python NLP pack non installato o non disponibile: ${error?.message || "unknown error"}`), { code: error?.code || "PYTHON_PACK_UNAVAILABLE" });
       }
     }
     const wantsLocal = embeddingRuntime === "local-hash" || (!embeddingRuntime && (!requestedProvider || ["local", "local-hash", "tl-local-hash-v1"].includes(requestedProvider.toLowerCase())));
@@ -1236,7 +1229,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const rankRagCandidatesWithPython = async ({ query = "", queryVector = [], candidates = [], config = {} } = {}) => {
     const bridge = globalThis.trackers?.runtime?.pythonNlp;
-    if (!bridge?.run) throw new Error("Il pack Python RAG non è attivo. Avvia Trackers Lens con npm run dev:nlp.");
+    if (!bridge?.run) throw new Error("Il pack Python RAG non è disponibile. Installalo da Runtime Python e Modelli.");
     const result = await bridge.run({
       executionId: uniqueId("python_rag"),
       operation: "hybrid_search",

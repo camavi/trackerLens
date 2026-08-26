@@ -34,8 +34,10 @@ The execution-contract base now normalizes `environment`, `requirements`,
 `lockfile` and `installPolicy` (`bundled`, `managed-required` or
 `managed-optional`). `core/runtime/python-pack-resolver.cjs` now resolves
 those declarations against a Core-owned, trusted pack catalog and returns only
-`ready`, `unavailable`, `blocked` or a consent-requiring install plan. It has
-no installation command; the current SDK still has no external dependencies.
+`ready`, `unavailable`, `blocked` or a consent-requiring install plan. A
+separate Core-owned installer may execute only the exact trusted pack selected
+by that plan; it never accepts packages, paths, URLs or commands from a node
+or renderer.
 
 `tl_python_worker.py` registers the POC handlers by default. When—and only when—the Core-managed NLP development environment supplies `TL_NLP_MODEL_DIR`, it additionally registers `nlp.text_embedding`; the model is loaded from that local directory with `local_files_only=True`.
 
@@ -49,16 +51,42 @@ revision. The development environment needs Python 3.10–3.12; it has been
 validated locally with Python 3.11 and an offline 384-dimension embedding
 smoke test.
 
-The venv and downloaded model are ignored by Git. `TL_ENABLE_PYTHON_NLP_DEV=1`
-enables a separate Electron/Core/preload bridge only when both artifacts are
-present. Embedding Generator and Vector Memory may explicitly select
+The venv and downloaded model are ignored by Git. Electron exposes the
+Core-managed NLP bridge when the managed environment is available. Embedding
+Generator and Vector Memory may explicitly select
 `embeddingRuntime: "python-local"`; this uses the offline `text.embedding`
-adapter. Without that selection—or if the adapter fails—the existing
-provider/local-hash behavior remains available. There is no implicit install,
-download or production registration. Electron also registers this manifest in
-the Core-owned pack catalog as `ready` only when those local artifacts are
-available; otherwise resolution reports the normal unavailable/install-plan
-state and still performs no installation.
+adapter. Without that selection the existing provider/local-hash behavior
+remains available. A selected Python-local adapter that is missing or fails
+returns an explicit pack-unavailable error; it does not silently change
+algorithms. There is no implicit install
+or download: a missing pack is presented as a trusted installation plan in the
+dedicated Runtime Python page and requires user confirmation. Electron
+registers this manifest in the Core-owned pack catalog as `ready` only when
+its local artifacts are available.
+
+## Runtime and Model Transparency
+
+The dedicated desktop **Runtime Python e Modelli** page exposes a Core-owned
+catalog. It reports managed pack IDs/versions, pinned requirements, environment
+status and model metadata (revision, dimensions, languages, license and exact
+local size). The renderer never receives a Python environment path, a model
+directory path, a filesystem handle or a shell command.
+
+The only destructive catalog operation accepts an allow-listed opaque model ID.
+It requires explicit confirmation, stops the managed environment and then Core
+removes that exact registered model directory. Pack/environment installation is
+not an implicit side effect of opening the runtime page or running a node; the
+implemented transactional installer shows its exact trusted plan and obtains user consent first. A Node
+that declares an unresolved pack displays the requirement in its configuration
+and routes the user to this page; it never starts installation itself.
+
+When a new Node has a Python requirement that is active by default, TL shows a
+CMS install prompt immediately after creation. Choosing **Non ora** preserves
+the node, but its Python execution fails explicitly with a pack-unavailable
+diagnostic. The Core installer publishes phase events (prepare, environment
+creation, dependency install, verification, model download and runtime start)
+through the narrow preload bridge so the Runtime Python page can show actual
+lifecycle progress.
 
 ## Phase 7: Capabilities
 

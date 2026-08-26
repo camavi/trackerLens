@@ -1145,6 +1145,7 @@ const refreshSettings = async () => {
     settingsState.error = "";
     settingsState.notice = "Dati aggiornati";
     await loadSettingsStores();
+    await loadPythonRuntimeCatalog();
     await updateStorageEstimate();
     await loadDesktopPersistenceStatus();
   } catch (error) {
@@ -1320,9 +1321,8 @@ const bootSettings = async () => {
       settingsState.error = "Timeout caricamento store impostazioni";
     }
     await updateStorageEstimate();
+    await loadPythonRuntimeCatalog();
     await loadDesktopPersistenceStatus();
-    // I modelli locali vengono interrogati solo su richiesta esplicita dell'utente.
-    // Evita tentativi automatici verso provider storici/non attivi all'apertura di Settings.
     if (!settingsState.error) settingsState.error = "";
   } catch (error) {
     settingsState.error = error?.message || "Errore caricamento impostazioni";

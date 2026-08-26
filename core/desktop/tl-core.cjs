@@ -24,6 +24,8 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
   const pythonPoc = adapters.pythonPoc || null;
   const pythonNlp = adapters.pythonNlp || null;
   const pythonPacks = adapters.pythonPacks || null;
+  const pythonRuntimeCatalog = adapters.pythonRuntimeCatalog || null;
+  const pythonPackInstaller = adapters.pythonPackInstaller || null;
   const persistence = adapters.persistence || null;
   const flags = { ...DEFAULT_FEATURE_FLAGS, ...featureFlags };
 
@@ -121,6 +123,20 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
       case "runtime.pythonPacks.resolve":
         if (!pythonPacks?.resolve) throw errorWithCode("Python package resolution is unavailable", "PYTHON_PACKS_UNAVAILABLE");
         return pythonPacks.resolve(payload?.execution || {});
+      case "runtime.pythonRuntime.getCatalog":
+        if (!pythonRuntimeCatalog?.getCatalog) throw errorWithCode("Python runtime catalog is unavailable", "PYTHON_RUNTIME_CATALOG_UNAVAILABLE");
+        return pythonRuntimeCatalog.getCatalog();
+      case "runtime.pythonRuntime.getInstallPlan":
+        if (!pythonPackInstaller?.getInstallPlan) throw errorWithCode("Python pack installer is unavailable", "PYTHON_PACK_INSTALLER_UNAVAILABLE");
+        return pythonPackInstaller.getInstallPlan({ packId: String(payload?.packId || "") });
+      case "runtime.pythonRuntime.installPack":
+        if (!pythonPackInstaller?.install) throw errorWithCode("Python pack installer is unavailable", "PYTHON_PACK_INSTALLER_UNAVAILABLE");
+        if (!payload?.confirmed) throw errorWithCode("Python pack installation requires confirmation", "PYTHON_PACK_CONFIRMATION_REQUIRED");
+        return pythonPackInstaller.install({ packId: String(payload?.packId || ""), confirmed: true });
+      case "runtime.pythonRuntime.removeModel":
+        if (!pythonRuntimeCatalog?.removeModel) throw errorWithCode("Python runtime catalog is unavailable", "PYTHON_RUNTIME_CATALOG_UNAVAILABLE");
+        if (!payload?.confirmed) throw errorWithCode("Python model removal requires confirmation", "PYTHON_MODEL_CONFIRMATION_REQUIRED");
+        return pythonRuntimeCatalog.removeModel({ modelId: String(payload?.modelId || ""), confirmed: true });
       default:
         throw new Error(`Unsupported TL Core command: ${String(command || "")}`);
     }

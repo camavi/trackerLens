@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const request = (command, payload = {}) => ipcRenderer.invoke("trackers-core:request", command, payload);
 const pythonPocEnabled = process.argv.includes("--tl-python-poc=1");
-const pythonNlpEnabled = process.argv.includes("--tl-python-nlp-dev=1");
+const pythonNlpEnabled = process.argv.includes("--tl-python-nlp=1");
 
 const trackers = Object.freeze({
   desktop: Object.freeze({
@@ -23,6 +23,21 @@ const trackers = Object.freeze({
   }),
   runtime: Object.freeze({
     getStatus: () => request("runtime.getStatus"),
+    pythonRuntime: Object.freeze({
+      getCatalog: () => request("runtime.pythonRuntime.getCatalog"),
+      getInstallPlan: ({ packId } = {}) => request("runtime.pythonRuntime.getInstallPlan", { packId: String(packId || "") }),
+      installPack: ({ packId, confirmed = false } = {}) => request("runtime.pythonRuntime.installPack", { packId: String(packId || ""), confirmed: Boolean(confirmed) }),
+      onInstallProgress: (listener) => {
+        if (typeof listener !== "function") return () => {};
+        const handler = (_event, progress) => listener(progress && typeof progress === "object" ? progress : {});
+        ipcRenderer.on("trackers-core:python-install-progress", handler);
+        return () => ipcRenderer.removeListener("trackers-core:python-install-progress", handler);
+      },
+      removeModel: ({ modelId, confirmed = false } = {}) => request("runtime.pythonRuntime.removeModel", { modelId: String(modelId || ""), confirmed: Boolean(confirmed) })
+    }),
+    pythonPacks: Object.freeze({
+      resolve: (execution = {}) => request("runtime.pythonPacks.resolve", { execution })
+    }),
     ...(pythonPocEnabled ? { pythonPoc: Object.freeze({
       getStatus: () => request("runtime.pythonPoc.status"),
       start: () => request("runtime.pythonPoc.start"),

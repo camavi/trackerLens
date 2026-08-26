@@ -39,6 +39,7 @@ const normalizePack = (source = {}) => {
   const trustLevel = text(source.trustLevel, "blocked").toLowerCase();
   return {
     id: text(source.id),
+    version: text(source.version),
     environment: text(source.environment),
     lockfile: text(source.lockfile),
     status: text(source.status, "unavailable").toLowerCase(),
@@ -52,6 +53,10 @@ class PythonPackResolver {
   constructor({ packs = [] } = {}) { this.packs = (Array.isArray(packs) ? packs : []).map(normalizePack); }
 
   list() { return this.packs.map(({ packages, ...pack }) => ({ ...clone(pack), packages: clone(packages, []) })); }
+  setStatus(packId, status) {
+    const pack = this.packs.find((item) => item.id === String(packId || ""));
+    if (pack) pack.status = text(status, "unavailable").toLowerCase();
+  }
 
   resolve(execution = {}) {
     const python = execution?.dependencies?.python;
@@ -74,9 +79,14 @@ class PythonPackResolver {
     if (matching) return {
       status: "ready",
       code: "PYTHON_PACK_READY",
-      pack: { id: matching.id, environment: matching.environment, lockfile: matching.lockfile, trustLevel: matching.trustLevel, packages: clone(matching.packages, []) },
+      pack: { id: matching.id, version: matching.version, environment: matching.environment, lockfile: matching.lockfile, trustLevel: matching.trustLevel, packages: clone(matching.packages, []) },
       requirement,
     };
+    const installCandidate = trusted.find((pack) =>
+      (!requirement.lockfile || pack.lockfile === requirement.lockfile) &&
+      requirement.requirements.every((wanted) => pack.packages.some((available) => available.name === wanted.name && satisfiesVersion(available.version, wanted.version))) &&
+      (requirement.installPolicy !== "bundled" || pack.trustLevel === "built-in")
+    );
     const untrusted = candidates.some((pack) => !pack.trusted);
     return {
       status: untrusted ? "blocked" : "unavailable",
@@ -88,6 +98,10 @@ class PythonPackResolver {
         lockfile: requirement.lockfile,
         installPolicy: requirement.installPolicy,
         requiresUserConsent: requirement.installPolicy !== "bundled",
+        supported: Boolean(installCandidate),
+        packId: installCandidate?.id || "",
+        packVersion: installCandidate?.version || "",
+        trustLevel: installCandidate?.trustLevel || "",
       },
     };
   }

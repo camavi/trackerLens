@@ -8,6 +8,7 @@ window.TrackerLensSidebar = (() => {
     { id: "devtools", icon: "developer_board", label: "DevTools", url: "devtools.html" },
     { id: "stats", icon: "monitoring", label: "Statistiche", url: "analytics.html" },
     { id: "ai", icon: "psychology", label: "AI", url: "ai.html" },
+    { id: "python-runtime", icon: "memory", label: "Runtime Python e Modelli", url: "pythonRuntime.html" },
     { id: "settings", icon: "settings", label: "Impostazioni", url: "settings.html" },
   ];
 

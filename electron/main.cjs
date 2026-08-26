@@ -4,6 +4,8 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createTlCore } = require("../core/desktop/tl-core.cjs");
 const { ManagedPythonRuntime } = require("../core/desktop/managed-python-runtime.cjs");
+const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
+const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
 const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs");
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
@@ -15,20 +17,71 @@ const entryPoint = path.join(projectRoot, "flowMap.html");
 const isDevelopment = process.env.NODE_ENV !== "production";
 const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";
 const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
-const pythonNlpRequested = process.env.TL_ENABLE_PYTHON_NLP_DEV === "1";
 const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
 const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
-const pythonNlpEnabled = pythonNlpRequested && fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
+const pythonNlpEnvironmentPath = path.join(projectRoot, "runtimes/python/envs/nlp");
+const pythonNlpBootstrap = process.env.TL_PYTHON_BOOTSTRAP || "python3.11";
+const pythonNlpEnabled = () => fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
 let tlCore = null;
 let pythonPoc = null;
 let pythonNlp = null;
 let persistence = null;
+const createPythonNlpRuntime = () => {
+  if (!fs.existsSync(pythonNlpPythonPath)) return null;
+  if (!pythonNlp) pythonNlp = new ManagedPythonRuntime({
+    pythonPath: pythonNlpPythonPath,
+    workerId: "managed-python-nlp",
+    environment: {
+      TL_NLP_MODEL_DIR: pythonNlpModelPath,
+      TL_NLP_MODEL_ID: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      TL_NLP_MODEL_REVISION: "b8ef00830037f9868450f778081ea683e900fe39",
+      HF_HUB_OFFLINE: "1",
+      HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
+    }
+  });
+  return pythonNlp;
+};
+const pythonNlpAdapter = {
+  status: () => createPythonNlpRuntime()?.status() || { runtime: "python", workerId: "managed-python-nlp", status: "unavailable", reason: "NLP pack is not installed" },
+  start: () => createPythonNlpRuntime()?.start() || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" })),
+  execute: (payload) => createPythonNlpRuntime()?.execute(payload) || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" })),
+  cancel: (executionId) => createPythonNlpRuntime()?.cancel(executionId),
+  restart: () => createPythonNlpRuntime()?.restart() || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" }))
+};
 const pythonPacks = new PythonPackResolver({
   packs: [nlpPackManifest, ragPackManifest].map((manifest) => ({
     ...manifest,
     packages: manifest.requirements.map((requirement) => ({ ...requirement, version: String(requirement.version || "").replace(/^==/, "") })),
-    status: pythonNlpEnabled ? "ready" : "unavailable"
+    status: pythonNlpEnabled() ? "ready" : "unavailable"
   }))
+});
+const nlpEnvironment = {
+  id: "nlp",
+  interpreter: "Python 3.11",
+  interpreterPath: pythonNlpPythonPath,
+  pythonPath: pythonNlpPythonPath,
+  directory: pythonNlpEnvironmentPath,
+  bootstrapPython: pythonNlpBootstrap,
+  requested: () => true,
+  enabled: pythonNlpEnabled,
+  runtimeStatus: () => pythonNlpAdapter.status(),
+  stopRuntime: () => pythonNlp?.stop?.(),
+  onInstalled: async () => {
+    [nlpPackManifest.id, ragPackManifest.id].forEach((packId) => pythonPacks.setStatus(packId, "ready"));
+    await createPythonNlpRuntime()?.restart();
+  },
+  models: [{ ...nlpPackManifest.models[0], displayName: "Multilingual MiniLM L12 v2", directory: pythonNlpModelPath }]
+};
+const pythonRuntimeCatalog = new PythonRuntimeCatalog({
+  packs: [nlpPackManifest, ragPackManifest],
+  environments: [nlpEnvironment]
+});
+const pythonPackInstaller = new ManagedPythonPackInstaller({
+  packs: [nlpPackManifest, ragPackManifest].map((pack) => ({ ...pack, lockfilePath: path.join(projectRoot, pack.lockfile) })),
+  environments: [nlpEnvironment]
+});
+pythonPackInstaller.subscribe((progress) => {
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send("trackers-core:python-install-progress", progress));
 });
 
 const contentSecurityPolicy = [
@@ -92,7 +145,7 @@ const createWindow = () => {
       preload: preloadPath,
       additionalArguments: [
         ...(pythonPocEnabled ? ["--tl-python-poc=1"] : []),
-        ...(pythonNlpEnabled ? ["--tl-python-nlp-dev=1"] : [])
+        "--tl-python-nlp=1"
       ],
       contextIsolation: true,
       sandbox: true,
@@ -129,22 +182,14 @@ app.whenReady().then(() => {
     appVersion: app.getVersion(),
     platform: process.platform,
     mode: isDevelopment ? "development" : "production",
-    featureFlags: { multiRuntime: pythonPocEnabled || pythonNlpEnabled, pythonRuntime: pythonPocEnabled, pythonNlpDev: pythonNlpEnabled },
+    featureFlags: { multiRuntime: pythonPocEnabled || pythonNlpEnabled(), pythonRuntime: pythonPocEnabled, pythonNlpDev: true },
     adapters: {
       openExternal: (url) => shell.openExternal(url),
       pythonPoc: pythonPocEnabled ? (pythonPoc = new ManagedPythonRuntime()) : null,
-      pythonNlp: pythonNlpEnabled ? (pythonNlp = new ManagedPythonRuntime({
-        pythonPath: pythonNlpPythonPath,
-        workerId: "managed-python-nlp-dev",
-        environment: {
-          TL_NLP_MODEL_DIR: pythonNlpModelPath,
-          TL_NLP_MODEL_ID: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-          TL_NLP_MODEL_REVISION: "b8ef00830037f9868450f778081ea683e900fe39",
-          HF_HUB_OFFLINE: "1",
-          HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
-        }
-      })) : null,
+      pythonNlp: pythonNlpAdapter,
       pythonPacks,
+      pythonRuntimeCatalog,
+      pythonPackInstaller,
       persistence: (persistence = new DesktopPersistence({ databasePath: path.join(app.getPath("userData"), "trackers-lens.sqlite") }))
     }
   });

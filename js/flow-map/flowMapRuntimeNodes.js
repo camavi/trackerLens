@@ -1779,11 +1779,11 @@ const configFieldDefinitions = (node = {}) => {
           type: "select",
           options: [
             { value: "local-hash", label: "Local hash — fast, no AI model" },
-            { value: "python-local", label: "Local NLP — Sentence Transformers (development)" },
+            { value: "python-local", label: "Local NLP — Sentence Transformers" },
             { value: "provider", label: "Configured AI provider" },
           ],
           defaultValue: "local-hash",
-          description: "Choose how this node turns text into vectors. Local NLP requires starting Trackers Lens with the NLP development pack enabled.",
+          description: "Choose how this node turns text into vectors. Local NLP is available after its managed Python pack is installed.",
         },
         { key: "dimensions", label: "Dimensions", placeholder: "96" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
@@ -6675,6 +6675,30 @@ const requestRuntimeNodeConfig = async (node) => {
   let formRef = null;
   let aiProviders = [];
   let aiConfigDefaults = {};
+  const pythonExecution = node?.metadata?.manifest?.execution || node?.execution || null;
+  const pythonDependencies = pythonExecution?.dependencies?.python || null;
+  const pythonPackResolution = pythonDependencies && window.trackers?.runtime?.pythonPacks?.resolve
+    ? await window.trackers.runtime.pythonPacks.resolve(pythonExecution).catch(() => null)
+    : null;
+  const renderPythonPackRequirement = () => {
+    if (!pythonDependencies) return null;
+    const ready = pythonPackResolution?.status === "ready";
+    const packId = ready ? pythonPackResolution.pack?.id : pythonPackResolution?.installPlan?.packId;
+    const requirements = (pythonDependencies.requirements || []).map((item) => `${item.name} ${item.version}`).join(", ");
+    return _.section(
+      { class: `tl-flow-config-section tl-flow-python-pack${ready ? " is-ready" : " is-missing"}` },
+      _.h3("Python pack richiesto"),
+      _.p(ready
+        ? `${packId || "Pack Python"} è pronto nell’ambiente ${pythonDependencies.environment}.`
+        : `Questo Nodo richiede ${requirements || "un pack Python gestito"} nell’ambiente ${pythonDependencies.environment}.`),
+      _.small({ class: "tl-flow-config-field-description" }, ready
+        ? "TL esegue soltanto il pack dichiarato dal manifest."
+        : "TL non scarica nulla automaticamente. Apri Runtime Python e Modelli per vedere il piano, le versioni bloccate, la rete richiesta e confermare l’installazione."),
+      !ready && packId
+        ? btn({ class: "tl-flow-config-field-action", onclick: () => window.TrackerLensSidebar?.navigate?.("pythonRuntime.html") }, icon("memory", "sm"), "Apri Runtime Python e Modelli")
+        : null
+    );
+  };
   if (configFields.some((definition) => String(definition.type || "").startsWith("ai-"))) {
     const aiDefaults = await runtimeDefaultAiConfigForDialog();
     aiProviders = aiDefaults.providers;
@@ -6994,7 +7018,8 @@ const requestRuntimeNodeConfig = async (node) => {
         subtitle: `${node.label || node.id} · Knowledge AI runtime node`,
         saveLabel: "Save Node",
         cancelLabel: "Cancel",
-        customTabs: knowledgeFields.length ? [
+        customTabs: [
+          ...(knowledgeFields.length ? [
           {
             name: "knowledge-node",
             label: nodeTab.label,
@@ -7004,7 +7029,14 @@ const requestRuntimeNodeConfig = async (node) => {
               ...knowledgeFields.map(configField)
             ),
           },
-        ] : [],
+          ] : []),
+          ...(pythonDependencies ? [{
+            name: "python-pack",
+            label: "Python Pack",
+            icon: "memory",
+            content: renderPythonPackRequirement(),
+          }] : []),
+        ],
         onSave: ({ payload, form, dialog, close }) => persistKnowledgeAiEditorPayload({ node, payload, form, dialog, close }),
       });
       return;
@@ -7049,8 +7081,9 @@ const requestRuntimeNodeConfig = async (node) => {
         { class: "tl-flow-config-section" },
         _.h3("Python RAG engine"),
         _.p("RAG Search always uses the managed Python Hybrid engine: Sentence Transformers semantic retrieval plus BM25S lexical retrieval. TL keeps scope, storage and output ownership."),
-        _.small({ class: "tl-flow-config-field-description" }, "Start Trackers Lens with npm run dev:nlp. There is no JavaScript ranking fallback in this development phase.")
+        _.small({ class: "tl-flow-config-field-description" }, "If the managed Python pack is missing, install it from Runtime Python e Modelli. There is no JavaScript ranking fallback.")
       ) : null,
+      renderPythonPackRequirement(),
       renderPayloadEditor({ node, defaults, formId }),
       capabilityFields.length ? _.section(
         { class: "tl-flow-config-section" },

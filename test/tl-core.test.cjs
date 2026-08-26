@@ -9,6 +9,8 @@ const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs"
 const executionContract = require("../core/runtime/node-execution-contract.js");
 const { RuntimeManager } = require("../core/runtime/runtime-manager.js");
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
+const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
+const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
 
 test("TL Core exposes desktop status without persistence handles", async () => {
   const core = createTlCore({ appVersion: "1.2.3", platform: "darwin", mode: "development" });
@@ -218,6 +220,78 @@ test("Python package resolution is declarative and exposes no installer", async 
   assert.equal(missing.code, "PYTHON_PACK_MISSING");
   assert.equal(missing.installPlan.requiresUserConsent, true);
   await assert.rejects(createTlCore().request("runtime.pythonPacks.resolve", { execution }), (error) => error.code === "PYTHON_PACKS_UNAVAILABLE");
+});
+
+test("Python runtime catalog exposes managed metadata without local paths and requires removal confirmation", async (context) => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-python-model-"));
+  const modelDirectory = path.join(fixtureDirectory, "model");
+  fs.mkdirSync(modelDirectory);
+  fs.writeFileSync(path.join(modelDirectory, "weights.bin"), "1234567890");
+  context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  let stopped = 0;
+  const catalog = new PythonRuntimeCatalog({
+    packs: [{ id: "builtin-nlp", version: "1.0.0", environment: "nlp", requirements: [{ name: "sentence-transformers", version: "==5.5.0" }], models: [{ id: "model/test" }] }],
+    environments: [{
+      id: "nlp",
+      interpreter: "Python 3.11",
+      interpreterPath: process.execPath,
+      requested: () => true,
+      enabled: () => true,
+      runtimeStatus: () => ({ status: "ready" }),
+      stopRuntime: async () => { stopped += 1; },
+      models: [{ id: "model/test", displayName: "Test model", directory: modelDirectory, revision: "rev", dimensions: 12, languages: 1, license: "Apache-2.0" }]
+    }]
+  });
+  const core = createTlCore({ adapters: { pythonRuntimeCatalog: catalog } });
+  const result = await core.request("runtime.pythonRuntime.getCatalog");
+  assert.equal(result.models[0].sizeBytes, 10);
+  assert.equal(result.models[0].state, "installed");
+  assert.equal(JSON.stringify(result).includes(modelDirectory), false);
+  await assert.rejects(core.request("runtime.pythonRuntime.removeModel", { modelId: "model/test" }), (error) => error.code === "PYTHON_MODEL_CONFIRMATION_REQUIRED");
+  assert.deepEqual(await core.request("runtime.pythonRuntime.removeModel", { modelId: "model/test", confirmed: true }), { removed: true, modelId: "model/test", environmentId: "nlp" });
+  assert.equal(stopped, 1);
+  assert.equal(fs.existsSync(modelDirectory), false);
+});
+
+test("Python pack installation exposes an allow-listed plan and never starts without confirmation", async () => {
+  const installer = new ManagedPythonPackInstaller({
+    packs: [{ id: "builtin-nlp", version: "1.0.0", trustLevel: "built-in", installPolicy: "managed-optional", environment: "nlp", lockfile: "python/nlp.lock", lockfilePath: "/managed/python/nlp.lock", requirements: [{ name: "sentence-transformers", version: "==5.5.0" }] }],
+    environments: [{ id: "nlp", interpreter: "Python 3.11", pythonPath: "/managed/python/bin/python", directory: "/managed/python", bootstrapPython: "python3.11", models: [] }]
+  });
+  const core = createTlCore({ adapters: { pythonPackInstaller: installer } });
+  const plan = await core.request("runtime.pythonRuntime.getInstallPlan", { packId: "builtin-nlp" });
+  assert.equal(plan.pack.id, "builtin-nlp");
+  assert.deepEqual(plan.requirements, [{ name: "sentence-transformers", version: "5.5.0" }]);
+  assert.equal(plan.requiresUserConsent, true);
+  assert.equal(Object.hasOwn(plan, "lockfilePath"), false);
+  await assert.rejects(core.request("runtime.pythonRuntime.installPack", { packId: "builtin-nlp" }), (error) => error.code === "PYTHON_PACK_CONFIRMATION_REQUIRED");
+});
+
+test("managed Python pack installation reports Core-owned progress through verification", async (context) => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-python-install-"));
+  const pythonPath = path.join(fixtureDirectory, "python");
+  const modelDirectory = path.join(fixtureDirectory, "model");
+  fs.writeFileSync(pythonPath, "fixture");
+  context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  const progress = [];
+  let started = 0;
+  const installer = new ManagedPythonPackInstaller({
+    packs: [{ id: "builtin-nlp", version: "1.0.0", trustLevel: "built-in", environment: "nlp", lockfile: "python/nlp.lock", lockfilePath: "/managed/python/nlp.lock", requirements: [{ name: "sentence-transformers", version: "==5.5.0" }], models: [{ id: "model/test", revision: "rev", displayName: "Test model" }] }],
+    environments: [{ id: "nlp", interpreter: "Python 3.11", pythonPath, directory: fixtureDirectory, bootstrapPython: "python3.11", models: [{ id: "model/test", directory: modelDirectory }], onInstalled: async () => { started += 1; } }],
+    runProcess: async (_command, args) => {
+      if (args[1] === "pip") return { stdout: "", stderr: "" };
+      if (args[0] === "-c" && String(args[1]).includes("importlib.metadata")) return { stdout: '{"sentence-transformers":"5.5.0"}', stderr: "" };
+      if (args[0] === "-c") { fs.mkdirSync(args[4], { recursive: true }); fs.writeFileSync(path.join(args[4], "weights.bin"), "fixture"); return { stdout: "", stderr: "" }; }
+      throw new Error(`Unexpected process: ${args.join(" ")}`);
+    }
+  });
+  installer.subscribe((event) => progress.push(event));
+  const result = await installer.install({ packId: "builtin-nlp", confirmed: true });
+  assert.equal(result.status, "installed");
+  assert.deepEqual(result.verifiedRequirements, [{ name: "sentence-transformers", version: "5.5.0" }]);
+  assert.equal(fs.existsSync(modelDirectory), true);
+  assert.equal(started, 1);
+  assert.deepEqual(progress.map((event) => event.phase), ["preparing", "installing-requirements", "verifying-requirements", "downloading-model", "starting-runtime", "complete"]);
 });
 
 test("legacy nodes normalize to the JavaScript execution runtime", () => {
