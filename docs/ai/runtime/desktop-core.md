@@ -24,7 +24,7 @@ The Core allow-lists those commands and validates external URLs/import-plan stor
 
 `desktop.persistence.*` is diagnostic-only during the foundation phase. Main provides TL Core with the private user-data SQLite path, but neither status nor preload reveal it. `planImport` hashes/validates an allow-listed first-cohort export bundle and does not write user data; fixture import exists only in Core tests.
 
-`npm run test:electron-bridge` is a hidden-window smoke test that verifies both bridge forms in a sandboxed/context-isolated Electron renderer.
+`npm run test:desktop` is a hidden-window smoke test that verifies both bridge forms in a sandboxed/context-isolated Electron renderer.
 
 ## Current Ownership
 

@@ -1773,6 +1773,18 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "embedding-generator" || subtype === "vector-memory") {
       return withAiProviderConfigFields([
+        {
+          key: "embeddingRuntime",
+          label: "Embedding engine",
+          type: "select",
+          options: [
+            { value: "local-hash", label: "Local hash — fast, no AI model" },
+            { value: "python-local", label: "Local NLP — Sentence Transformers (development)" },
+            { value: "provider", label: "Configured AI provider" },
+          ],
+          defaultValue: "local-hash",
+          description: "Choose how this node turns text into vectors. Local NLP requires starting Trackers Lens with the NLP development pack enabled.",
+        },
         { key: "dimensions", label: "Dimensions", placeholder: "96" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
         { key: "outputChannel", label: "Output channel", placeholder: "knowledge.embedding.created" },
@@ -1780,9 +1792,34 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "rag-search") {
       return [
+        {
+          key: "embeddingRuntime",
+          label: "Query embedding engine",
+          type: "select",
+          options: [
+            { value: "local-hash", label: "Local hash — match local-hash vectors" },
+            { value: "python-local", label: "Local NLP — match Sentence Transformers vectors" },
+            { value: "provider", label: "Configured AI provider" },
+          ],
+          defaultValue: "local-hash",
+          description: "Use the same engine used by Embedding Generator or Vector Memory for this collection.",
+        },
+        {
+          key: "retrievalRuntime",
+          label: "Retrieval engine",
+          type: "select",
+          options: [
+            { value: "javascript-legacy", label: "Legacy cosine — compatibility mode" },
+            { value: "python-hybrid", label: "Hybrid local NLP — semantic + BM25 (development)" },
+          ],
+          defaultValue: "python-hybrid",
+          description: "Hybrid retrieval uses the local Python NLP pack. TL still controls scope, storage and output.",
+        },
         { key: "query", label: "Query", type: "textarea", placeholder: "How old is Adam?" },
         { key: "topK", label: "Top K", placeholder: "4" },
-        { key: "similarityThreshold", label: "Similarity threshold", placeholder: "0.08" },
+        { key: "semanticWeight", label: "Semantic weight", type: "number", defaultValue: "0.65", placeholder: "0.65" },
+        { key: "lexicalWeight", label: "Lexical weight", type: "number", defaultValue: "0.35", placeholder: "0.35" },
+        { key: "similarityThreshold", label: "Minimum score", placeholder: "0.08" },
         { key: "maxContextTokens", label: "Max context tokens", placeholder: "1200" },
         { key: "includeMetadata", label: "Include metadata", type: "checkbox", defaultValue: true },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
@@ -4134,6 +4171,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
     ],
     "rag-search": [
       { iconName: "search", label: "Query", value: config.query || "event query" },
+      { iconName: "psychology", label: "Retrieval", value: config.retrievalRuntime === "python-hybrid" ? "Python hybrid" : "Legacy cosine" },
       { iconName: "tune", label: "Top K", value: config.topK || "5" },
       { iconName: "speed", label: "Threshold", value: config.similarityThreshold ?? "0.08" },
       { iconName: "article", label: "Context", value: config.maxContextTokens || "1200" },
@@ -6700,6 +6738,8 @@ const requestRuntimeNodeConfig = async (node) => {
   const refreshConditionalConfigFields = (form = formRef) => {
     if (!form) return;
     const strategy = String(form.querySelector('[data-config-key="strategy"]')?.value || "structured").trim().toLowerCase();
+    const embeddingRuntime = String(form.querySelector('[data-config-key="embeddingRuntime"]')?.value || "").trim().toLowerCase();
+    const retrievalRuntime = String(form.querySelector('[data-config-key="retrievalRuntime"]')?.value || "javascript-legacy").trim().toLowerCase();
     const setConfigFieldVisible = (key = "", visible = true) => {
       const input = form.querySelector(`[data-config-key="${key}"]`);
       const fieldRoot = input?.closest?.(".tl-flow-config-field");
@@ -6713,6 +6753,21 @@ const requestRuntimeNodeConfig = async (node) => {
       setConfigFieldVisible("chunkOverlapTokens", strategy === "structured");
       setConfigFieldVisible("chunkSize", false);
       setConfigFieldVisible("chunkOverlap", false);
+    }
+    if (["embedding-generator", "vector-memory"].includes(subtype)) {
+      const dimensions = form.querySelector('[data-config-key="dimensions"]');
+      const isLocalNlp = embeddingRuntime === "python-local";
+      if (dimensions) {
+        if (isLocalNlp) dimensions.value = "384";
+        dimensions.readOnly = isLocalNlp;
+        dimensions.setAttribute("aria-readonly", String(isLocalNlp));
+        dimensions.title = isLocalNlp ? "Sentence Transformers produces fixed 384-dimension vectors." : "";
+      }
+    }
+    if (subtype === "rag-search") {
+      const isHybridPython = retrievalRuntime === "python-hybrid";
+      setConfigFieldVisible("semanticWeight", isHybridPython);
+      setConfigFieldVisible("lexicalWeight", isHybridPython);
     }
     Array.from(form.querySelectorAll("[data-visible-for-strategies]") || []).forEach((fieldRoot) => {
       const strategies = String(fieldRoot.dataset.visibleForStrategies || "")
@@ -6736,6 +6791,8 @@ const requestRuntimeNodeConfig = async (node) => {
       (AI_PROVIDER_CONFIG_KEYS.has(definition.key) ? aiConfigDefaults[definition.key] : undefined) ??
       (definition.key === "previewMode" ? defaults.configObject?.mode : undefined) ??
       definition.defaultValue ?? "";
+    const isFixedNlpDimension = ["embedding-generator", "vector-memory"].includes(subtype) &&
+      definition.key === "dimensions" && String(defaults.configObject?.embeddingRuntime || "").trim().toLowerCase() === "python-local";
     if (definition.type === "ai-provider-profile") {
       const options = [
         { value: "", label: "Auto / local-first" },
@@ -6809,6 +6866,9 @@ const requestRuntimeNodeConfig = async (node) => {
     }
     if (definition.type === "select") {
       const isRuleModeField = KNOWLEDGE_RULE_MODE_CONFIG_KEYS.has(definition.key);
+      const options = (definition.options || []).map((option) => typeof option === "object"
+        ? { value: String(option.value ?? option.label ?? ""), label: String(option.label ?? option.value ?? "") }
+        : { value: String(option), label: String(option) });
       const selectControl = _.label(
         configFieldAttrs(definition),
         _.span(definition.label),
@@ -6823,9 +6883,12 @@ const requestRuntimeNodeConfig = async (node) => {
               refreshConditionalConfigFields(form);
             },
           },
-          ...(definition.options || []).map((option) => _.option({ value: option, selected: option === value }, option))
+          ...options.map((option) => _.option({ value: option.value, selected: option.value === value }, option.label))
         )
       );
+      if (definition.description) {
+        selectControl.append(_.small({ class: "tl-flow-config-field-description" }, definition.description));
+      }
       return isRuleModeField
         ? _.fragment(selectControl, renderKnowledgeCustomRulesControl({ node, subtype, formId }))
         : selectControl;
@@ -6912,13 +6975,14 @@ const requestRuntimeNodeConfig = async (node) => {
     }
     return _.label(
       configFieldAttrs(definition),
-      _.span(definition.label),
+      _.span(isFixedNlpDimension ? `${definition.label} · fixed at 384 for Local NLP` : definition.label),
       _.input({
         "data-config-key": definition.key,
-        value,
+        value: isFixedNlpDimension ? "384" : value,
         placeholder: definition.placeholder || "",
         autocomplete: "off",
         type: definition.type === "number" ? "number" : subtype === "telegram" && definition.key === "botToken" ? "password" : "text",
+        ...(isFixedNlpDimension ? { readonly: true, "aria-readonly": "true", title: "Sentence Transformers produces fixed 384-dimension vectors." } : {}),
         ...(definition.step ? { step: definition.step } : {}),
       })
     );

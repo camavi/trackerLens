@@ -30,7 +30,35 @@ install or fallback/unavailable outcome; it never performs an implicit network
 install. Execution diagnostics must retain the resolved module, version,
 environment and provenance.
 
-`tl_python_worker.py` registers only the POC handlers. `text.transform` is the only normal capability; delay/exception/crash handlers are development diagnostics.
+The execution-contract base now normalizes `environment`, `requirements`,
+`lockfile` and `installPolicy` (`bundled`, `managed-required` or
+`managed-optional`). `core/runtime/python-pack-resolver.cjs` now resolves
+those declarations against a Core-owned, trusted pack catalog and returns only
+`ready`, `unavailable`, `blocked` or a consent-requiring install plan. It has
+no installation command; the current SDK still has no external dependencies.
+
+`tl_python_worker.py` registers the POC handlers by default. When—and only when—the Core-managed NLP development environment supplies `TL_NLP_MODEL_DIR`, it additionally registers `nlp.text_embedding`; the model is loaded from that local directory with `local_files_only=True`.
+
+## Development NLP Pack
+
+`runtimes/python/packs/nlp/` is the first development-only pack definition.
+It pins `sentence-transformers==5.5.0` through `requirements.in` and the full
+`requirements.lock`, and fixes the multilingual local model
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` to its declared
+revision. The development environment needs Python 3.10–3.12; it has been
+validated locally with Python 3.11 and an offline 384-dimension embedding
+smoke test.
+
+The venv and downloaded model are ignored by Git. `TL_ENABLE_PYTHON_NLP_DEV=1`
+enables a separate Electron/Core/preload bridge only when both artifacts are
+present. Embedding Generator and Vector Memory may explicitly select
+`embeddingRuntime: "python-local"`; this uses the offline `text.embedding`
+adapter. Without that selection—or if the adapter fails—the existing
+provider/local-hash behavior remains available. There is no implicit install,
+download or production registration. Electron also registers this manifest in
+the Core-owned pack catalog as `ready` only when those local artifacts are
+available; otherwise resolution reports the normal unavailable/install-plan
+state and still performs no installation.
 
 ## Phase 7: Capabilities
 

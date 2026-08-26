@@ -66,12 +66,14 @@ Last updated: 2026-08-25.
 - `core/desktop/tl-core.cjs`: Electron-independent allow-listed desktop command boundary.
 - `core/desktop/desktop-persistence.cjs`: Core-owned SQLite schema and allow-listed collection operations.
 - `core/runtime/node-execution-contract.js`: versioned multi-runtime manifest/request/result normalization.
+- `core/runtime/python-pack-resolver.cjs`: Core-side read-only resolution of declared Python dependency packs; it never installs packages.
 - `core/runtime/runtime-manager.js`: runtime registry, JavaScript execution routing and health status.
-- `core/desktop/managed-python-runtime.cjs`: managed Python POC process adapter.
-- `runtimes/python/tl_python_worker.py`: standard-library JSON Lines POC worker.
+- `core/desktop/managed-python-runtime.cjs`: managed Python process adapter used by the POC and the feature-gated NLP development worker.
+- `runtimes/python/tl_python_worker.py`: JSON Lines worker with POC handlers and an environment-gated local Sentence Transformers embedding handler.
 - `runtimes/python/tl_python_sdk.py`: minimal capability-scoped Python node SDK.
 - `core/runtime/processor-runtime.js`: owns the Flow Map `Python Test` processor bridge and its Event Bus output/error/status events.
 - `test/tl-core.test.cjs`: unit tests for the desktop boundary.
 - `test/electron-preload-smoke.cjs`: Electron renderer smoke test for the sandboxed preload bridge.
 - `test/python-poc.test.cjs`: Python POC protocol tests.
+- `test/python-nlp-pack.test.cjs`: optional offline local NLP-pack embedding integration test.
 - `docs/ai/runtime/desktop-persistence.md`: SQLite-only desktop persistence contract.

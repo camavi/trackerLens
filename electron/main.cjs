@@ -1,9 +1,13 @@
 const { app, BrowserWindow, ipcMain, shell, session } = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createTlCore } = require("../core/desktop/tl-core.cjs");
 const { ManagedPythonRuntime } = require("../core/desktop/managed-python-runtime.cjs");
 const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs");
+const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
+const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
+const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
 
 const projectRoot = path.resolve(__dirname, "..");
 const preloadPath = path.join(__dirname, "preload.cjs");
@@ -11,9 +15,21 @@ const entryPoint = path.join(projectRoot, "flowMap.html");
 const isDevelopment = process.env.NODE_ENV !== "production";
 const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";
 const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
+const pythonNlpRequested = process.env.TL_ENABLE_PYTHON_NLP_DEV === "1";
+const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
+const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
+const pythonNlpEnabled = pythonNlpRequested && fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
 let tlCore = null;
 let pythonPoc = null;
+let pythonNlp = null;
 let persistence = null;
+const pythonPacks = new PythonPackResolver({
+  packs: [nlpPackManifest, ragPackManifest].map((manifest) => ({
+    ...manifest,
+    packages: manifest.requirements.map((requirement) => ({ ...requirement, version: String(requirement.version || "").replace(/^==/, "") })),
+    status: pythonNlpEnabled ? "ready" : "unavailable"
+  }))
+});
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -74,7 +90,10 @@ const createWindow = () => {
     title: "Trackers Lens",
     webPreferences: {
       preload: preloadPath,
-      additionalArguments: pythonPocEnabled ? ["--tl-python-poc=1"] : [],
+      additionalArguments: [
+        ...(pythonPocEnabled ? ["--tl-python-poc=1"] : []),
+        ...(pythonNlpEnabled ? ["--tl-python-nlp-dev=1"] : [])
+      ],
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -110,10 +129,22 @@ app.whenReady().then(() => {
     appVersion: app.getVersion(),
     platform: process.platform,
     mode: isDevelopment ? "development" : "production",
-    featureFlags: { multiRuntime: pythonPocEnabled, pythonRuntime: pythonPocEnabled },
+    featureFlags: { multiRuntime: pythonPocEnabled || pythonNlpEnabled, pythonRuntime: pythonPocEnabled, pythonNlpDev: pythonNlpEnabled },
     adapters: {
       openExternal: (url) => shell.openExternal(url),
       pythonPoc: pythonPocEnabled ? (pythonPoc = new ManagedPythonRuntime()) : null,
+      pythonNlp: pythonNlpEnabled ? (pythonNlp = new ManagedPythonRuntime({
+        pythonPath: pythonNlpPythonPath,
+        workerId: "managed-python-nlp-dev",
+        environment: {
+          TL_NLP_MODEL_DIR: pythonNlpModelPath,
+          TL_NLP_MODEL_ID: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+          TL_NLP_MODEL_REVISION: "b8ef00830037f9868450f778081ea683e900fe39",
+          HF_HUB_OFFLINE: "1",
+          HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
+        }
+      })) : null,
+      pythonPacks,
       persistence: (persistence = new DesktopPersistence({ databasePath: path.join(app.getPath("userData"), "trackers-lens.sqlite") }))
     }
   });
@@ -129,4 +160,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => { void pythonPoc?.stop?.(); });
+app.on("before-quit", () => { void pythonPoc?.stop?.(); void pythonNlp?.stop?.(); });

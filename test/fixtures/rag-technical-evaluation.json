@@ -1,0 +1,45 @@
+{
+  "id": "rag-technical-evaluation/v1",
+  "language": "it",
+  "description": "Generic technical retrieval evaluation. Fixture expectations are test evidence labels only and must never be used by the runtime.",
+  "chunks": [
+    {
+      "id": "architecture",
+      "text": "L'applicazione separa il renderer dall'esecutore locale. Il renderer mostra l'interfaccia, mentre l'esecutore coordina job, permessi e canali di evento."
+    },
+    {
+      "id": "storage",
+      "text": "I documenti indicizzati e i metadati sono salvati nel database SQLite locale. Il processo applicativo espone soltanto operazioni autorizzate di lettura e scrittura."
+    },
+    {
+      "id": "indexing",
+      "text": "Per costruire un indice, il sistema divide un documento in chunk, calcola un embedding per ogni chunk e conserva il vettore insieme al riferimento del documento."
+    },
+    {
+      "id": "retrieval",
+      "text": "Durante una ricerca, il sistema seleziona i chunk autorizzati, confronta la domanda con gli embedding e combina il punteggio semantico con il punteggio lessicale."
+    },
+    {
+      "id": "security",
+      "text": "Un modulo esterno non può accedere direttamente al database. Riceve solo gli input approvati e restituisce risultati normalizzati al processo applicativo."
+    }
+  ],
+  "queries": [
+    {
+      "query": "Dove vengono salvati documenti e metadati?",
+      "expectedEvidenceIds": ["storage"]
+    },
+    {
+      "query": "Come viene costruito un indice per un documento?",
+      "expectedEvidenceIds": ["indexing"]
+    },
+    {
+      "query": "Che cosa combina la ricerca per ordinare i chunk?",
+      "expectedEvidenceIds": ["retrieval"]
+    },
+    {
+      "query": "Un modulo può leggere direttamente il database?",
+      "expectedEvidenceIds": ["security"]
+    }
+  ]
+}

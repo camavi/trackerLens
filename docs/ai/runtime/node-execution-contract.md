@@ -19,6 +19,27 @@ Contract version: `tl-node-execution/v1`.
 - a versioned request with execution, node, workspace, flow and job identity;
 - a normalized result with outputs, metrics, diagnostics, lifecycle events and provenance.
 
+## Managed Python Dependencies
+
+`execution.dependencies.python` is normalized as a declarative requirement:
+
+```json
+{
+  "environment": "nlp",
+  "requirements": [
+    { "name": "sentence-transformers", "version": "==selected-version" }
+  ],
+  "lockfile": "python/nlp.lock",
+  "installPolicy": "managed-optional"
+}
+```
+
+Supported install policies are `bundled`, `managed-required` and
+`managed-optional`. The contract only carries requirements; neither a node nor
+the renderer/worker can install packages from it. Runtime Manager must resolve
+the requirement in an approved environment, with explicit user consent for a
+non-bundled install, before a Python capability is made available.
+
 ## Compatibility and Routing
 
 - A manifest without `execution` normalizes to legacy `javascript` execution.

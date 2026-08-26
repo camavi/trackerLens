@@ -5304,6 +5304,10 @@ const runFlowMapLiveTest = async (starterNode = null) => {
   state.error = "";
   setFiltersState({ ...state.filters, runId });
   syncFilterQuery();
+  // A live test emits directly onto the workspace bus. Ensure the page-owned
+  // runtimes have subscribed before the root event is emitted; otherwise a
+  // stale/background runtime owner can leave Knowledge children unprocessed.
+  syncPageRuntimes(workspaceId);
   mount({ preserveScroll: true });
 
   try {

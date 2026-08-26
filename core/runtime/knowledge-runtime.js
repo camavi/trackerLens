@@ -1171,7 +1171,38 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const localDimensions = Math.max(16, Math.min(512, Number(config.dimensions || 96)));
     const requestedProvider = String(config.providerProfile || config.provider || providerHint?.provider || providerHint?.id || "").trim();
     const requestedModel = String(modelHint || config.model || providerHint?.model || "").trim();
-    const wantsLocal = !requestedProvider || ["local", "local-hash", "tl-local-hash-v1"].includes(requestedProvider.toLowerCase());
+    const embeddingRuntime = String(config.embeddingRuntime || "").trim().toLowerCase();
+    if (embeddingRuntime === "python-local") {
+      try {
+        const result = await globalThis.trackers?.runtime?.pythonNlp?.run?.({
+          executionId: uniqueId("python_embedding"),
+          operation: "text_embedding",
+          inputs: { text: String(text || "") },
+          context: { capability: "text.embedding" },
+          timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000))
+        });
+        const vector = Array.isArray(result?.outputs?.vector) ? result.outputs.vector.map(Number).filter(Number.isFinite) : [];
+        if (!vector.length) throw new Error("Python NLP embedding response vuota");
+        return {
+          vector,
+          provider: "python-nlp",
+          providerType: "sentence-transformers",
+          model: result.outputs.model || "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+          generatedBy: "python-pack",
+          revision: result.outputs.revision || "",
+        };
+      } catch (error) {
+        return {
+          vector: tokenVector(text, localDimensions),
+          provider: "local-hash",
+          model: "tl-local-hash-v1",
+          generatedBy: "local-browser",
+          fallbackReason: error?.message || "python-nlp-unavailable",
+          requestedRuntime: "python-local",
+        };
+      }
+    }
+    const wantsLocal = embeddingRuntime === "local-hash" || (!embeddingRuntime && (!requestedProvider || ["local", "local-hash", "tl-local-hash-v1"].includes(requestedProvider.toLowerCase())));
     if (wantsLocal) {
       const model = requestedModel || "tl-local-hash-v1";
       return {
@@ -1216,6 +1247,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
         requestedModel: requestedModel || provider.model || "",
       };
     }
+  };
+
+  const rankRagCandidatesWithPython = async ({ query = "", queryVector = [], candidates = [], config = {} } = {}) => {
+    const bridge = globalThis.trackers?.runtime?.pythonNlp;
+    if (!bridge?.run) throw new Error("Il pack Python RAG non è attivo. Avvia Trackers Lens con npm run dev:nlp.");
+    const result = await bridge.run({
+      executionId: uniqueId("python_rag"),
+      operation: "hybrid_search",
+      inputs: {
+        query: String(query || ""),
+        queryVector,
+        candidates,
+        semanticWeight: Number(config.semanticWeight ?? 0.65),
+        lexicalWeight: Number(config.lexicalWeight ?? 0.35),
+      },
+      context: { capability: "knowledge.rag.retrieve", dataAccess: "tl-authorized-candidates-only" },
+      timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000)),
+    });
+    return {
+      ranked: Array.isArray(result?.outputs?.ranked) ? result.outputs.ranked : [],
+      algorithm: String(result?.outputs?.algorithm || "sentence-transformers+bm25s/weighted-normalized"),
+      weights: result?.outputs?.weights || {},
+      candidateCount: Number(result?.outputs?.candidateCount || candidates.length),
+    };
   };
 
   const nodeSubtype = (node = {}) =>
@@ -9179,14 +9234,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const search = async ({ workspaceId, query = "", config = {}, allowedEmbeddingNodeIds = [] } = {}) => {
     const cleanQuery = String(query || config.query || "").trim();
     if (!cleanQuery) throw new Error("Query Knowledge vuota");
-    const topK = Number.isFinite(Number(config.topK)) && Number(config.topK) > 0
-      ? Math.floor(Number(config.topK))
-      : chunks.length;
-    const threshold = Math.max(0, Math.min(1, Number(config.similarityThreshold ?? 0.08)));
     const [embeddings, chunks] = await Promise.all([
       listStore(STORES.embeddings),
       listStore(STORES.chunks),
     ]);
+    const topK = Number.isFinite(Number(config.topK)) && Number(config.topK) > 0
+      ? Math.floor(Number(config.topK))
+      : chunks.length;
+    const threshold = Math.max(0, Math.min(1, Number(config.similarityThreshold ?? 0.08)));
     const allowedNodes = unique(allowedEmbeddingNodeIds);
     const collectionId = String(config.collectionId || config.indexId || "").trim();
     const workspaceEmbeddings = byWorkspace(embeddings, workspaceId)
@@ -9209,7 +9264,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       },
     });
     const chunkById = new Map(byWorkspace(chunks, workspaceId).map((chunk) => [chunk.id, chunk]));
-    const ranked = workspaceEmbeddings
+    const eligibleCandidates = workspaceEmbeddings
       .filter((embedding) => embedding.provider === queryEmbedding.provider && embedding.model === queryEmbedding.model)
       .map((embedding) => {
         const chunk = chunkById.get(embedding.chunkId);
@@ -9218,7 +9273,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         return {
           chunkId: chunk.id,
           documentId: chunk.documentId,
-          score: cosineSimilarity(queryEmbedding.vector || [], embedding.vector || []),
+          _vector: embedding.vector || [],
           text: chunk.text || "",
           metadata: config.includeMetadata === false ? {} : {
             ...(chunk.metadata || {}),
@@ -9230,9 +9285,53 @@ window.TrackerLensKnowledgeRuntime = (() => {
           },
         };
       })
-      .filter(Boolean)
-      .filter((result) => result.score >= threshold)
-      .sort((a, b) => b.score - a.score);
+      .filter(Boolean);
+    const retrievalRuntime = String(config.retrievalRuntime || "javascript-legacy").trim().toLowerCase();
+    let ranked = [];
+    let retrievalDiagnostics = { runtime: "javascript-legacy", algorithm: "tl-cosine", candidateCount: eligibleCandidates.length };
+    if (retrievalRuntime === "python-hybrid") {
+      const pythonRanking = await rankRagCandidatesWithPython({
+        query: cleanQuery,
+        queryVector: queryEmbedding.vector || [],
+        candidates: eligibleCandidates.map((candidate, index) => ({ id: String(index), text: candidate.text, vector: candidate._vector })),
+        config,
+      });
+      const candidatesById = new Map(eligibleCandidates.map((candidate, index) => [String(index), candidate]));
+      ranked = pythonRanking.ranked
+        .map((item) => {
+          const candidate = candidatesById.get(String(item?.id || ""));
+          if (!candidate) return null;
+          const { _vector, ...publicCandidate } = candidate;
+          return {
+            ...publicCandidate,
+            score: Number(item.score || 0),
+            metadata: config.includeMetadata === false ? {} : {
+              ...publicCandidate.metadata,
+              retrieval: {
+                runtime: "python-hybrid",
+                semanticScore: Number(item.semanticScore || 0),
+                lexicalScore: Number(item.lexicalScore || 0),
+              },
+            },
+          };
+        })
+        .filter(Boolean)
+        .filter((result) => result.score >= threshold);
+      retrievalDiagnostics = {
+        runtime: "python-hybrid",
+        algorithm: pythonRanking.algorithm,
+        weights: pythonRanking.weights,
+        candidateCount: pythonRanking.candidateCount,
+      };
+    } else {
+      ranked = eligibleCandidates
+        .map((candidate) => {
+          const { _vector, ...publicCandidate } = candidate;
+          return { ...publicCandidate, score: cosineSimilarity(queryEmbedding.vector || [], _vector) };
+        })
+        .filter((result) => result.score >= threshold)
+        .sort((a, b) => b.score - a.score);
+    }
     const seenTexts = new Set();
     const results = [];
     for (const result of ranked) {
@@ -9257,6 +9356,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       query: cleanQuery,
       topK,
       similarityThreshold: threshold,
+      retrieval: retrievalDiagnostics,
       results,
       resultCount: results.length,
       context,

@@ -58,11 +58,25 @@ const isPlainObject = (value) => Boolean(value) && typeof value === "object" && 
 const isAllowedRepositoryStore = (name = "") => SQLITE_REPOSITORY_STORES.includes(name) || name === "tl_history" || /^tl_storage_[A-Za-z0-9_-]+$/.test(name);
 
 const canonicalJson = (value) => {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item) ?? "null").join(",")}]`;
   if (isPlainObject(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort()
+      .map((key) => [key, canonicalJson(value[key])])
+      .filter(([, serialized]) => serialized !== undefined)
+      .map(([key, serialized]) => `${JSON.stringify(key)}:${serialized}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
+};
+
+const parseStoredJson = (source = "") => {
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    const repaired = String(source).replace(/:\s*undefined(?=\s*[,}])/g, ":null");
+    if (repaired === source) throw error;
+    return JSON.parse(repaired);
+  }
 };
 
 const normalizeRecords = (records = []) => {
@@ -413,7 +427,7 @@ class DesktopPersistence {
       const rows = workspaceId
         ? database.prepare("SELECT record_json FROM tl_records WHERE store_name = ? AND workspace_id = ? ORDER BY id").all(name, String(workspaceId))
         : database.prepare("SELECT record_json FROM tl_records WHERE store_name = ? ORDER BY id").all(name);
-      return rows.map((row) => JSON.parse(row.record_json));
+      return rows.map((row) => parseStoredJson(row.record_json));
     } finally {
       database.close();
     }
@@ -486,7 +500,7 @@ class DesktopPersistence {
     const database = new DatabaseSync(this.databasePath, { readOnly: true });
     try {
       return database.prepare("SELECT record_json FROM tl_records WHERE store_name = ? ORDER BY id").all(String(storeName))
-        .map((row) => JSON.parse(row.record_json));
+        .map((row) => parseStoredJson(row.record_json));
     } finally {
       database.close();
     }

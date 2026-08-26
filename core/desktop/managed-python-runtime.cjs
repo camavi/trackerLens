@@ -6,9 +6,11 @@ const PROTOCOL_VERSION = "tl-python-worker/v1";
 const errorWithCode = (message, code) => Object.assign(new Error(message), { code });
 
 class ManagedPythonRuntime {
-  constructor({ pythonPath = process.env.TL_PYTHON_EXECUTABLE || "python3", workerPath = path.resolve(__dirname, "../../runtimes/python/tl_python_worker.py") } = {}) {
+  constructor({ pythonPath = process.env.TL_PYTHON_EXECUTABLE || "python3", workerPath = path.resolve(__dirname, "../../runtimes/python/tl_python_worker.py"), workerId = "managed-python-poc", environment = {} } = {}) {
     this.pythonPath = pythonPath;
     this.workerPath = workerPath;
+    this.workerId = workerId;
+    this.environment = { ...environment };
     this.process = null;
     this.pending = new Map();
     this.startedAt = "";
@@ -19,13 +21,13 @@ class ManagedPythonRuntime {
   }
 
   status() {
-    return { runtime: "python", workerId: "managed-python-poc", status: this.process ? "ready" : "stopped", startedAt: this.startedAt, heartbeatAt: this.heartbeatAt, activeJobs: this.pending.size, restartCount: this.restartCount, lastError: this.lastError, capabilities: [...this.capabilities], protocolVersion: PROTOCOL_VERSION };
+    return { runtime: "python", workerId: this.workerId, status: this.process ? "ready" : "stopped", startedAt: this.startedAt, heartbeatAt: this.heartbeatAt, activeJobs: this.pending.size, restartCount: this.restartCount, lastError: this.lastError, capabilities: [...this.capabilities], protocolVersion: PROTOCOL_VERSION };
   }
 
   start() {
     if (this.process) return Promise.resolve(this.status());
     return new Promise((resolve, reject) => {
-      const child = spawn(this.pythonPath, ["-u", this.workerPath], { stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(this.pythonPath, ["-u", this.workerPath], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...this.environment } });
       this.process = child;
       const fail = (error) => {
         if (this.process === child) this.process = null;

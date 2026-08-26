@@ -4,6 +4,7 @@ const DEFAULT_FEATURE_FLAGS = Object.freeze({
   electronDesktop: true,
   multiRuntime: false,
   pythonRuntime: false,
+  pythonNlpDev: false,
   pythonNodes: false
 });
 
@@ -21,6 +22,8 @@ const isSafeExternalUrl = (value) => {
 const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "production", featureFlags = {}, adapters = {} } = {}) => {
   const openExternal = typeof adapters.openExternal === "function" ? adapters.openExternal : null;
   const pythonPoc = adapters.pythonPoc || null;
+  const pythonNlp = adapters.pythonNlp || null;
+  const pythonPacks = adapters.pythonPacks || null;
   const persistence = adapters.persistence || null;
   const flags = { ...DEFAULT_FEATURE_FLAGS, ...featureFlags };
 
@@ -99,6 +102,25 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
       case "runtime.pythonPoc.restart":
         if (!flags.pythonRuntime || !pythonPoc?.restart) throw errorWithCode("Python POC is disabled", "PYTHON_POC_DISABLED");
         return pythonPoc.restart();
+      case "runtime.pythonNlp.status":
+        if (!flags.pythonNlpDev || !pythonNlp?.status) throw errorWithCode("Python NLP development pack is disabled", "PYTHON_NLP_DISABLED");
+        return pythonNlp.status();
+      case "runtime.pythonNlp.start":
+        if (!flags.pythonNlpDev || !pythonNlp?.start) throw errorWithCode("Python NLP development pack is disabled", "PYTHON_NLP_DISABLED");
+        return pythonNlp.start();
+      case "runtime.pythonNlp.run":
+        if (!flags.pythonNlpDev || !pythonNlp?.execute) throw errorWithCode("Python NLP development pack is disabled", "PYTHON_NLP_DISABLED");
+        return pythonNlp.execute(payload);
+      case "runtime.pythonNlp.cancel":
+        if (!flags.pythonNlpDev || !pythonNlp?.cancel) throw errorWithCode("Python NLP development pack is disabled", "PYTHON_NLP_DISABLED");
+        pythonNlp.cancel(String(payload.executionId || ""));
+        return { cancelled: true };
+      case "runtime.pythonNlp.restart":
+        if (!flags.pythonNlpDev || !pythonNlp?.restart) throw errorWithCode("Python NLP development pack is disabled", "PYTHON_NLP_DISABLED");
+        return pythonNlp.restart();
+      case "runtime.pythonPacks.resolve":
+        if (!pythonPacks?.resolve) throw errorWithCode("Python package resolution is unavailable", "PYTHON_PACKS_UNAVAILABLE");
+        return pythonPacks.resolve(payload?.execution || {});
       default:
         throw new Error(`Unsupported TL Core command: ${String(command || "")}`);
     }

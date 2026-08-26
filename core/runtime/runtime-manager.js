@@ -31,7 +31,15 @@
         executeLegacy: async ({ task }) => task(),
         status: "ready"
       });
-      if (globalThis.trackers?.runtime?.pythonPoc?.run) {
+      if (globalThis.trackers?.runtime?.pythonNlp?.run) {
+        this.registerExecutor({
+          runtime: "python",
+          workerId: "managed-python-nlp-dev",
+          capabilities: ["text.embedding"],
+          executeLegacy: async ({ task }) => task(),
+          status: "ready"
+        });
+      } else if (globalThis.trackers?.runtime?.pythonPoc?.run) {
         this.registerExecutor({
           runtime: "python",
           workerId: "managed-python-poc",

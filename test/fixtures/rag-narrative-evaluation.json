@@ -1,0 +1,37 @@
+{
+  "id": "rag-narrative-evaluation/v1",
+  "language": "it",
+  "description": "Generic narrative retrieval evaluation. Fixture expectations are test evidence labels only and must never be used by the runtime.",
+  "chunks": [
+    {
+      "id": "shelter",
+      "text": "Quando una tempesta bloccò il ponte sul fiume, Mara cercò riparo nel vecchio faro sulla costa."
+    },
+    {
+      "id": "instructions",
+      "text": "Nel faro Mara trovò un manuale. Il manuale spiegava che una lanterna accesa con olio di pino poteva inviare un segnale ai pescatori." 
+    },
+    {
+      "id": "signal",
+      "text": "Seguendo le istruzioni, Mara accese la lanterna con olio di pino. I pescatori videro il segnale dalla barca e raggiunsero il faro." 
+    },
+    {
+      "id": "return",
+      "text": "Il giorno dopo Mara restituì il manuale alla custode del faro e attraversò il ponte ormai sicuro." 
+    }
+  ],
+  "queries": [
+    {
+      "query": "Perché Mara cercò riparo nel faro?",
+      "expectedEvidenceIds": ["shelter"]
+    },
+    {
+      "query": "Come Mara invia un segnale ai pescatori?",
+      "expectedEvidenceIds": ["signal", "instructions"]
+    },
+    {
+      "query": "Che cosa usa Mara per accendere la lanterna?",
+      "expectedEvidenceIds": ["instructions", "signal"]
+    }
+  ]
+}

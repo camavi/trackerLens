@@ -3,10 +3,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { TL_CORE_CONTRACT_VERSION, createTlCore } = require("../core/desktop/tl-core.cjs");
 const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs");
 const executionContract = require("../core/runtime/node-execution-contract.js");
 const { RuntimeManager } = require("../core/runtime/runtime-manager.js");
+const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 
 test("TL Core exposes desktop status without persistence handles", async () => {
   const core = createTlCore({ appVersion: "1.2.3", platform: "darwin", mode: "development" });
@@ -94,6 +96,31 @@ test("desktop persistence imports only disposable fixtures atomically and idempo
   assert.equal(persistence.getStatus().migration.userDataImport, false);
 });
 
+test("desktop persistence omits undefined fields and recovers legacy undefined JSON", (context) => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-persistence-"));
+  context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  const databasePath = path.join(fixtureDirectory, "undefined-fields.sqlite");
+  const persistence = new DesktopPersistence({ databasePath });
+  persistence.initialize();
+  persistence.writeDevelopmentRecords({
+    storeName: "tl_runtime_nodes",
+    records: [{ id: "node_clean", workspaceId: "workspace_1", connectionType: undefined, metadata: { source: "test", optional: undefined } }]
+  });
+  assert.deepEqual(persistence.readDevelopmentRecords({ storeName: "tl_runtime_nodes" }), [{ id: "node_clean", workspaceId: "workspace_1", metadata: { source: "test" } }]);
+
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.prepare("INSERT INTO tl_records (store_name, id, workspace_id, record_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("tl_runtime_nodes", "node_legacy", "workspace_1", '{"id":"node_legacy","connectionType":undefined}', "2026-08-25T00:00:00.000Z", "2026-08-25T00:00:00.000Z");
+  } finally {
+    database.close();
+  }
+  assert.deepEqual(persistence.readDevelopmentRecords({ storeName: "tl_runtime_nodes" }), [
+    { id: "node_clean", workspaceId: "workspace_1", metadata: { source: "test" } },
+    { id: "node_legacy", connectionType: null }
+  ]);
+});
+
 test("desktop persistence verifies a development first-cohort import without activating SQLite", (context) => {
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-persistence-"));
   context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
@@ -140,6 +167,59 @@ test("TL Core keeps the Python POC opt-in behind narrow commands", async () => {
   assert.deepEqual(calls, [{ executionId: "poc_1" }, { cancelled: "poc_1" }]);
 });
 
+test("TL Core keeps the development NLP pack behind a separate narrow bridge", async () => {
+  const calls = [];
+  const pythonNlp = {
+    status: () => ({ status: "ready", workerId: "managed-python-nlp-dev" }),
+    start: async () => ({ status: "ready" }),
+    execute: async (payload) => { calls.push(payload); return { status: "success", outputs: { vector: [0.1] } }; },
+    cancel: (executionId) => calls.push({ cancelled: executionId }),
+    restart: async () => ({ status: "ready", restartCount: 1 })
+  };
+  await assert.rejects(createTlCore().request("runtime.pythonNlp.status"), (error) => error.code === "PYTHON_NLP_DISABLED");
+
+  const core = createTlCore({ featureFlags: { pythonNlpDev: true }, adapters: { pythonNlp } });
+  assert.equal((await core.request("runtime.pythonNlp.status")).workerId, "managed-python-nlp-dev");
+  assert.deepEqual(await core.request("runtime.pythonNlp.run", { executionId: "nlp_1", operation: "text_embedding" }), { status: "success", outputs: { vector: [0.1] } });
+  await core.request("runtime.pythonNlp.cancel", { executionId: "nlp_1" });
+  assert.deepEqual(calls, [{ executionId: "nlp_1", operation: "text_embedding" }, { cancelled: "nlp_1" }]);
+});
+
+test("Python package resolution is declarative and exposes no installer", async () => {
+  const resolver = new PythonPackResolver({
+    packs: [{
+      id: "builtin-nlp",
+      environment: "nlp",
+      lockfile: "python/nlp.lock",
+      trustLevel: "built-in",
+      status: "ready",
+      packages: [{ name: "sentence-transformers", version: "5.5.0" }]
+    }]
+  });
+  const core = createTlCore({ adapters: { pythonPacks: resolver } });
+  const execution = {
+    dependencies: {
+      python: {
+        environment: "nlp",
+        requirements: [{ name: "sentence-transformers", version: ">=5,<6" }],
+        lockfile: "python/nlp.lock",
+        installPolicy: "bundled"
+      }
+    }
+  };
+  const ready = await core.request("runtime.pythonPacks.resolve", { execution });
+  assert.equal(ready.code, "PYTHON_PACK_READY");
+  assert.equal(ready.pack.id, "builtin-nlp");
+  assert.equal(Object.hasOwn(ready, "install"), false);
+
+  const missing = await core.request("runtime.pythonPacks.resolve", {
+    execution: { dependencies: { python: { environment: "nlp", requirements: [{ name: "spacy", version: ">=3" }], installPolicy: "managed-optional" } } }
+  });
+  assert.equal(missing.code, "PYTHON_PACK_MISSING");
+  assert.equal(missing.installPlan.requiresUserConsent, true);
+  await assert.rejects(createTlCore().request("runtime.pythonPacks.resolve", { execution }), (error) => error.code === "PYTHON_PACKS_UNAVAILABLE");
+});
+
 test("legacy nodes normalize to the JavaScript execution runtime", () => {
   const execution = executionContract.normalizeExecution({}, { legacy: true });
   const resolution = executionContract.resolveRuntime(execution, ["javascript"]);
@@ -162,6 +242,32 @@ test("explicit Python execution is represented but blocked until its runtime exi
   assert.equal(request.runtime, "python");
   assert.equal(validation.ok, false);
   assert.match(validation.errors[0], /Runtime unavailable: python/);
+});
+
+test("execution manifests normalize managed Python module requirements without installing them", () => {
+  const execution = executionContract.normalizeExecution({
+    runtime: "javascript",
+    capabilities: ["text.embedding"],
+    dependencies: {
+      python: {
+        environment: "nlp",
+        requirements: ["sentence-transformers", { package: "torch", constraint: ">=2,<3" }],
+        lock: "python/nlp.lock",
+        policy: "managed-optional"
+      }
+    }
+  });
+
+  assert.deepEqual(execution.dependencies.python, {
+    environment: "nlp",
+    requirements: [
+      { name: "sentence-transformers", version: "" },
+      { name: "torch", version: ">=2,<3" }
+    ],
+    lockfile: "python/nlp.lock",
+    installPolicy: "managed-optional"
+  });
+  assert.deepEqual(executionContract.PYTHON_INSTALL_POLICIES.sort(), ["bundled", "managed-optional", "managed-required"]);
 });
 
 test("execution results preserve events, diagnostics and provenance", () => {

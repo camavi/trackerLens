@@ -1,0 +1,32 @@
+{
+  "id": "trackerslens.nlp.sentence-transformers",
+  "version": "0.1.0",
+  "environment": "nlp",
+  "status": "development-ready",
+  "trustLevel": "built-in",
+  "installPolicy": "managed-optional",
+  "python": ">=3.10,<3.13",
+  "developmentInterpreter": "python3.11",
+  "lockfile": "runtimes/python/packs/nlp/requirements.lock",
+  "requirements": [
+    {
+      "name": "sentence-transformers",
+      "version": "==5.5.0"
+    },
+    {
+      "name": "bm25s",
+      "version": "==0.3.11"
+    }
+  ],
+  "models": [
+    {
+      "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "revision": "b8ef00830037f9868450f778081ea683e900fe39",
+      "dimensions": 384,
+      "languages": 50,
+      "license": "Apache-2.0",
+      "validatedDimensions": 384,
+      "localOnlyAfterInstall": true
+    }
+  ]
+}

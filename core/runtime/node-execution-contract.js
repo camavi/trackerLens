@@ -7,6 +7,7 @@
   const RUNTIMES = new Set(["javascript", "python"]);
   const RESULT_STATUSES = new Set(["success", "failed", "cancelled", "timeout"]);
   const EVENT_KINDS = new Set(["started", "progress", "partial", "log", "warning", "completed", "failed", "cancelled"]);
+  const PYTHON_INSTALL_POLICIES = new Set(["managed-required", "managed-optional", "bundled"]);
 
   const text = (value, fallback = "") => String(value ?? "").trim() || fallback;
   const unique = (values = []) => [...new Set((Array.isArray(values) ? values : []).filter(Boolean).map(String))];
@@ -28,6 +29,34 @@
     return runtime;
   };
 
+  const normalizePythonDependencies = (source = {}) => {
+    const value = Array.isArray(source) ? { requirements: source } : source && typeof source === "object" ? source : {};
+    const requirements = (Array.isArray(value.requirements) ? value.requirements : [])
+      .map((requirement) => typeof requirement === "string" ? { name: requirement } : requirement && typeof requirement === "object" ? requirement : {})
+      .map((requirement) => ({
+        name: text(requirement.name || requirement.package || requirement.module),
+        version: text(requirement.version || requirement.constraint),
+      }))
+      .filter((requirement) => requirement.name);
+    const installPolicy = text(value.installPolicy || value.policy, "managed-required").toLowerCase();
+    return {
+      environment: text(value.environment || value.env),
+      requirements,
+      lockfile: text(value.lockfile || value.lock),
+      installPolicy: PYTHON_INSTALL_POLICIES.has(installPolicy) ? installPolicy : "managed-required",
+    };
+  };
+
+  const normalizeDependencies = (source = {}) => {
+    const value = source && typeof source === "object" && !Array.isArray(source) ? clone(source) : {};
+    if (!Object.hasOwn(value, "python")) return value;
+    const python = normalizePythonDependencies(value.python);
+    return {
+      ...value,
+      python,
+    };
+  };
+
   const normalizeExecution = (source = {}, { legacy = false } = {}) => {
     const value = typeof source === "string" ? { runtime: source } : source && typeof source === "object" ? source : {};
     const runtime = normalizeRuntime(value.runtime || value.engine || value.language);
@@ -36,7 +65,7 @@
       runtime,
       entry: text(value.entry || value.main),
       capabilities: unique(value.capabilities),
-      dependencies: value.dependencies && typeof value.dependencies === "object" && !Array.isArray(value.dependencies) ? clone(value.dependencies) : {},
+      dependencies: normalizeDependencies(value.dependencies),
       timeoutMs: Number.isFinite(Number(value.timeoutMs)) && Number(value.timeoutMs) > 0 ? Number(value.timeoutMs) : null,
       cancellable: value.cancellable !== false,
       legacy: Boolean(legacy || value.legacy)
@@ -124,6 +153,9 @@
     RUNTIMES: [...RUNTIMES],
     RESULT_STATUSES: [...RESULT_STATUSES],
     EVENT_KINDS: [...EVENT_KINDS],
+    PYTHON_INSTALL_POLICIES: [...PYTHON_INSTALL_POLICIES],
+    normalizePythonDependencies,
+    normalizeDependencies,
     normalizeExecution,
     resolveRuntime,
     createExecutionRequest,

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const request = (command, payload = {}) => ipcRenderer.invoke("trackers-core:request", command, payload);
 const pythonPocEnabled = process.argv.includes("--tl-python-poc=1");
+const pythonNlpEnabled = process.argv.includes("--tl-python-nlp-dev=1");
 
 const trackers = Object.freeze({
   desktop: Object.freeze({
@@ -28,6 +29,13 @@ const trackers = Object.freeze({
       run: (payload = {}) => request("runtime.pythonPoc.run", payload),
       cancel: (executionId) => request("runtime.pythonPoc.cancel", { executionId: String(executionId || "") }),
       restart: () => request("runtime.pythonPoc.restart")
+    }) } : {}),
+    ...(pythonNlpEnabled ? { pythonNlp: Object.freeze({
+      getStatus: () => request("runtime.pythonNlp.status"),
+      start: () => request("runtime.pythonNlp.start"),
+      run: (payload = {}) => request("runtime.pythonNlp.run", payload),
+      cancel: (executionId) => request("runtime.pythonNlp.cancel", { executionId: String(executionId || "") }),
+      restart: () => request("runtime.pythonNlp.restart")
     }) } : {})
   })
 });

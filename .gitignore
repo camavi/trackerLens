@@ -24,3 +24,9 @@ dist-ssr
 *.sln
 *.sw?
 CMSwift.md
+
+# Managed development Python packs and local model artifacts
+runtimes/python/envs/
+runtimes/python/models/
+runtimes/python/.cache/
+runtimes/python/__pycache__/

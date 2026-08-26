@@ -27,7 +27,7 @@ The normal POC capability is `text_transform`: trim and uppercase `inputs.text`.
 The worker is disabled by default. Run Electron POC mode with:
 
 ```sh
-npm run desktop:python-poc
+npm run dev:poc
 ```
 
 This sets `TL_ENABLE_PYTHON_POC=1`. The renderer only reaches it through the restricted `window.trackers.runtime.pythonPoc` bridge. The Python executor and `Python Test` palette item are absent in normal desktop/browser mode.
@@ -47,7 +47,7 @@ Because the secure Python bridge is intentionally renderer-only, a workspace con
 ## Verified Behavior
 
 - one worker handles multiple requests without respawning;
-- success, invalid input, deliberate exception, lifecycle event/progress, cancellation and timeout are covered by `npm run test:python-poc`;
+- success, invalid input, deliberate exception, lifecycle event/progress, cancellation and timeout are covered by `npm run test:python`;
 - concurrent work is correlated by execution ID; an intentional worker crash rejects in-flight work as `WORKER_CRASHED`, then restart is verified;
 - JavaScript runtime remains separate and default.
 

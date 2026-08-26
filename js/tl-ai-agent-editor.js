@@ -913,7 +913,6 @@ window.TrackerLensAiAgentEditor = (() => {
       ),
     });
     dialog.open();
-    window.setTimeout(() => loadModelsForCurrentProvider({ force: true }), 0);
     return dialog;
   };
 

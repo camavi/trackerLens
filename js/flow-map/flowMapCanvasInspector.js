@@ -149,6 +149,15 @@ const requestEdgeDelete = (edge) => {
   dialog.open();
 };
 
+const normalizePaletteSearchText = (value = "") => String(value || "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+
+const paletteSearchTerms = (value = "") => normalizePaletteSearchText(value).split(/\s+/).filter(Boolean);
+
 const paletteSearchText = (item = {}, group = "") =>
   [
     group,
@@ -165,18 +174,45 @@ const paletteSearchText = (item = {}, group = "") =>
     item.manifest?.type,
     item.manifest?.subtype,
     item.manifest?.category,
+    ...(item.execution?.capabilities || []),
+    ...(item.manifest?.execution?.capabilities || []),
+    ...Object.keys(item.settingsSchema || item.manifest?.settingsSchema || {}),
   ].filter(Boolean).join(" ").toLowerCase();
+
+const paletteItemSearchScore = (item = {}, group = "", query = String(state.paletteSearch || "")) => {
+  const terms = paletteSearchTerms(query);
+  if (!terms.length) return 1;
+  const label = normalizePaletteSearchText(item.label);
+  const subtype = normalizePaletteSearchText(item.subtype || item.manifest?.subtype);
+  const capabilities = normalizePaletteSearchText([
+    ...(item.execution?.capabilities || []),
+    ...(item.manifest?.execution?.capabilities || []),
+  ].join(" "));
+  const schema = normalizePaletteSearchText(Object.keys(item.settingsSchema || item.manifest?.settingsSchema || {}).join(" "));
+  const metadata = normalizePaletteSearchText(paletteSearchText(item, group));
+  let score = 0;
+  for (const term of terms) {
+    if (label.split(" ").some((word) => word.startsWith(term))) score += 100;
+    else if (label.includes(term)) score += 80;
+    else if (subtype.includes(term)) score += 60;
+    else if (capabilities.includes(term)) score += 50;
+    else if (schema.includes(term)) score += 40;
+    else if (metadata.includes(term)) score += 10;
+    else return 0;
+  }
+  return score;
+};
 
 const filteredNodePalette = () => {
   const query = String(state.paletteSearch || "").trim().toLowerCase();
   if (!query) return nodePalette;
   return nodePalette
-    .map(([title, items]) => [title, items.filter((item) => paletteSearchText(item, title).includes(query))])
+    .map(([title, items]) => [title, items.filter((item) => paletteItemSearchScore(item, title, query) > 0)])
     .filter(([, items]) => items.length);
 };
 
 const paletteItemMatchesSearch = (item = {}, group = "", query = String(state.paletteSearch || "").trim().toLowerCase()) =>
-  !query || paletteSearchText(item, group).includes(query);
+  paletteItemSearchScore(item, group, query) > 0;
 
 const nodeMenuCollapsedGroups = () => {
   if (!state.nodeMenuCollapsedGroups) {
@@ -209,11 +245,16 @@ const applyPaletteSearchDom = () => {
     const collapsed = !query && isNodeMenuGroupCollapsed(groupTitle);
     let visibleItems = 0;
     section.querySelectorAll("[data-flow-palette-item]").forEach((item) => {
-      const matched = !query || String(item.dataset.flowPaletteSearch || "").includes(query);
+      const matched = !query || paletteSearchTerms(query).every((term) =>
+        normalizePaletteSearchText(item.dataset.flowPaletteSearch || "").includes(term));
       item.hidden = !matched;
+      item.style.display = matched ? "" : "none";
+      item.setAttribute("aria-hidden", String(!matched));
       if (matched) visibleItems += 1;
     });
     section.hidden = visibleItems === 0;
+    section.style.display = visibleItems === 0 ? "none" : "";
+    section.setAttribute("aria-hidden", String(visibleItems === 0));
     section.classList.toggle("is-collapsed", collapsed);
     const toggle = section.querySelector(".tl-flow-node-menu-section-toggle");
     toggle?.setAttribute?.("aria-expanded", String(!collapsed));
@@ -228,7 +269,7 @@ const applyPaletteSearchDom = () => {
 };
 
 const setPaletteSearch = (value = "") => {
-  state.paletteSearch = value;
+  state.paletteSearch = String(cmsInputValue(value) || "");
   applyPaletteSearchDom();
 };
 
@@ -277,7 +318,8 @@ const renderCanvasNodeMenu = () =>
               clearable: true,
               icon: "search",
               autocomplete: "off",
-              onInput: (event) => setPaletteSearch(cmsInputValue(event)),
+              onInput: (value) => setPaletteSearch(value),
+              onChange: (value) => setPaletteSearch(value),
               onKeydown: (event) => event.stopPropagation(),
               onClick: (event) => event.stopPropagation(),
               onPointerDown: (event) => event.stopPropagation(),
