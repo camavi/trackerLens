@@ -50,6 +50,25 @@ Prima di una modifica architetturale Codex deve restituire:
 
 ------------------------------------------------------------------------
 
+## 0.1 Politica per il primo sviluppo
+
+Trackers Lens è attualmente in **primo sviluppo**, senza utenti finali o
+workflow di produzione da migrare. Quando il proprietario del progetto approva
+il passaggio di una capability da JavaScript a un modulo Python gestito, Codex
+deve eseguire il cutover diretto:
+
+- mantenere i contratti e i dati che TL continua a possedere;
+- rimuovere implementazioni, selettori, fallback e UI di migrazione obsoleti;
+- non inventare rollout per utenti, compatibilità artificiale o azioni
+  "migra il tuo nodo";
+- lasciare test ripetibili e documentazione della capability scelta.
+
+Rollback e doppie implementazioni si usano solo se richiesti esplicitamente dal
+proprietario o se proteggono dati persistenti reali. Non sono un motivo per
+mantenere codice morto durante il primo sviluppo.
+
+------------------------------------------------------------------------
+
 # 1. Decisione architetturale
 
 Trackers Lens deve evolvere verso:

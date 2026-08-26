@@ -919,21 +919,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return vector.map((value) => Math.round((value / magnitude) * 1000000) / 1000000);
   };
 
-  const cosineSimilarity = (left = [], right = []) => {
-    const length = Math.min(left.length, right.length);
-    if (!length) return 0;
-    let dot = 0;
-    let leftNorm = 0;
-    let rightNorm = 0;
-    for (let index = 0; index < length; index += 1) {
-      dot += Number(left[index] || 0) * Number(right[index] || 0);
-      leftNorm += Number(left[index] || 0) ** 2;
-      rightNorm += Number(right[index] || 0) ** 2;
-    }
-    const divisor = Math.sqrt(leftNorm) * Math.sqrt(rightNorm);
-    return divisor ? dot / divisor : 0;
-  };
-
   const providerKey = (provider = {}) =>
     String(provider.id || provider.provider || provider.name || "").trim().toLowerCase();
 
@@ -9286,52 +9271,39 @@ window.TrackerLensKnowledgeRuntime = (() => {
         };
       })
       .filter(Boolean);
-    const retrievalRuntime = String(config.retrievalRuntime || "javascript-legacy").trim().toLowerCase();
-    let ranked = [];
-    let retrievalDiagnostics = { runtime: "javascript-legacy", algorithm: "tl-cosine", candidateCount: eligibleCandidates.length };
-    if (retrievalRuntime === "python-hybrid") {
-      const pythonRanking = await rankRagCandidatesWithPython({
-        query: cleanQuery,
-        queryVector: queryEmbedding.vector || [],
-        candidates: eligibleCandidates.map((candidate, index) => ({ id: String(index), text: candidate.text, vector: candidate._vector })),
-        config,
-      });
-      const candidatesById = new Map(eligibleCandidates.map((candidate, index) => [String(index), candidate]));
-      ranked = pythonRanking.ranked
-        .map((item) => {
-          const candidate = candidatesById.get(String(item?.id || ""));
-          if (!candidate) return null;
-          const { _vector, ...publicCandidate } = candidate;
-          return {
-            ...publicCandidate,
-            score: Number(item.score || 0),
-            metadata: config.includeMetadata === false ? {} : {
-              ...publicCandidate.metadata,
-              retrieval: {
-                runtime: "python-hybrid",
-                semanticScore: Number(item.semanticScore || 0),
-                lexicalScore: Number(item.lexicalScore || 0),
-              },
+    const pythonRanking = await rankRagCandidatesWithPython({
+      query: cleanQuery,
+      queryVector: queryEmbedding.vector || [],
+      candidates: eligibleCandidates.map((candidate, index) => ({ id: String(index), text: candidate.text, vector: candidate._vector })),
+      config,
+    });
+    const candidatesById = new Map(eligibleCandidates.map((candidate, index) => [String(index), candidate]));
+    const ranked = pythonRanking.ranked
+      .map((item) => {
+        const candidate = candidatesById.get(String(item?.id || ""));
+        if (!candidate) return null;
+        const { _vector, ...publicCandidate } = candidate;
+        return {
+          ...publicCandidate,
+          score: Number(item.score || 0),
+          metadata: config.includeMetadata === false ? {} : {
+            ...publicCandidate.metadata,
+            retrieval: {
+              runtime: "python-hybrid",
+              semanticScore: Number(item.semanticScore || 0),
+              lexicalScore: Number(item.lexicalScore || 0),
             },
-          };
-        })
-        .filter(Boolean)
-        .filter((result) => result.score >= threshold);
-      retrievalDiagnostics = {
-        runtime: "python-hybrid",
-        algorithm: pythonRanking.algorithm,
-        weights: pythonRanking.weights,
-        candidateCount: pythonRanking.candidateCount,
-      };
-    } else {
-      ranked = eligibleCandidates
-        .map((candidate) => {
-          const { _vector, ...publicCandidate } = candidate;
-          return { ...publicCandidate, score: cosineSimilarity(queryEmbedding.vector || [], _vector) };
-        })
-        .filter((result) => result.score >= threshold)
-        .sort((a, b) => b.score - a.score);
-    }
+          },
+        };
+      })
+      .filter(Boolean)
+      .filter((result) => result.score >= threshold);
+    const retrievalDiagnostics = {
+      runtime: "python-hybrid",
+      algorithm: pythonRanking.algorithm,
+      weights: pythonRanking.weights,
+      candidateCount: pythonRanking.candidateCount,
+    };
     const seenTexts = new Set();
     const results = [];
     for (const result of ranked) {
@@ -11953,7 +11925,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     normalizeLanguage,
     detectLanguage,
     languageProfiles,
-    cosineSimilarity,
     tokenVector,
     get,
     KnowledgeRuntime,

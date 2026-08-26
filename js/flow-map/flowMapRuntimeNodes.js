@@ -1804,17 +1804,6 @@ const configFieldDefinitions = (node = {}) => {
           defaultValue: "local-hash",
           description: "Use the same engine used by Embedding Generator or Vector Memory for this collection.",
         },
-        {
-          key: "retrievalRuntime",
-          label: "Retrieval engine",
-          type: "select",
-          options: [
-            { value: "javascript-legacy", label: "Legacy cosine — compatibility mode" },
-            { value: "python-hybrid", label: "Hybrid local NLP — semantic + BM25 (development)" },
-          ],
-          defaultValue: "python-hybrid",
-          description: "Hybrid retrieval uses the local Python NLP pack. TL still controls scope, storage and output.",
-        },
         { key: "query", label: "Query", type: "textarea", placeholder: "How old is Adam?" },
         { key: "topK", label: "Top K", placeholder: "4" },
         { key: "semanticWeight", label: "Semantic weight", type: "number", defaultValue: "0.65", placeholder: "0.65" },
@@ -4171,7 +4160,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
     ],
     "rag-search": [
       { iconName: "search", label: "Query", value: config.query || "event query" },
-      { iconName: "psychology", label: "Retrieval", value: config.retrievalRuntime === "python-hybrid" ? "Python hybrid" : "Legacy cosine" },
+      { iconName: "psychology", label: "Retrieval", value: "Python hybrid" },
       { iconName: "tune", label: "Top K", value: config.topK || "5" },
       { iconName: "speed", label: "Threshold", value: config.similarityThreshold ?? "0.08" },
       { iconName: "article", label: "Context", value: config.maxContextTokens || "1200" },
@@ -6739,7 +6728,6 @@ const requestRuntimeNodeConfig = async (node) => {
     if (!form) return;
     const strategy = String(form.querySelector('[data-config-key="strategy"]')?.value || "structured").trim().toLowerCase();
     const embeddingRuntime = String(form.querySelector('[data-config-key="embeddingRuntime"]')?.value || "").trim().toLowerCase();
-    const retrievalRuntime = String(form.querySelector('[data-config-key="retrievalRuntime"]')?.value || "javascript-legacy").trim().toLowerCase();
     const setConfigFieldVisible = (key = "", visible = true) => {
       const input = form.querySelector(`[data-config-key="${key}"]`);
       const fieldRoot = input?.closest?.(".tl-flow-config-field");
@@ -6765,9 +6753,8 @@ const requestRuntimeNodeConfig = async (node) => {
       }
     }
     if (subtype === "rag-search") {
-      const isHybridPython = retrievalRuntime === "python-hybrid";
-      setConfigFieldVisible("semanticWeight", isHybridPython);
-      setConfigFieldVisible("lexicalWeight", isHybridPython);
+      setConfigFieldVisible("semanticWeight", true);
+      setConfigFieldVisible("lexicalWeight", true);
     }
     Array.from(form.querySelectorAll("[data-visible-for-strategies]") || []).forEach((fieldRoot) => {
       const strategies = String(fieldRoot.dataset.visibleForStrategies || "")
@@ -7053,6 +7040,12 @@ const requestRuntimeNodeConfig = async (node) => {
         { class: "tl-flow-config-section" },
         _.h3(`${subtype} settings`),
         ...configFields.map(configField)
+      ) : null,
+      subtype === "rag-search" ? _.section(
+        { class: "tl-flow-config-section" },
+        _.h3("Python RAG engine"),
+        _.p("RAG Search always uses the managed Python Hybrid engine: Sentence Transformers semantic retrieval plus BM25S lexical retrieval. TL keeps scope, storage and output ownership."),
+        _.small({ class: "tl-flow-config-field-description" }, "Start Trackers Lens with npm run dev:nlp. There is no JavaScript ranking fallback in this development phase.")
       ) : null,
       renderPayloadEditor({ node, defaults, formId }),
       capabilityFields.length ? _.section(
