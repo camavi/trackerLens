@@ -298,6 +298,20 @@ const setFlowMapError = (message = "", { timeout = true, remount = false } = {})
   if (remount && state.mounted && typeof mount === "function") mount({ preserveScroll: true });
 };
 
+window.addEventListener("trackers:runtime-error", (event) => {
+  const detail = event?.detail || {};
+  const workspaceId = String(detail.workspaceId || "");
+  const activeWorkspaceId = String(state.filters.workspaceId || "workspace_global");
+  if (workspaceId && workspaceId !== activeWorkspaceId) return;
+  const nodeLabel = String(detail.nodeLabel || "Runtime node").trim();
+  const message = String(detail.message || "Errore runtime").trim();
+  const runId = String(detail.runId || "");
+  if (runId && state.testRun.running && runId === String(state.testRun.runId || "") && typeof finishFlowMapTestRun === "function") {
+    finishFlowMapTestRun({ runId, summary: `Live test stopped: ${nodeLabel} reported an error` });
+  }
+  setFlowMapError(`${nodeLabel}: ${message}`, { remount: true });
+});
+
 const syncReactiveState = () => {
   scheduleFlowMapErrorDismiss();
   flowReactive.batch(() => {

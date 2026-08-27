@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Trackers Lens Python POC worker. Protocol: newline-delimited JSON on stdin/stdout."""
 import json
+import importlib
 import os
 import sys
 import threading
@@ -49,8 +50,20 @@ NLP_MODEL_REVISION = os.environ.get("TL_NLP_MODEL_REVISION", "").strip()
 RAG_RERANK_MODEL_DIR = os.environ.get("TL_RAG_RERANK_MODEL_DIR", "").strip()
 RAG_RERANK_MODEL_ID = os.environ.get("TL_RAG_RERANK_MODEL_ID", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1").strip()
 RAG_RERANK_MODEL_REVISION = os.environ.get("TL_RAG_RERANK_MODEL_REVISION", "").strip()
+try:
+    ANNOTATION_MODELS = json.loads(os.environ.get("TL_NLP_ANNOTATION_MODELS", "[]"))
+except json.JSONDecodeError:
+    ANNOTATION_MODELS = []
+if not isinstance(ANNOTATION_MODELS, list):
+    ANNOTATION_MODELS = []
+annotation_models = {
+    str(item.get("language", "")).strip().lower(): item
+    for item in ANNOTATION_MODELS
+    if isinstance(item, dict) and str(item.get("language", "")).strip()
+}
 nlp_model = None
 rag_rerank_model = None
+annotation_pipelines = {}
 
 if NLP_MODEL_DIR:
     @node("nlp.text_embedding", capabilities=["text.embedding"])
@@ -173,6 +186,70 @@ if RAG_RERANK_MODEL_DIR and os.path.isdir(RAG_RERANK_MODEL_DIR):
             "revision": RAG_RERANK_MODEL_REVISION,
         }
 
+if annotation_models:
+    @node("nlp.annotations", capabilities=["nlp.annotations"])
+    def annotations(ctx, inputs):
+        """Return spaCy linguistic proposals for TL-authorized chunks only."""
+        language = str(inputs.get("language", "")).strip().lower()
+        chunks = inputs.get("chunks")
+        if language not in annotation_models:
+            raise ValueError("inputs.language must name an installed annotation pipeline")
+        if not isinstance(chunks, list):
+            raise ValueError("inputs.chunks must be an array")
+        model = annotation_models[language]
+        pipeline_directory = str(model.get("directory", "")).strip()
+        package_name = str(model.get("package", "")).strip()
+        if not pipeline_directory or not package_name or not os.path.isdir(pipeline_directory):
+            raise ValueError("Requested annotation pipeline is not installed locally")
+        pipeline = annotation_pipelines.get(language)
+        if pipeline is None:
+            if pipeline_directory not in sys.path:
+                sys.path.insert(0, pipeline_directory)
+            package = importlib.import_module(package_name)
+            pipeline = package.load()
+            annotation_pipelines[language] = pipeline
+
+        annotated = []
+        total = len(chunks)
+        for index, chunk in enumerate(chunks):
+            if ctx.cancelled:
+                return {"cancelled": True}
+            if not isinstance(chunk, dict):
+                raise ValueError("Each inputs.chunks item must be an object")
+            chunk_id = str(chunk.get("id", "")).strip()
+            text = chunk.get("text")
+            if not chunk_id or not isinstance(text, str):
+                raise ValueError("Each chunk requires a string id and text")
+            document = pipeline(text)
+            annotated.append({
+                "id": chunk_id,
+                "sentences": [{"start": sentence.start_char, "end": sentence.end_char} for sentence in document.sents],
+                "tokens": [{
+                    "text": token.text,
+                    "lemma": token.lemma_,
+                    "pos": token.pos_,
+                    "tag": token.tag_,
+                    "morph": str(token.morph),
+                    "dependency": token.dep_,
+                    "head": token.head.i,
+                    "start": token.idx,
+                    "end": token.idx + len(token.text),
+                } for token in document],
+                "entities": [{
+                    "text": entity.text,
+                    "label": entity.label_,
+                    "start": entity.start_char,
+                    "end": entity.end_char,
+                } for entity in document.ents],
+            })
+            if total:
+                ctx.progress(((index + 1) / total) * 100, processed=index + 1, total=total)
+        return {
+            "language": language,
+            "pipeline": {"id": str(model.get("id", package_name)), "version": str(model.get("revision", ""))},
+            "chunks": annotated,
+        }
+
 OPERATION_IDS = {
     "text_transform": "poc.text_transform",
     "delay": "poc.delay",
@@ -181,6 +258,7 @@ OPERATION_IDS = {
     "text_embedding": "nlp.text_embedding",
     "hybrid_search": "rag.hybrid_search",
     "cross_encoder_rerank": "rag.cross_encoder_rerank",
+    "annotations": "nlp.annotations",
 }
 
 def execute(message):

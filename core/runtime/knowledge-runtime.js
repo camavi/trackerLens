@@ -3785,7 +3785,70 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return false;
   };
 
-  const extractDictionaryCandidates = (chunks = [], { language = "", maxTerms = 120, minFrequency = 1, config = {} } = {}) => {
+  const utf16OffsetForCodePoint = (text = "", codePointOffset = 0) => {
+    const target = Math.max(0, Number(codePointOffset || 0));
+    let codePoints = 0;
+    let utf16 = 0;
+    for (const character of String(text || "")) {
+      if (codePoints >= target) break;
+      codePoints += 1;
+      utf16 += character.length;
+    }
+    return utf16;
+  };
+
+  const validatedPythonAnnotationSpan = ({ text = "", start, end, value = "" } = {}) => {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) return null;
+    const source = String(text || "");
+    const codePointLength = Array.from(source).length;
+    if (end > codePointLength) return null;
+    const utf16Start = utf16OffsetForCodePoint(source, start);
+    const utf16End = utf16OffsetForCodePoint(source, end);
+    const exact = source.slice(utf16Start, utf16End);
+    if (!exact || (value && exact !== String(value))) return null;
+    return { text: exact, start: utf16Start, end: utf16End, codePointStart: start, codePointEnd: end };
+  };
+
+  const annotateDictionaryChunksWithPython = async ({ chunks = [], language = "", config = {} } = {}) => {
+    const bridge = globalThis.trackers?.runtime?.pythonNlp;
+    if (!bridge?.run) throw Object.assign(new Error("Il pack Python per le annotazioni non è disponibile. Installalo da Runtime Python e Modelli."), { code: "PYTHON_PACK_UNAVAILABLE" });
+    const response = await bridge.run({
+      executionId: uniqueId("python_annotations"),
+      operation: "annotations",
+      inputs: { language, chunks: chunks.map((chunk) => ({ id: String(chunk.id || ""), text: String(chunk.text || "") })) },
+      context: { capability: "nlp.annotations" },
+      timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 60000)),
+    }).catch((error) => {
+      throw Object.assign(new Error(`Pack Python annotazioni non installato o non disponibile: ${error?.message || "unknown error"}`), { code: error?.code || "PYTHON_PACK_UNAVAILABLE" });
+    });
+    const output = response?.outputs || {};
+    if (String(output.language || "").toLowerCase() !== String(language || "").toLowerCase() || !Array.isArray(output.chunks)) {
+      throw Object.assign(new Error("Il worker Python ha restituito annotazioni non valide."), { code: "PYTHON_ANNOTATIONS_INVALID" });
+    }
+    const chunksById = new Map(chunks.map((chunk) => [String(chunk.id || ""), chunk]));
+    const validated = new Map();
+    for (const analysis of output.chunks) {
+      const chunk = chunksById.get(String(analysis?.id || ""));
+      if (!chunk || !Array.isArray(analysis?.tokens) || !Array.isArray(analysis?.entities) || !Array.isArray(analysis?.sentences)) {
+        throw Object.assign(new Error("Il worker Python ha restituito chunk annotati non validi."), { code: "PYTHON_ANNOTATIONS_INVALID" });
+      }
+      const text = String(chunk.text || "");
+      const validateSpans = (items = [], kind = "span") => items.map((item) => {
+        const span = validatedPythonAnnotationSpan({ text, start: item?.start, end: item?.end, value: item?.text || "" });
+        if (!span) throw Object.assign(new Error(`Offset ${kind} Python non valido.`), { code: "PYTHON_ANNOTATIONS_INVALID" });
+        return { ...item, ...span };
+      });
+      validated.set(String(chunk.id || ""), {
+        sentences: validateSpans(analysis.sentences, "sentence"),
+        tokens: validateSpans(analysis.tokens, "token"),
+        entities: validateSpans(analysis.entities, "entity"),
+      });
+    }
+    if (validated.size !== chunks.length) throw Object.assign(new Error("Il worker Python non ha annotato tutti i chunk richiesti."), { code: "PYTHON_ANNOTATIONS_INVALID" });
+    return { annotations: validated, pipeline: output.pipeline || {} };
+  };
+
+  const extractDictionaryCandidates = (chunks = [], { language = "", maxTerms = 120, minFrequency = 1, config = {}, annotations = null } = {}) => {
     const profile = languageProfiles[language] || {};
     const rules = customKnowledgeRules(config);
     const stopWords = new Set([
@@ -3803,7 +3866,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const words = normalized.split(/\s+/).filter(Boolean);
       if (stopWords.has(normalized) || weakSentenceStartEntityTokens.has(normalized) || dictionaryWeakLexicalEntry(cleanTerm, normalized)) return;
       if (words.some((word) => stopWords.has(word) || dictionaryFunctionTokens.has(word) || weakSentenceStartEntityTokens.has(word))) return;
-      if (source === "proper-noun" && dictionarySentenceStartWeak(chunk?.text || "", index, cleanTerm, language)) return;
+      if (["proper-noun", "spacy-propn", "spacy-entity"].includes(source) && dictionarySentenceStartWeak(chunk?.text || "", index, cleanTerm, language)) return;
       if (isWeakEntityLabel(cleanTerm, source)) return;
       const key = normalized;
       const current = candidates.get(key) || {
@@ -3822,6 +3885,18 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
     chunks.forEach((chunk) => {
       const text = String(chunk?.text || "");
+      const annotation = annotations?.get?.(String(chunk?.id || ""));
+      if (annotation) {
+        annotation.entities.forEach((entity) => {
+          const coveredTokens = annotation.tokens.filter((token) => token.start >= entity.start && token.end <= entity.end);
+          const containsPredicate = coveredTokens.some((token) => ["VERB", "AUX", "ADJ"].includes(String(token.pos || "").toUpperCase()));
+          if (!containsPredicate) addCandidate({ term: entity.text, chunk, source: String(entity.label || "").toUpperCase() === "PER" ? "spacy-person" : "spacy-entity", weight: 3, index: entity.start });
+        });
+        annotation.tokens
+          .filter((token) => ["NOUN", "PROPN"].includes(String(token.pos || "").toUpperCase()))
+          .forEach((token) => addCandidate({ term: token.text, chunk, source: String(token.pos || "").toUpperCase() === "PROPN" ? "spacy-propn" : "spacy-noun", weight: 1, index: token.start }));
+        return;
+      }
       for (const match of text.matchAll(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]{2,}){0,3}\b/g)) {
         addCandidate({ term: match[0], chunk, source: "proper-noun", weight: 3, index: match.index || 0 });
       }
@@ -3884,9 +3959,32 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const dictionaryBuildMode = (config = {}) => {
-    const mode = String(config.dictionaryMode || config.extractionMode || config.enrichmentMode || "llm").toLowerCase().trim();
+    const mode = String(config.dictionaryMode || config.extractionMode || config.enrichmentMode || "hybrid").toLowerCase().trim();
     if (mode === "ai") return "llm";
-    return ["rules", "llm", "hybrid"].includes(mode) ? mode : "rules";
+    if (["python", "spacy", "python-spacy"].includes(mode)) return "python-spacy";
+    return ["rules", "llm", "hybrid"].includes(mode) ? mode : "hybrid";
+  };
+
+  const dictionaryHybridProviderMessage = ({ error = "", config = {}, provider = "", model = "" } = {}) => {
+    const raw = String(error || "").trim();
+    const providerType = String(provider || config.providerProfile || config.providerType || config.provider || "").trim();
+    const normalizedProvider = providerType.toLowerCase();
+    const requestedModel = String(model || config.model || "").trim();
+    const configuredEndpoint = String(config.endpoint || config.baseUrl || config.url || "").trim();
+    if (raw === "provider-not-configured") {
+      return "Hybrid Dictionary richiede un provider AI. Apri AI Provider nel Nodo e seleziona un provider e un modello.";
+    }
+    if (/model.*not found|not found.*model|model.*missing/i.test(raw)) {
+      return `Il modello${requestedModel ? ` “${requestedModel}”` : " selezionato"} non è disponibile per ${providerType || "il provider AI"}. Caricalo o selezionane un altro in AI Provider.`;
+    }
+    if (/failed to fetch|connection refused|err_connection_refused|networkerror|econnrefused|fetch failed/i.test(raw)) {
+      const endpoint = configuredEndpoint || (normalizedProvider === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234");
+      const action = normalizedProvider === "ollama"
+        ? "Avvia Ollama oppure scegli il provider corretto in AI Provider."
+        : "Avvia il server del provider oppure verifica endpoint e modello in AI Provider.";
+      return `${providerType || "Il provider AI"} non è raggiungibile su ${endpoint}. ${action}`;
+    }
+    return `Hybrid Dictionary non può verificare le proposte: ${raw || "provider AI non disponibile"}. Controlla AI Provider e riprova.`;
   };
 
   const dictionaryQuoteSupported = (quote = "", chunks = []) => {
@@ -3980,10 +4078,27 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
-  const callKnowledgeDictionaryAi = async ({ chunks = [], language = "", config = {} } = {}) => {
+  const callKnowledgeDictionaryAi = async ({ chunks = [], language = "", config = {}, candidateProposals = [] } = {}) => {
     const mode = dictionaryBuildMode(config);
     if (!["llm", "hybrid"].includes(mode)) return { candidates: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
+    const hybridVerification = mode === "hybrid";
+    const proposalKeys = new Set((candidateProposals || [])
+      .map((candidate) => String(candidate?.normalized || dictionaryLemma(candidate?.term || "", language) || "").trim())
+      .filter(Boolean));
+    const proposalKeysForChunks = (sourceChunks = chunks) => {
+      const sourceChunkIds = new Set((sourceChunks || []).map((chunk) => String(chunk?.id || "")).filter(Boolean));
+      return new Set((candidateProposals || [])
+        .filter((candidate) => [...(candidate?.chunkIds || [])].some((chunkId) => sourceChunkIds.has(String(chunkId))))
+        .map((candidate) => String(candidate?.normalized || dictionaryLemma(candidate?.term || "", language) || "").trim())
+        .filter(Boolean));
+    };
+    if (hybridVerification && !proposalKeys.size) {
+      return { candidates: [], provider: "", model: "", usage: {}, error: "no-python-dictionary-proposals", promptMode: "" };
+    }
     const hasExplicitProvider = Boolean(config.providerProfile || config.profileId || config.providerType || config.provider || config.model);
+    if (hybridVerification && !hasExplicitProvider) {
+      return { candidates: [], provider: "", model: "", usage: {}, error: "provider-not-configured", promptMode: "" };
+    }
     const providerConfig = hasExplicitProvider ? config : { ...config, providerType: "lm-studio" };
     const provider = await pickAiProvider({ ...providerConfig, enrichmentMode: "ai" });
     if (!provider) return { candidates: [], provider: "", model: "", usage: {}, error: "provider-not-found", promptMode: "" };
@@ -4014,15 +4129,21 @@ window.TrackerLensKnowledgeRuntime = (() => {
     );
     const systemPrompt = knowledgeAiTextConfig(
       config.systemPrompt,
-      "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence."
+      hybridVerification
+        ? "You are a Knowledge Dictionary verifier. Assess only the local linguistic proposals supplied by Trackers Lens; do not extract or invent other entries."
+        : "You are a Knowledge Dictionary Builder. Build a reusable lexical memory from local chunks only, preserving source-language terms and evidence."
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use the supplied chunks to propose stable names, roles, places, objects, concepts, creatures, sources, aliases, semantic hints and relation cues that improve later graph extraction without inventing labels."
+      hybridVerification
+        ? "For each proposal, decide whether it is a reusable lexical entry in the supplied source. Reject sentence-initial verbs, adjectives, ordinary fragments and unsupported named entities."
+        : "Use the supplied chunks to propose stable names, roles, places, objects, concepts, creatures, sources, aliases, semantic hints and relation cues that improve later graph extraction without inventing labels."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
-      "Return strict JSON with entries. Every entry must include term, type, aliases, confidence, explanation and an exact evidence.quote copied from a supplied chunk. Reject weak fragments and unsupported aliases."
+      hybridVerification
+        ? "Return strict JSON with accepted entries only. Every accepted entry must retain the exact supplied term, include type, confidence, explanation and an exact evidence.quote copied from a supplied chunk. Omit rejected proposals."
+        : "Return strict JSON with entries. Every entry must include term, type, aliases, confidence, explanation and an exact evidence.quote copied from a supplied chunk. Reject weak fragments and unsupported aliases."
     );
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
@@ -4036,6 +4157,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const chunkLimit = chunkPass ? 1 : configuredChunkLimit;
         const maxChunkTokens = configuredMaxChunkTokens;
         const maxEntries = Number.isFinite(maxTerms) ? maxTerms : undefined;
+        const sourceChunkIds = new Set(sourceChunks.slice(0, chunkLimit).map((chunk) => String(chunk?.id || "")).filter(Boolean));
+        const proposals = hybridVerification
+          ? candidateProposals
+            .filter((candidate) => [...(candidate?.chunkIds || [])].some((chunkId) => sourceChunkIds.has(String(chunkId))))
+            .slice(0, maxTerms)
+            .map((candidate) => ({
+              term: String(candidate?.term || ""),
+              normalized: String(candidate?.normalized || ""),
+              source: String(candidate?.source || ""),
+              occurrences: Number(candidate?.count || 0),
+              evidenceChunkId: String(candidate?.evidenceChunk?.id || ""),
+              evidenceQuote: dictionaryEvidenceFor(candidate?.evidenceChunk?.text || "", candidate?.term || "")?.quote || "",
+            }))
+          : [];
         return [
           systemPrompt,
           promptTemplate,
@@ -4043,7 +4178,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           "Return ONLY one valid JSON object.",
           "The first character must be { and the last character must be }.",
           "Do not wrap JSON in markdown. Do not add prose before or after JSON.",
-          "Do not invent entries. Do not include terms unsupported by an exact evidence quote.",
+          hybridVerification
+            ? "Accept ONLY a term from the supplied proposals list. Do not change spelling and do not add aliases that are not source-backed."
+            : "Do not invent entries. Do not include terms unsupported by an exact evidence quote.",
           "Every evidence.quote must be copied exactly from one supplied chunk.",
           "Prefer source-language labels. Keep aliases short and evidence-backed.",
           "If there are no valid entries, return {\"entries\":[]}.",
@@ -4063,6 +4200,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
             },
             language,
             ...(Number.isFinite(maxEntries) ? { maxEntries } : {}),
+            ...(hybridVerification ? { proposals } : {}),
             chunks: sourceChunks.slice(0, chunkLimit).map((chunk, index) => ({
               id: chunk.id || `chunk_${index + 1}`,
               ordinal: chunk.ordinal ?? chunk.index ?? index,
@@ -4093,6 +4231,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const validatedDictionaryPatch = (patch = {}, sourceChunks = chunks) =>
         (Array.isArray(patch.entries) ? patch.entries : [])
           .map((item) => normalizeAiDictionaryCandidate(item, sourceChunks, language))
+          .filter((candidate) => !hybridVerification || proposalKeysForChunks(sourceChunks).has(String(candidate?.normalized || "")))
           .filter(Boolean)
           .slice(0, maxTerms);
       const salvageDictionaryCandidatesFromText = ({ text = "", sourceChunks = chunks } = {}) => {
@@ -4175,6 +4314,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         return candidates.length ? { candidates, promptMode: `${promptMode}-repair` } : null;
       };
       const runDictionaryPromptAttempt = async ({ promptMode = "full", sourceChunks = chunks } = {}) => {
+        const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
         const sentChunkLimit = chunkPass ? 1 : configuredChunkLimit;
         sourceChunks.slice(0, sentChunkLimit).forEach((chunk) => attemptedChunkIds.add(chunk.id || ""));
@@ -4416,6 +4556,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const combinedText = scopedChunks.map((chunk) => chunk.text || "").join("\n\n");
     const effectiveConfig = agentToolsBoundedKnowledgeConfig(node, config);
     const language = detectLanguage(combinedText, preferredRuntimeLanguage(effectiveConfig, payload) || scopedChunks[0]?.metadata?.language || "");
+    if (!["it", "en", "es", "fr", "de"].includes(language)) {
+      throw Object.assign(new Error("Lingua del documento non riconosciuta. Seleziona italiano, inglese, spagnolo, francese o tedesco nel Nodo Dictionary."), { code: "PYTHON_ANNOTATION_LANGUAGE_UNSUPPORTED" });
+    }
     const maxTerms = Math.max(8, Number(effectiveConfig.maxTerms || 120));
     const minFrequency = Math.max(1, Number(effectiveConfig.minFrequency || 1));
     const scope = String(effectiveConfig.scope || "document").trim().toLowerCase() || "document";
@@ -4423,32 +4566,51 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const replaceExisting = effectiveConfig.replaceExisting !== false;
     if (replaceExisting && documentId) await deleteDictionaryEntries({ workspaceId, documentId });
     const now = nowIso();
+    const annotationResult = await annotateDictionaryChunksWithPython({ chunks: scopedChunks, language, config: effectiveConfig });
+    const candidateConfig = mode === "python-spacy" ? { ...effectiveConfig, customRules: {} } : effectiveConfig;
+    const pythonCandidates = extractDictionaryCandidates(scopedChunks, {
+      language,
+      maxTerms,
+      minFrequency,
+      config: candidateConfig,
+      annotations: annotationResult.annotations,
+    });
+    const sourceAnchorCandidates = mode === "hybrid" && effectiveConfig.useSourceAnchors !== false
+      ? extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms, config: effectiveConfig })
+      : [];
+    const localCandidates = mergeDictionaryCandidates(pythonCandidates, sourceAnchorCandidates, maxTerms);
     const aiResult = ["llm", "hybrid"].includes(mode)
-      ? await callKnowledgeDictionaryAi({ chunks: scopedChunks, language, config: effectiveConfig })
+      ? await callKnowledgeDictionaryAi({
+        chunks: scopedChunks,
+        language,
+        config: effectiveConfig,
+        candidateProposals: mode === "hybrid" ? localCandidates : [],
+      })
       : { candidates: [], provider: "", model: "", usage: {}, error: "", promptMode: "" };
+    if (mode === "hybrid" && aiResult.error) {
+      throw Object.assign(new Error(dictionaryHybridProviderMessage({
+        error: aiResult.error,
+        config: effectiveConfig,
+        provider: aiResult.provider,
+        model: aiResult.model,
+      })), { code: "KNOWLEDGE_DICTIONARY_HYBRID_VERIFICATION_FAILED", cause: aiResult.error });
+    }
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
     }
-    const minHybridAiTerms = Math.max(4, Math.min(maxTerms, Number(effectiveConfig.minHybridAiTerms || Math.max(12, scopedChunks.length * 2))));
-    const aiDictionaryUsable = hybridAiCountUsable({
-      count: aiResult.candidates?.length || 0,
-      min: minHybridAiTerms,
-      promptMode: aiResult.promptMode || "",
-    });
-    const useRuleFallback = mode === "rules" ||
-      (mode === "hybrid" && !aiDictionaryUsable);
-    const useHybridCompletion = mode === "hybrid";
-    const sourceAnchorCandidates = mode === "llm" || mode === "rules" || effectiveConfig.useSourceAnchors === false
-      ? []
-      : extractSourceDictionaryAnchors(scopedChunks, { language, maxTerms, config: effectiveConfig });
-    const ruleCandidates = useRuleFallback || useHybridCompletion
-      ? extractDictionaryCandidates(scopedChunks, { language, maxTerms, minFrequency, config: effectiveConfig })
-      : [];
+    const verifiedCandidateKeys = new Set((aiResult.candidates || []).map((candidate) => String(candidate?.normalized || "")).filter(Boolean));
+    const verifiedLocalCandidates = localCandidates
+      .filter((candidate) => verifiedCandidateKeys.has(String(candidate?.normalized || "")))
+      .map((candidate) => ({
+        ...candidate,
+        ai: (aiResult.candidates || []).find((verified) => String(verified?.normalized || "") === String(candidate?.normalized || ""))?.ai || null,
+        source: "hybrid-verified",
+      }));
     const finalCandidates = mode === "llm"
       ? (aiResult.candidates || []).slice(0, maxTerms)
       : mode === "hybrid"
-        ? mergeDictionaryCandidates(ruleCandidates, mergeDictionaryCandidates(sourceAnchorCandidates, aiResult.candidates || [], maxTerms), maxTerms)
-        : mergeDictionaryCandidates(ruleCandidates, aiResult.candidates || [], maxTerms);
+        ? verifiedLocalCandidates.slice(0, maxTerms)
+        : pythonCandidates.slice(0, maxTerms);
     const records = [];
     for (const candidate of finalCandidates) {
       const chunk = candidate.evidenceChunk || scopedChunks[0] || {};
@@ -4461,7 +4623,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         chunks: scopedChunks,
         maxItems: Math.max(1, Math.min(24, Number(effectiveConfig.evidencePackLimit || 8))),
       });
-      const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "", effectiveConfig);
+      const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "", candidateConfig);
       const aiTypeCandidates = candidate.ai?.typeCandidates || [];
       const localPrimaryType = String(localTypeCandidates[0]?.type || "").toLowerCase();
       const aiPrimaryType = String(aiTypeCandidates[0]?.type || "").toLowerCase();
@@ -4506,10 +4668,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
           occurrenceCount: candidate.count,
           sourceChunkIds: [...candidate.chunkIds].filter(Boolean),
           mode,
+          customRulesApplied: ["rules", "hybrid"].includes(mode),
           provider: aiResult.provider || "",
           model: aiResult.model || "",
           aiError: aiResult.error || "",
           explanation: candidate.ai?.explanation || "",
+          annotationPipeline: annotationResult.pipeline?.id || "",
+          annotationPipelineRevision: annotationResult.pipeline?.version || "",
         },
         status: "ready",
         createdAt: now,
@@ -4551,18 +4716,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
       language,
       scope,
       mode,
+      annotations: {
+        runtime: "python",
+        pipeline: annotationResult.pipeline?.id || "",
+        revision: annotationResult.pipeline?.version || "",
+        chunkCount: annotationResult.annotations.size,
+      },
       ai: {
         provider: aiResult.provider || "",
         model: aiResult.model || "",
         error: aiResult.error || "",
         promptMode: aiResult.promptMode || "",
         candidateCount: aiResult.candidates?.length || 0,
-        minHybridCandidates: minHybridAiTerms,
-        hybridFallback: useRuleFallback,
-        hybridMerged: mode === "hybrid",
-        ruleCompletionCount: mode === "hybrid" || mode === "rules" ? ruleCandidates.length : 0,
+        localProposalCount: localCandidates.length,
+        verifiedCandidateCount: verifiedLocalCandidates.length,
+        rejectedProposalCount: mode === "hybrid" ? Math.max(0, localCandidates.length - verifiedLocalCandidates.length) : 0,
+        verificationRequired: mode === "hybrid",
         sourceAnchorCount: sourceAnchorCandidates.length,
-        fallbackReason: useRuleFallback && mode === "hybrid" ? "sparse-ai-dictionary-output" : "",
         chunkCoverage: aiResult.stats || {
           inputChunkCount: scopedChunks.length,
           attemptedChunkCount: 0,
@@ -4584,11 +4754,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }, {}),
       usableSeedCount: records.filter((entry) => entry.usableAsSeed).length,
       context,
-      status: mode === "hybrid" && (aiResult.candidates?.length || 0) > 0 && useRuleFallback
-        ? "partial-ai-merged"
-        : useRuleFallback
-          ? "fallback"
-          : "ready",
+      // Hybrid no longer falls back to the legacy rules output: it verifies
+      // only the candidates proposed locally by spaCy/TL.  Keep the outcome
+      // explicit without referring to the retired fallback state.
+      status: mode === "hybrid" ? "verified" : "ready",
       createdAt: now,
     };
   };
@@ -11905,6 +12074,17 @@ window.TrackerLensKnowledgeRuntime = (() => {
           status: "error",
           meta: { knowledgeRuntime: node.id, inputEventId: event?.id || "", runId },
         });
+        window.dispatchEvent(new CustomEvent("trackers:runtime-error", {
+          detail: {
+            workspaceId: this.workspaceId,
+            nodeId: node.id,
+            nodeLabel: node.label || node.id,
+            subtype,
+            runId,
+            code: error?.code || "KNOWLEDGE_RUNTIME_ERROR",
+            message: error.message || String(error),
+          },
+        }));
         await this.log({
           node,
           level: "error",

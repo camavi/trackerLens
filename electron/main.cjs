@@ -10,6 +10,7 @@ const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs"
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
 const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
+const annotationsPackManifest = require("../runtimes/python/packs/annotations/pack.json");
 
 const projectRoot = path.resolve(__dirname, "..");
 const preloadPath = path.join(__dirname, "preload.cjs");
@@ -20,10 +21,25 @@ const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
 const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
 const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
 const pythonRagRerankModelPath = path.join(projectRoot, "runtimes/python/models/mmarco-mMiniLMv2-L12-H384-v1");
+const pythonAnnotationModelPaths = new Map(annotationsPackManifest.models.map((model) => [model.id, path.join(projectRoot, "runtimes/python/models/spacy", model.id)]));
 const pythonNlpEnvironmentPath = path.join(projectRoot, "runtimes/python/envs/nlp");
 const pythonNlpBootstrap = process.env.TL_PYTHON_BOOTSTRAP || "python3.11";
 const pythonNlpEnabled = () => fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
 const pythonRagEnabled = () => pythonNlpEnabled() && fs.existsSync(pythonRagRerankModelPath);
+const pythonAnnotationsEnabled = () => fs.existsSync(pythonNlpPythonPath) && annotationsPackManifest.models.every((model) => fs.existsSync(pythonAnnotationModelPaths.get(model.id)));
+const annotationLanguageByModelId = { en_core_web_sm: "en", it_core_news_sm: "it", es_core_news_sm: "es", fr_core_news_sm: "fr", de_core_news_sm: "de" };
+const annotationWorkerModels = () => pythonAnnotationsEnabled() ? annotationsPackManifest.models.map((model) => ({
+  id: model.id,
+  language: annotationLanguageByModelId[model.id],
+  package: model.artifact.package,
+  revision: model.revision,
+  directory: path.join(pythonAnnotationModelPaths.get(model.id), "content")
+})) : [];
+const pythonPackStatus = (manifest) => {
+  if (manifest.id === ragPackManifest.id) return pythonRagEnabled() ? "ready" : "unavailable";
+  if (manifest.id === annotationsPackManifest.id) return pythonAnnotationsEnabled() ? "ready" : "unavailable";
+  return pythonNlpEnabled() ? "ready" : "unavailable";
+};
 let tlCore = null;
 let pythonPoc = null;
 let pythonNlp = null;
@@ -40,6 +56,7 @@ const createPythonNlpRuntime = () => {
       TL_RAG_RERANK_MODEL_DIR: pythonRagRerankModelPath,
       TL_RAG_RERANK_MODEL_ID: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
       TL_RAG_RERANK_MODEL_REVISION: "1427fd652930e4ba29e8149678df786c240d8825",
+      TL_NLP_ANNOTATION_MODELS: JSON.stringify(annotationWorkerModels()),
       HF_HUB_OFFLINE: "1",
       HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
     }
@@ -54,10 +71,10 @@ const pythonNlpAdapter = {
   restart: () => createPythonNlpRuntime()?.restart() || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" }))
 };
 const pythonPacks = new PythonPackResolver({
-  packs: [nlpPackManifest, ragPackManifest].map((manifest) => ({
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest].map((manifest) => ({
     ...manifest,
     packages: manifest.requirements.map((requirement) => ({ ...requirement, version: String(requirement.version || "").replace(/^==/, "") })),
-    status: manifest.id === ragPackManifest.id ? (pythonRagEnabled() ? "ready" : "unavailable") : (pythonNlpEnabled() ? "ready" : "unavailable")
+    status: pythonPackStatus(manifest)
   }))
 });
 const nlpEnvironment = {
@@ -74,19 +91,31 @@ const nlpEnvironment = {
   onInstalled: async () => {
     pythonPacks.setStatus(nlpPackManifest.id, pythonNlpEnabled() ? "ready" : "unavailable");
     pythonPacks.setStatus(ragPackManifest.id, pythonRagEnabled() ? "ready" : "unavailable");
+    pythonPacks.setStatus(annotationsPackManifest.id, pythonAnnotationsEnabled() ? "ready" : "unavailable");
+    if (pythonNlp) pythonNlp.environment.TL_NLP_ANNOTATION_MODELS = JSON.stringify(annotationWorkerModels());
     await createPythonNlpRuntime()?.restart();
+  },
+  onModelRemoved: async () => {
+    pythonPacks.setStatus(nlpPackManifest.id, pythonNlpEnabled() ? "ready" : "unavailable");
+    pythonPacks.setStatus(ragPackManifest.id, pythonRagEnabled() ? "ready" : "unavailable");
+    pythonPacks.setStatus(annotationsPackManifest.id, pythonAnnotationsEnabled() ? "ready" : "unavailable");
+    if (pythonNlp) {
+      pythonNlp.environment.TL_NLP_ANNOTATION_MODELS = JSON.stringify(annotationWorkerModels());
+      await pythonNlp.restart();
+    }
   },
   models: [
     { ...nlpPackManifest.models[0], displayName: "Multilingual MiniLM L12 v2", directory: pythonNlpModelPath },
-    { ...ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"), directory: pythonRagRerankModelPath }
+    { ...ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"), directory: pythonRagRerankModelPath },
+    ...annotationsPackManifest.models.map((model) => ({ ...model, directory: pythonAnnotationModelPaths.get(model.id) }))
   ]
 };
 const pythonRuntimeCatalog = new PythonRuntimeCatalog({
-  packs: [nlpPackManifest, ragPackManifest],
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest],
   environments: [nlpEnvironment]
 });
 const pythonPackInstaller = new ManagedPythonPackInstaller({
-  packs: [nlpPackManifest, ragPackManifest].map((pack) => ({ ...pack, lockfilePath: path.join(projectRoot, pack.lockfile) })),
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest].map((pack) => ({ ...pack, lockfilePath: path.join(projectRoot, pack.lockfile) })),
   environments: [nlpEnvironment]
 });
 pythonPackInstaller.subscribe((progress) => {

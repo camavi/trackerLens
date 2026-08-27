@@ -1,0 +1,103 @@
+{
+  "id": "trackerslens.nlp.annotations",
+  "version": "0.1.0",
+  "environment": "nlp",
+  "status": "development-ready",
+  "trustLevel": "built-in",
+  "installPolicy": "managed-optional",
+  "python": ">=3.10,<3.13",
+  "developmentInterpreter": "python3.11",
+  "lockfile": "runtimes/python/packs/annotations/requirements.lock",
+  "requirements": [
+    { "name": "spacy", "version": "==3.8.14" }
+  ],
+  "models": [
+    {
+      "id": "en_core_web_sm",
+      "displayName": "English small pipeline",
+      "revision": "3.8.0",
+      "languages": 1,
+      "license": "MIT",
+      "estimatedDownloadBytes": 12806118,
+      "localOnlyAfterInstall": true,
+      "artifact": {
+        "type": "python-wheel",
+        "source": "Official spaCy GitHub Release",
+        "url": "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+        "sha256": "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
+        "sizeBytes": 12806118,
+        "package": "en_core_web_sm"
+      }
+    },
+    {
+      "id": "it_core_news_sm",
+      "displayName": "Italian small pipeline",
+      "revision": "3.8.0",
+      "languages": 1,
+      "license": "MIT",
+      "estimatedDownloadBytes": 13030943,
+      "localOnlyAfterInstall": true,
+      "artifact": {
+        "type": "python-wheel",
+        "source": "Official spaCy GitHub Release",
+        "url": "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl",
+        "sha256": "3f617bf9a8ae0418953cf1fbf014e10272684c4229e882a7fd748b637d0100bf",
+        "sizeBytes": 13030943,
+        "package": "it_core_news_sm"
+      }
+    },
+    {
+      "id": "es_core_news_sm",
+      "displayName": "Spanish small pipeline",
+      "revision": "3.8.0",
+      "languages": 1,
+      "license": "MIT",
+      "estimatedDownloadBytes": 12884212,
+      "localOnlyAfterInstall": true,
+      "artifact": {
+        "type": "python-wheel",
+        "source": "Official spaCy GitHub Release",
+        "url": "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl",
+        "sha256": "e451a83d6df79b87e9eed0cb553f03e99e36a3bab18a7b79f0dcfd1fdf875e12",
+        "sizeBytes": 12884212,
+        "package": "es_core_news_sm"
+      }
+    },
+    {
+      "id": "fr_core_news_sm",
+      "displayName": "French small pipeline",
+      "revision": "3.8.0",
+      "languages": 1,
+      "license": "MIT",
+      "estimatedDownloadBytes": 16271721,
+      "localOnlyAfterInstall": true,
+      "artifact": {
+        "type": "python-wheel",
+        "source": "Official spaCy GitHub Release",
+        "url": "https://github.com/explosion/spacy-models/releases/download/fr_core_news_sm-3.8.0/fr_core_news_sm-3.8.0-py3-none-any.whl",
+        "sha256": "7d6ad14cd5078e53147bfbf70fb9d433c6a3865b695fda2657140bbc59a27e29",
+        "sizeBytes": 16271721,
+        "package": "fr_core_news_sm"
+      }
+    },
+    {
+      "id": "de_core_news_sm",
+      "displayName": "German small pipeline",
+      "revision": "3.8.0",
+      "languages": 1,
+      "license": "MIT",
+      "estimatedDownloadBytes": 14639490,
+      "localOnlyAfterInstall": true,
+      "artifact": {
+        "type": "python-wheel",
+        "source": "Official spaCy GitHub Release",
+        "url": "https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl",
+        "sha256": "fec69fec52b1780f2d269d5af7582a5e28028738bd3190532459aeb473bfa3e7",
+        "sizeBytes": 14639490,
+        "package": "de_core_news_sm"
+      }
+    }
+  ],
+  "capabilities": ["nlp.annotations"],
+  "dataAccess": "TL-authorized chunk text only; no direct database access"
+}

@@ -1840,7 +1840,7 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "knowledge-dictionary-builder") {
       return withAiProviderConfigFields([
-        { key: "dictionaryMode", label: "Dictionary mode", type: "select", options: ["llm", "hybrid", "rules"], defaultValue: "llm" },
+        { key: "dictionaryMode", label: "Dictionary mode", type: "select", options: [{ value: "hybrid", label: "Hybrid — spaCy proposals + LLM verification" }, { value: "python-spacy", label: "Python spaCy — local, fast" }, { value: "rules", label: "Rules — spaCy + custom rules" }, { value: "llm", label: "LLM — model-guided selection" }], defaultValue: "hybrid", description: "Hybrid verifies only spaCy/TL proposals against source evidence. It requires a configured AI provider." },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "scope", label: "Dictionary scope", type: "select", options: ["document", "collection", "workspace"], defaultValue: "document" },
         { key: "language", label: "Language", placeholder: "auto, it, en, es, fr, de" },
@@ -4184,7 +4184,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.entity.created" },
     ],
     "knowledge-dictionary-builder": [
-      { iconName: "psychology", label: "Mode", value: config.dictionaryMode || "llm" },
+      { iconName: "memory", label: "Mode", value: config.dictionaryMode || "hybrid" },
       { iconName: "filter_alt", label: "Scope", value: config.scope || "document" },
       { iconName: "translate", label: "Language", value: config.language || "auto" },
       { iconName: "data_object", label: "Limit", value: config.maxTerms || "120" },

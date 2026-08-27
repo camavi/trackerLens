@@ -46,6 +46,7 @@
       requirements,
       lockfile: text(value.lockfile || value.lock),
       installPolicy: PYTHON_INSTALL_POLICIES.has(installPolicy) ? installPolicy : "managed-required",
+      requiredByDefault: Boolean(value.requiredByDefault),
     };
   };
 

@@ -103,6 +103,7 @@ class PythonRuntimeCatalog {
     if (!await pathExists(model.directory)) throw Object.assign(new Error("Python model is not installed."), { code: "PYTHON_MODEL_MISSING" });
     await environment.stopRuntime?.();
     await fs.rm(model.directory, { recursive: true, force: false, maxRetries: 3 });
+    await environment.onModelRemoved?.(model);
     return { removed: true, modelId: String(model.id), environmentId: String(environment.id || "python") };
   }
 }

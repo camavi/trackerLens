@@ -12,6 +12,7 @@ const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs
 const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
 const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
 const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
+const annotationsPackManifest = require("../runtimes/python/packs/annotations/pack.json");
 
 test("managed RAG pack pins its local CrossEncoder reranker", () => {
   const reranker = ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1");
@@ -27,6 +28,21 @@ test("managed RAG pack pins its local CrossEncoder reranker", () => {
     localOnlyAfterInstall: true
   });
   assert.ok(ragPackManifest.capabilities.includes("text.rerank"));
+});
+
+test("managed annotations pack pins five official spaCy CPU wheel artifacts", () => {
+  assert.equal(annotationsPackManifest.id, "trackerslens.nlp.annotations");
+  assert.deepEqual(annotationsPackManifest.requirements, [{ name: "spacy", version: "==3.8.14" }]);
+  assert.equal(annotationsPackManifest.models.length, 5);
+  assert.deepEqual(annotationsPackManifest.models.map((model) => model.id).sort(), ["de_core_news_sm", "en_core_web_sm", "es_core_news_sm", "fr_core_news_sm", "it_core_news_sm"]);
+  for (const model of annotationsPackManifest.models) {
+    assert.equal(model.revision, "3.8.0");
+    assert.equal(model.artifact.type, "python-wheel");
+    assert.match(model.artifact.url, /^https:\/\/github\.com\/explosion\/spacy-models\/releases\/download\//);
+    assert.match(model.artifact.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(model.artifact.sizeBytes, model.estimatedDownloadBytes);
+    assert.equal(model.artifact.package, model.id);
+  }
 });
 
 test("TL Core exposes desktop status without persistence handles", async () => {
@@ -265,6 +281,7 @@ test("Python runtime catalog exposes managed metadata without local paths and re
   fs.writeFileSync(path.join(modelDirectory, "weights.bin"), "1234567890");
   context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
   let stopped = 0;
+  let removalNotified = 0;
   const catalog = new PythonRuntimeCatalog({
     packs: [{ id: "builtin-nlp", version: "1.0.0", environment: "nlp", requirements: [{ name: "sentence-transformers", version: "==5.5.0" }], models: [{ id: "model/test" }] }],
     environments: [{
@@ -275,6 +292,7 @@ test("Python runtime catalog exposes managed metadata without local paths and re
       enabled: () => true,
       runtimeStatus: () => ({ status: "ready" }),
       stopRuntime: async () => { stopped += 1; },
+      onModelRemoved: async () => { removalNotified += 1; },
       models: [{ id: "model/test", displayName: "Test model", directory: modelDirectory, revision: "rev", dimensions: 12, languages: 1, license: "Apache-2.0" }]
     }]
   });
@@ -286,6 +304,7 @@ test("Python runtime catalog exposes managed metadata without local paths and re
   await assert.rejects(core.request("runtime.pythonRuntime.removeModel", { modelId: "model/test" }), (error) => error.code === "PYTHON_MODEL_CONFIRMATION_REQUIRED");
   assert.deepEqual(await core.request("runtime.pythonRuntime.removeModel", { modelId: "model/test", confirmed: true }), { removed: true, modelId: "model/test", environmentId: "nlp" });
   assert.equal(stopped, 1);
+  assert.equal(removalNotified, 1);
   assert.equal(fs.existsSync(modelDirectory), false);
 });
 
@@ -362,6 +381,41 @@ test("managed Python pack installation resumes only a revision-verified partial 
   assert.match(progress.find((event) => event.phase === "downloading-model").message, /^Resuming /);
 });
 
+test("managed Python pack installation accepts only a Core-downloaded pinned wheel artifact", async (context) => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-python-wheel-"));
+  const pythonPath = path.join(fixtureDirectory, "python");
+  const modelDirectory = path.join(fixtureDirectory, "model");
+  fs.writeFileSync(pythonPath, "fixture");
+  context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  const downloads = [];
+  const installer = new ManagedPythonPackInstaller({
+    packs: [{ id: "builtin-annotations", version: "1.0.0", trustLevel: "built-in", environment: "nlp", lockfile: "python/annotations.lock", lockfilePath: "/managed/python/annotations.lock", requirements: [{ name: "spacy", version: "==3.8.14" }], models: [{ id: "it_core_news_sm", revision: "3.8.0", displayName: "Italian pipeline", estimatedDownloadBytes: 12, artifact: { type: "python-wheel", source: "Official spaCy release", url: "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl", sha256: "a".repeat(64), sizeBytes: 12 } }] }],
+    environments: [{ id: "nlp", interpreter: "Python 3.11", pythonPath, directory: fixtureDirectory, bootstrapPython: "python3.11", models: [{ id: "it_core_news_sm", directory: modelDirectory, artifact: { type: "python-wheel", url: "https://github.com/explosion/spacy-models/releases/download/it_core_news_sm-3.8.0/it_core_news_sm-3.8.0-py3-none-any.whl", sha256: "a".repeat(64), sizeBytes: 12 } }] }],
+    downloadWheelArtifact: async ({ model, temporaryDirectory, onProgress }) => {
+      downloads.push(model.id);
+      fs.mkdirSync(temporaryDirectory, { recursive: true });
+      const wheel = path.join(temporaryDirectory, "artifact.whl");
+      fs.writeFileSync(wheel, "fixture-wheel");
+      onProgress({ downloadedBytes: 12, totalBytes: 12 });
+      return { wheelPath: wheel, extractCode: "fixture-wheel-extract" };
+    },
+    runProcess: async (_command, args) => {
+      if (args[1] === "pip") return { stdout: "", stderr: "" };
+      if (args[0] === "-c" && String(args[1]).includes("importlib.metadata")) return { stdout: '{"spacy":"3.8.14"}', stderr: "" };
+      if (args[0] === "-c" && args[1] === "fixture-wheel-extract") { fs.mkdirSync(args[3], { recursive: true }); fs.writeFileSync(path.join(args[3], "config.cfg"), "pipeline"); return { stdout: "", stderr: "" }; }
+      throw new Error(`Unexpected process: ${args.join(" ")}`);
+    }
+  });
+  const plan = await installer.getInstallPlan({ packId: "builtin-annotations" });
+  assert.equal(plan.models[0].artifactType, "python-wheel");
+  assert.equal(plan.models[0].source, "Official spaCy release");
+  const result = await installer.install({ packId: "builtin-annotations", confirmed: true });
+  assert.deepEqual(downloads, ["it_core_news_sm"]);
+  assert.deepEqual(result.downloadedModels, ["it_core_news_sm"]);
+  assert.equal(fs.existsSync(path.join(modelDirectory, "content", "config.cfg")), true);
+  assert.equal(fs.existsSync(path.join(modelDirectory, "artifact.whl")), false);
+});
+
 test("legacy nodes normalize to the JavaScript execution runtime", () => {
   const execution = executionContract.normalizeExecution({}, { legacy: true });
   const resolution = executionContract.resolveRuntime(execution, ["javascript"]);
@@ -395,7 +449,8 @@ test("execution manifests normalize managed Python module requirements without i
         environment: "nlp",
         requirements: ["sentence-transformers", { package: "torch", constraint: ">=2,<3" }],
         lock: "python/nlp.lock",
-        policy: "managed-optional"
+        policy: "managed-optional",
+        requiredByDefault: true
       }
     }
   });
@@ -407,7 +462,8 @@ test("execution manifests normalize managed Python module requirements without i
       { name: "torch", version: ">=2,<3" }
     ],
     lockfile: "python/nlp.lock",
-    installPolicy: "managed-optional"
+    installPolicy: "managed-optional",
+    requiredByDefault: true
   });
   assert.deepEqual(executionContract.PYTHON_INSTALL_POLICIES.sort(), ["bundled", "managed-optional", "managed-required"]);
 });

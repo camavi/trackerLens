@@ -42,6 +42,7 @@ Last updated: 2026-08-27.
 - Python migration direction: `docs/ai/python_migration_guide.md`
 - Managed Python packs, installation and Runtime Python e Modelli: `docs/ai/runtime/python-node-sdk.md`, plus `docs/ai/current-focus.md`
 - Python Hybrid RAG and CrossEncoder reranking: `docs/ai/current-focus.md` and `docs/ai/task-registry.md`
+- Managed spaCy linguistic annotations: `docs/ai/runtime/nlp-annotations.md`
 - Agent runtime: `docs/ai/runtime/agent-runtime.md`
 - Connected node tools: `docs/ai/runtime/connected-node-tools.md`
 - AI memory runtime: `docs/ai/runtime/ai-memory.md`

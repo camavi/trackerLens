@@ -8994,7 +8994,7 @@ const renderShell = () =>
           dense: true,
           title: "Chiudi errore",
           "aria-label": "Chiudi errore",
-          onClick: (event) => {
+          onclick: (event) => {
             event.preventDefault();
             event.stopPropagation();
             clearFlowMapError({ remount: true });

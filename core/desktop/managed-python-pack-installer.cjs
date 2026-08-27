@@ -1,5 +1,7 @@
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
+const https = require("node:https");
 const path = require("node:path");
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -27,6 +29,95 @@ const canResumeModelDownload = async (temporaryDirectory, revision) => {
   return exists(resumableModelMetadataPath(temporaryDirectory, revision));
 };
 const safeRelativeFile = (file) => String(file || "").trim() && !String(file).includes("..") && !path.isAbsolute(String(file));
+const sha256Pattern = /^[a-f0-9]{64}$/i;
+const trustedArtifactHosts = new Set(["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"]);
+const artifactMetadataPath = (temporaryDirectory) => path.join(temporaryDirectory, ".tl-artifact.json");
+const wheelPartialPath = (temporaryDirectory) => path.join(temporaryDirectory, "artifact.whl.partial");
+const wheelPath = (temporaryDirectory) => path.join(temporaryDirectory, "artifact.whl");
+const artifactManifest = (model = {}) => model.artifact && typeof model.artifact === "object" ? model.artifact : null;
+const isPinnedWheelArtifact = (model = {}) => artifactManifest(model)?.type === "python-wheel";
+const validWheelArtifact = (model = {}) => {
+  const artifact = artifactManifest(model);
+  if (!artifact || artifact.type !== "python-wheel") return false;
+  let url;
+  try { url = new URL(String(artifact.url || "")); } catch (_) { return false; }
+  return url.protocol === "https:" && trustedArtifactHosts.has(url.hostname) && sha256Pattern.test(String(artifact.sha256 || ""));
+};
+const wheelArtifactProgress = async ({ temporaryDirectory, artifact = {}, estimatedDownloadBytes = 0 }) => {
+  const partial = await fs.stat(wheelPartialPath(temporaryDirectory)).catch(() => null);
+  const completed = await fs.stat(wheelPath(temporaryDirectory)).catch(() => null);
+  const downloadedBytes = Number(completed?.size || partial?.size || 0);
+  const totalBytes = Number(artifact.sizeBytes || estimatedDownloadBytes || 0);
+  return { downloadedBytes: totalBytes ? Math.min(downloadedBytes, totalBytes) : downloadedBytes, totalBytes };
+};
+const canResumeWheelArtifact = async (temporaryDirectory, model = {}) => {
+  if (!validWheelArtifact(model)) return false;
+  try {
+    const metadata = JSON.parse(await fs.readFile(artifactMetadataPath(temporaryDirectory), "utf8"));
+    return metadata.id === String(model.id || "")
+      && metadata.revision === String(model.revision || "")
+      && metadata.url === String(model.artifact.url || "")
+      && metadata.sha256 === String(model.artifact.sha256 || "")
+      && Boolean((await fs.stat(wheelPartialPath(temporaryDirectory)).catch(() => null))?.isFile());
+  } catch (_) { return false; }
+};
+const requestPinnedArtifact = ({ url, headers = {}, redirects = 0 }) => new Promise((resolve, reject) => {
+  if (redirects > 5) return reject(errorWithCode("Managed Python artifact redirected too many times.", "PYTHON_ARTIFACT_REDIRECT_INVALID"));
+  let parsed;
+  try { parsed = new URL(url); } catch (_) { return reject(errorWithCode("Managed Python artifact URL is invalid.", "PYTHON_ARTIFACT_URL_INVALID")); }
+  if (parsed.protocol !== "https:" || !trustedArtifactHosts.has(parsed.hostname)) return reject(errorWithCode("Managed Python artifact source is not trusted.", "PYTHON_ARTIFACT_SOURCE_UNTRUSTED"));
+  const request = https.get(parsed, { headers }, (response) => {
+    if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
+      response.resume();
+      return requestPinnedArtifact({ url: new URL(response.headers.location, parsed).toString(), headers, redirects: redirects + 1 }).then(resolve, reject);
+    }
+    if (![200, 206].includes(response.statusCode)) {
+      response.resume();
+      return reject(errorWithCode(`Managed Python artifact download failed (${response.statusCode}).`, "PYTHON_ARTIFACT_DOWNLOAD_FAILED"));
+    }
+    resolve(response);
+  });
+  request.once("error", (error) => reject(Object.assign(error, { code: "PYTHON_ARTIFACT_DOWNLOAD_FAILED" })));
+});
+const downloadPinnedWheel = async ({ model, temporaryDirectory, onProgress = null }) => {
+  if (!validWheelArtifact(model)) throw errorWithCode("Python wheel artifact is not pinned to a trusted URL and SHA-256.", "PYTHON_ARTIFACT_INVALID");
+  const artifact = artifactManifest(model);
+  await fs.mkdir(temporaryDirectory, { recursive: true });
+  const resume = await canResumeWheelArtifact(temporaryDirectory, model);
+  if (!resume && await exists(temporaryDirectory)) {
+    const entries = await fs.readdir(temporaryDirectory).catch(() => []);
+    if (entries.length && !await exists(wheelPath(temporaryDirectory))) throw errorWithCode("A previous partial Python artifact cannot be verified safely. Remove it from Runtime Python e Modelli before retrying.", "PYTHON_MODEL_INSTALL_INCOMPLETE");
+  }
+  await fs.writeFile(artifactMetadataPath(temporaryDirectory), JSON.stringify({ id: String(model.id), revision: String(model.revision || ""), url: String(artifact.url), sha256: String(artifact.sha256) }));
+  const partialPath = wheelPartialPath(temporaryDirectory);
+  const completedPath = wheelPath(temporaryDirectory);
+  const completed = await fs.stat(completedPath).catch(() => null);
+  if (!completed) {
+    const partial = await fs.stat(partialPath).catch(() => null);
+    const existingBytes = Number(partial?.size || 0);
+    const response = await requestPinnedArtifact({ url: artifact.url, headers: existingBytes ? { Range: `bytes=${existingBytes}-` } : {} });
+    const append = existingBytes > 0 && response.statusCode === 206;
+    if (!append && existingBytes) await fs.rm(partialPath, { force: true });
+    const output = require("node:fs").createWriteStream(partialPath, { flags: append ? "a" : "w" });
+    let downloadedBytes = append ? existingBytes : 0;
+    const totalBytes = Number(artifact.sizeBytes || response.headers["content-range"]?.split("/").pop() || response.headers["content-length"] || 0);
+    await new Promise((resolve, reject) => {
+      response.on("data", (chunk) => { downloadedBytes += chunk.length; onProgress?.({ downloadedBytes, totalBytes }); });
+      response.once("error", reject);
+      output.once("error", reject);
+      output.once("finish", resolve);
+      response.pipe(output);
+    });
+    await fs.rename(partialPath, completedPath);
+  }
+  const contents = await fs.readFile(completedPath);
+  const hash = crypto.createHash("sha256").update(contents).digest("hex");
+  if (hash.toLowerCase() !== String(artifact.sha256).toLowerCase()) throw errorWithCode("Downloaded Python artifact failed SHA-256 verification.", "PYTHON_ARTIFACT_INTEGRITY_FAILED");
+  await fs.rm(path.join(temporaryDirectory, "content"), { recursive: true, force: true });
+  const extractCode = "import pathlib,sys,zipfile; wheel,path=map(pathlib.Path,sys.argv[1:]); z=zipfile.ZipFile(wheel); infos=z.infolist(); bad=[i.filename for i in infos if pathlib.PurePosixPath(i.filename).is_absolute() or '..' in pathlib.PurePosixPath(i.filename).parts or ((i.external_attr >> 16) & 0o170000) == 0o120000]; total=sum(i.file_size for i in infos); assert not bad and total <= 2_000_000_000, 'unsafe wheel archive'; path.mkdir(parents=True,exist_ok=True); z.extractall(path)";
+  await new Promise((resolve) => setImmediate(resolve));
+  return { wheelPath: completedPath, extractCode };
+};
 const modelDownloadProgress = async ({ temporaryDirectory, revision, downloadFiles = [], estimatedDownloadBytes = 0 }) => {
   const files = downloadFiles.map(String).filter(safeRelativeFile);
   const metadataPath = resumableModelMetadataPath(temporaryDirectory, revision);
@@ -63,10 +154,11 @@ const run = (command, args, { cwd = "", env = {}, onOutput = null } = {}) => new
 });
 
 class ManagedPythonPackInstaller {
-  constructor({ packs = [], environments = [], runProcess = run } = {}) {
+  constructor({ packs = [], environments = [], runProcess = run, downloadWheelArtifact = downloadPinnedWheel } = {}) {
     this.packs = Array.isArray(packs) ? packs.map(clone) : [];
     this.environments = Array.isArray(environments) ? environments : [];
     this.runProcess = runProcess;
+    this.downloadWheelArtifact = downloadWheelArtifact;
     this.installing = new Set();
     this.progressListeners = new Set();
   }
@@ -91,7 +183,7 @@ class ManagedPythonPackInstaller {
     if (!environment) throw errorWithCode("Python environment is not managed by Trackers Lens.", "PYTHON_ENVIRONMENT_UNKNOWN");
     const environmentExists = await exists(environment.pythonPath);
     const models = (pack.models || []).map((model) => ({
-      id: String(model.id), displayName: String(model.displayName || model.id), revision: String(model.revision || ""), license: String(model.license || ""), estimatedDownloadBytes: Number(model.estimatedDownloadBytes || 0),
+      id: String(model.id), displayName: String(model.displayName || model.id), revision: String(model.revision || ""), license: String(model.license || ""), estimatedDownloadBytes: Number(model.estimatedDownloadBytes || model.artifact?.sizeBytes || 0), artifactType: String(model.artifact?.type || "huggingface-snapshot"), source: String(model.artifact?.source || "Hugging Face"),
       installed: false, networkRequired: true, resumeAvailable: false, partialBytes: 0
     }));
     for (const model of models) {
@@ -99,13 +191,13 @@ class ManagedPythonPackInstaller {
       model.installed = Boolean(managed?.directory && await exists(managed.directory));
       if (!model.installed && managed?.directory) {
         const temporaryDirectory = `${managed.directory}.installing`;
-        model.resumeAvailable = await canResumeModelDownload(temporaryDirectory, model.revision);
-        if (model.resumeAvailable) model.partialBytes = (await modelDownloadProgress({
-          temporaryDirectory,
-          revision: model.revision,
-          downloadFiles: managed.downloadFiles || model.downloadFiles || [],
-          estimatedDownloadBytes: model.estimatedDownloadBytes
-        })).downloadedBytes;
+        model.resumeAvailable = isPinnedWheelArtifact(managed) ? await canResumeWheelArtifact(temporaryDirectory, managed) : await canResumeModelDownload(temporaryDirectory, model.revision);
+        if (model.resumeAvailable) {
+          model.partialBytes = (isPinnedWheelArtifact(managed)
+            ? await wheelArtifactProgress({ temporaryDirectory, artifact: managed.artifact, estimatedDownloadBytes: model.estimatedDownloadBytes })
+            : await modelDownloadProgress({ temporaryDirectory, revision: model.revision, downloadFiles: managed.downloadFiles || model.downloadFiles || [], estimatedDownloadBytes: model.estimatedDownloadBytes })
+          ).downloadedBytes;
+        }
       }
     }
     return {
@@ -150,7 +242,8 @@ class ManagedPythonPackInstaller {
         const modelRevision = String(modelPlan.revision || model.revision || "");
         const temporaryDirectory = `${model.directory}.installing`;
         const temporaryExists = await exists(temporaryDirectory);
-        const resumeDownload = temporaryExists && await canResumeModelDownload(temporaryDirectory, modelRevision);
+        const wheelArtifact = isPinnedWheelArtifact(model);
+        const resumeDownload = temporaryExists && (wheelArtifact ? await canResumeWheelArtifact(temporaryDirectory, model) : await canResumeModelDownload(temporaryDirectory, modelRevision));
         if (temporaryExists && !resumeDownload) {
           throw errorWithCode("A previous partial model download cannot be verified safely. Remove it from Runtime Python e Modelli before retrying.", "PYTHON_MODEL_INSTALL_INCOMPLETE");
         }
@@ -159,12 +252,10 @@ class ManagedPythonPackInstaller {
         const downloadFiles = (Array.isArray(model.downloadFiles) ? model.downloadFiles : [])
           .map(String).filter((file) => file && !file.includes("..") && !path.isAbsolute(file));
         const reportMeasuredProgress = async () => {
-          const { downloadedBytes, totalBytes } = await modelDownloadProgress({
-            temporaryDirectory,
-            revision: modelRevision,
-            downloadFiles,
-            estimatedDownloadBytes: modelPlan.estimatedDownloadBytes || model.estimatedDownloadBytes
-          });
+          const measurement = wheelArtifact
+            ? await wheelArtifactProgress({ temporaryDirectory, artifact: model.artifact, estimatedDownloadBytes: modelPlan.estimatedDownloadBytes || model.estimatedDownloadBytes })
+            : await modelDownloadProgress({ temporaryDirectory, revision: modelRevision, downloadFiles, estimatedDownloadBytes: modelPlan.estimatedDownloadBytes || model.estimatedDownloadBytes });
+          const { downloadedBytes, totalBytes } = measurement;
           const percent = totalBytes > 0 ? Math.max(0, Math.min(100, (downloadedBytes / totalBytes) * 100)) : null;
           this.emitProgress({
             packId: pack.id,
@@ -178,13 +269,24 @@ class ManagedPythonPackInstaller {
             modelProgress: percent,
           });
         };
-        const code = "from huggingface_hub import snapshot_download; import json,sys; files=json.loads(sys.argv[4]); snapshot_download(repo_id=sys.argv[1],revision=sys.argv[2],local_dir=sys.argv[3],allow_patterns=files or None)";
         await reportMeasuredProgress();
-        const progressTimer = setInterval(() => { void reportMeasuredProgress(); }, 750);
-        try {
-          await this.runProcess(environment.pythonPath, ["-c", code, model.id, modelRevision, temporaryDirectory, JSON.stringify(downloadFiles)]);
-        } finally {
-          clearInterval(progressTimer);
+        if (wheelArtifact) {
+          const downloaded = await this.downloadWheelArtifact({ model, temporaryDirectory, onProgress: ({ downloadedBytes, totalBytes }) => {
+            const percent = totalBytes > 0 ? Math.max(0, Math.min(100, (downloadedBytes / totalBytes) * 100)) : null;
+            this.emitProgress({ packId: pack.id, environmentId: environment.id, phase: "downloading-model", progress: percent === null ? 75 : 75 + (percent * 0.18), message: `${resumeDownload ? "Resuming" : "Downloading"} ${model.displayName || model.id}`, modelId: model.id, downloadedBytes, totalBytes, modelProgress: percent });
+          } });
+          this.emitProgress({ packId: pack.id, environmentId: environment.id, phase: "installing-model", progress: 94, message: `Verifying ${model.displayName || model.id}`, modelId: model.id });
+          await this.runProcess(environment.pythonPath, ["-c", downloaded.extractCode, downloaded.wheelPath, path.join(temporaryDirectory, "content")]);
+          await fs.rm(downloaded.wheelPath, { force: true });
+          await fs.rm(artifactMetadataPath(temporaryDirectory), { force: true });
+        } else {
+          const code = "from huggingface_hub import snapshot_download; import json,sys; files=json.loads(sys.argv[4]); snapshot_download(repo_id=sys.argv[1],revision=sys.argv[2],local_dir=sys.argv[3],allow_patterns=files or None)";
+          const progressTimer = setInterval(() => { void reportMeasuredProgress(); }, 750);
+          try {
+            await this.runProcess(environment.pythonPath, ["-c", code, model.id, modelRevision, temporaryDirectory, JSON.stringify(downloadFiles)]);
+          } finally {
+            clearInterval(progressTimer);
+          }
         }
         await reportMeasuredProgress();
         await fs.rename(temporaryDirectory, model.directory);
