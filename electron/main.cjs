@@ -19,9 +19,11 @@ const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";
 const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
 const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
 const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
+const pythonRagRerankModelPath = path.join(projectRoot, "runtimes/python/models/mmarco-mMiniLMv2-L12-H384-v1");
 const pythonNlpEnvironmentPath = path.join(projectRoot, "runtimes/python/envs/nlp");
 const pythonNlpBootstrap = process.env.TL_PYTHON_BOOTSTRAP || "python3.11";
 const pythonNlpEnabled = () => fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
+const pythonRagEnabled = () => pythonNlpEnabled() && fs.existsSync(pythonRagRerankModelPath);
 let tlCore = null;
 let pythonPoc = null;
 let pythonNlp = null;
@@ -35,6 +37,9 @@ const createPythonNlpRuntime = () => {
       TL_NLP_MODEL_DIR: pythonNlpModelPath,
       TL_NLP_MODEL_ID: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
       TL_NLP_MODEL_REVISION: "b8ef00830037f9868450f778081ea683e900fe39",
+      TL_RAG_RERANK_MODEL_DIR: pythonRagRerankModelPath,
+      TL_RAG_RERANK_MODEL_ID: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+      TL_RAG_RERANK_MODEL_REVISION: "1427fd652930e4ba29e8149678df786c240d8825",
       HF_HUB_OFFLINE: "1",
       HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
     }
@@ -52,7 +57,7 @@ const pythonPacks = new PythonPackResolver({
   packs: [nlpPackManifest, ragPackManifest].map((manifest) => ({
     ...manifest,
     packages: manifest.requirements.map((requirement) => ({ ...requirement, version: String(requirement.version || "").replace(/^==/, "") })),
-    status: pythonNlpEnabled() ? "ready" : "unavailable"
+    status: manifest.id === ragPackManifest.id ? (pythonRagEnabled() ? "ready" : "unavailable") : (pythonNlpEnabled() ? "ready" : "unavailable")
   }))
 });
 const nlpEnvironment = {
@@ -67,10 +72,14 @@ const nlpEnvironment = {
   runtimeStatus: () => pythonNlpAdapter.status(),
   stopRuntime: () => pythonNlp?.stop?.(),
   onInstalled: async () => {
-    [nlpPackManifest.id, ragPackManifest.id].forEach((packId) => pythonPacks.setStatus(packId, "ready"));
+    pythonPacks.setStatus(nlpPackManifest.id, pythonNlpEnabled() ? "ready" : "unavailable");
+    pythonPacks.setStatus(ragPackManifest.id, pythonRagEnabled() ? "ready" : "unavailable");
     await createPythonNlpRuntime()?.restart();
   },
-  models: [{ ...nlpPackManifest.models[0], displayName: "Multilingual MiniLM L12 v2", directory: pythonNlpModelPath }]
+  models: [
+    { ...nlpPackManifest.models[0], displayName: "Multilingual MiniLM L12 v2", directory: pythonNlpModelPath },
+    { ...ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"), directory: pythonRagRerankModelPath }
+  ]
 };
 const pythonRuntimeCatalog = new PythonRuntimeCatalog({
   packs: [nlpPackManifest, ragPackManifest],

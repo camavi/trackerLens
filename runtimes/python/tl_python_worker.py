@@ -46,7 +46,11 @@ def crash(_ctx, _inputs):
 NLP_MODEL_DIR = os.environ.get("TL_NLP_MODEL_DIR", "").strip()
 NLP_MODEL_ID = os.environ.get("TL_NLP_MODEL_ID", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").strip()
 NLP_MODEL_REVISION = os.environ.get("TL_NLP_MODEL_REVISION", "").strip()
+RAG_RERANK_MODEL_DIR = os.environ.get("TL_RAG_RERANK_MODEL_DIR", "").strip()
+RAG_RERANK_MODEL_ID = os.environ.get("TL_RAG_RERANK_MODEL_ID", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1").strip()
+RAG_RERANK_MODEL_REVISION = os.environ.get("TL_RAG_RERANK_MODEL_REVISION", "").strip()
 nlp_model = None
+rag_rerank_model = None
 
 if NLP_MODEL_DIR:
     @node("nlp.text_embedding", capabilities=["text.embedding"])
@@ -135,6 +139,40 @@ if NLP_MODEL_DIR:
             "weights": {"semantic": semantic_weight / weight_total, "lexical": lexical_weight / weight_total},
         }
 
+if RAG_RERANK_MODEL_DIR and os.path.isdir(RAG_RERANK_MODEL_DIR):
+    @node("rag.cross_encoder_rerank", capabilities=["text.rerank"])
+    def cross_encoder_rerank(_ctx, inputs):
+        """Re-rank only TL-authorized RAG candidates with a local CrossEncoder."""
+        global rag_rerank_model
+        query = str(inputs.get("query", "")).strip()
+        candidates = inputs.get("candidates")
+        if not query:
+            raise ValueError("inputs.query must be a non-empty string")
+        if not isinstance(candidates, list):
+            raise ValueError("inputs.candidates must be an array")
+        normalized = []
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("id", "")).strip()
+            text = str(item.get("text", "")).strip()
+            if candidate_id and text:
+                normalized.append({"id": candidate_id, "text": text})
+        if not normalized:
+            return {"ranked": [], "candidateCount": 0, "algorithm": "cross-encoder/local"}
+        if rag_rerank_model is None:
+            from sentence_transformers import CrossEncoder
+            rag_rerank_model = CrossEncoder(RAG_RERANK_MODEL_DIR, local_files_only=True)
+        scores = rag_rerank_model.predict([(query, item["text"]) for item in normalized], show_progress_bar=False)
+        ordered = sorted(range(len(normalized)), key=lambda index: (-float(scores[index]), index))
+        return {
+            "ranked": [{"id": normalized[index]["id"], "score": float(scores[index])} for index in ordered],
+            "candidateCount": len(normalized),
+            "algorithm": "cross-encoder/local",
+            "model": RAG_RERANK_MODEL_ID,
+            "revision": RAG_RERANK_MODEL_REVISION,
+        }
+
 OPERATION_IDS = {
     "text_transform": "poc.text_transform",
     "delay": "poc.delay",
@@ -142,6 +180,7 @@ OPERATION_IDS = {
     "crash": "poc.crash",
     "text_embedding": "nlp.text_embedding",
     "hybrid_search": "rag.hybrid_search",
+    "cross_encoder_rerank": "rag.cross_encoder_rerank",
 }
 
 def execute(message):

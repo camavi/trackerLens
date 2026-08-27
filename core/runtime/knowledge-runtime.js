@@ -1251,6 +1251,29 @@ window.TrackerLensKnowledgeRuntime = (() => {
     };
   };
 
+  const rerankRagCandidatesWithPython = async ({ query = "", candidates = [], config = {} } = {}) => {
+    const bridge = globalThis.trackers?.runtime?.pythonNlp;
+    if (!bridge?.run) throw Object.assign(new Error("Il pack Python RAG con reranker non è disponibile. Installalo da Runtime Python e Modelli."), { code: "PYTHON_PACK_UNAVAILABLE" });
+    try {
+      const result = await bridge.run({
+        executionId: uniqueId("python_rerank"),
+        operation: "cross_encoder_rerank",
+        inputs: { query: String(query || ""), candidates },
+        context: { capability: "text.rerank", dataAccess: "tl-authorized-rag-candidates-only" },
+        timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000)),
+      });
+      return {
+        ranked: Array.isArray(result?.outputs?.ranked) ? result.outputs.ranked : [],
+        algorithm: String(result?.outputs?.algorithm || "cross-encoder/local"),
+        model: String(result?.outputs?.model || "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"),
+        revision: String(result?.outputs?.revision || ""),
+        candidateCount: Number(result?.outputs?.candidateCount || candidates.length),
+      };
+    } catch (error) {
+      throw Object.assign(new Error(`Python RAG reranker non installato o non disponibile: ${error?.message || "unknown error"}`), { code: error?.code || "PYTHON_PACK_UNAVAILABLE" });
+    }
+  };
+
   const nodeSubtype = (node = {}) =>
     String(node.metadata?.subtype || node.metadata?.manifest?.subtype || node.type || "").toLowerCase();
   const nodeConfig = (node = {}) =>
@@ -9271,7 +9294,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       config,
     });
     const candidatesById = new Map(eligibleCandidates.map((candidate, index) => [String(index), candidate]));
-    const ranked = pythonRanking.ranked
+    const hybridRanked = pythonRanking.ranked
       .map((item) => {
         const candidate = candidatesById.get(String(item?.id || ""));
         if (!candidate) return null;
@@ -9291,11 +9314,37 @@ window.TrackerLensKnowledgeRuntime = (() => {
       })
       .filter(Boolean)
       .filter((result) => result.score >= threshold);
+    const pythonReranking = await rerankRagCandidatesWithPython({
+      query: cleanQuery,
+      candidates: hybridRanked.map((candidate, index) => ({ id: String(index), text: candidate.text })),
+      config,
+    });
+    const hybridCandidateById = new Map(hybridRanked.map((candidate, index) => [String(index), candidate]));
+    const ranked = pythonReranking.ranked
+      .map((item) => {
+        const candidate = hybridCandidateById.get(String(item?.id || ""));
+        if (!candidate) return null;
+        return {
+          ...candidate,
+          metadata: config.includeMetadata === false ? {} : {
+            ...candidate.metadata,
+            retrieval: {
+              ...(candidate.metadata?.retrieval || {}),
+              rerankScore: Number(item.score || 0),
+              reranker: pythonReranking.model,
+              rerankerRevision: pythonReranking.revision,
+            },
+          },
+        };
+      })
+      .filter(Boolean);
     const retrievalDiagnostics = {
-      runtime: "python-hybrid",
-      algorithm: pythonRanking.algorithm,
+      runtime: "python-hybrid-rerank",
+      algorithm: `${pythonRanking.algorithm} -> ${pythonReranking.algorithm}`,
       weights: pythonRanking.weights,
       candidateCount: pythonRanking.candidateCount,
+      rerankCandidateCount: pythonReranking.candidateCount,
+      reranker: { model: pythonReranking.model, revision: pythonReranking.revision },
     };
     const seenTexts = new Set();
     const results = [];

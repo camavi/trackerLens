@@ -4164,7 +4164,8 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
     ],
     "rag-search": [
       { iconName: "search", label: "Query", value: config.query || "event query" },
-      { iconName: "psychology", label: "Retrieval", value: "Python hybrid" },
+      { iconName: "psychology", label: "Retrieval", value: "Python hybrid + rerank" },
+      { iconName: "filter_alt", label: "Reranker", value: "mMARCO local" },
       { iconName: "tune", label: "Top K", value: config.topK || "5" },
       { iconName: "speed", label: "Threshold", value: config.similarityThreshold ?? "0.08" },
       { iconName: "article", label: "Context", value: config.maxContextTokens || "1200" },
@@ -7080,8 +7081,8 @@ const requestRuntimeNodeConfig = async (node) => {
       subtype === "rag-search" ? _.section(
         { class: "tl-flow-config-section" },
         _.h3("Python RAG engine"),
-        _.p("RAG Search always uses the managed Python Hybrid engine: Sentence Transformers semantic retrieval plus BM25S lexical retrieval. TL keeps scope, storage and output ownership."),
-        _.small({ class: "tl-flow-config-field-description" }, "If the managed Python pack is missing, install it from Runtime Python e Modelli. There is no JavaScript ranking fallback.")
+        _.p("RAG Search always uses the managed Python RAG engine: Sentence Transformers semantic retrieval plus BM25S lexical retrieval, then local CrossEncoder reranking. TL keeps scope, storage and output ownership."),
+        _.small({ class: "tl-flow-config-field-description" }, "If the managed Python pack or reranker model is missing, install it from Runtime Python e Modelli. There is no JavaScript ranking fallback.")
       ) : null,
       renderPythonPackRequirement(),
       renderPayloadEditor({ node, defaults, formId }),

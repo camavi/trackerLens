@@ -62,13 +62,16 @@ class PythonPackResolver {
     const python = execution?.dependencies?.python;
     if (!python || typeof python !== "object") return { status: "not-required", code: "PYTHON_PACK_NOT_REQUIRED" };
     const requirement = {
+      packId: text(python.packId || python.pack),
       environment: text(python.environment),
       requirements: (Array.isArray(python.requirements) ? python.requirements : []).map(normalizeRequirement).filter((item) => item.name),
       lockfile: text(python.lockfile),
       installPolicy: text(python.installPolicy, "managed-required").toLowerCase(),
     };
     if (!requirement.environment || !requirement.requirements.length) return { status: "invalid", code: "PYTHON_PACK_REQUIREMENT_INVALID", requirement };
-    const candidates = this.packs.filter((pack) => pack.environment === requirement.environment);
+    const candidates = this.packs.filter((pack) =>
+      pack.environment === requirement.environment && (!requirement.packId || pack.id === requirement.packId)
+    );
     const trusted = candidates.filter((pack) => pack.trusted);
     const matching = trusted.find((pack) =>
       pack.status === "ready" &&

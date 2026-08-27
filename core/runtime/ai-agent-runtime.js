@@ -325,6 +325,7 @@ window.TrackerLensAiAgentRuntime = (() => {
       chunkId: result.chunkId || "",
       documentId: result.documentId || "",
       score: Number.isFinite(Number(result.score)) ? Number(result.score) : null,
+      rerankScore: Number.isFinite(Number(result.metadata?.retrieval?.rerankScore)) ? Number(result.metadata.retrieval.rerankScore) : null,
       text: String(result.text || ""),
       metadata: result.metadata || {},
     }));
@@ -335,6 +336,17 @@ window.TrackerLensAiAgentRuntime = (() => {
       resultCount: Number(payload.resultCount ?? results.length) || 0,
       sources,
       scope: payload.scope || {},
+      retrieval: payload.retrieval && typeof payload.retrieval === "object" ? {
+        runtime: String(payload.retrieval.runtime || ""),
+        algorithm: String(payload.retrieval.algorithm || ""),
+        weights: payload.retrieval.weights || {},
+        candidateCount: Number(payload.retrieval.candidateCount || 0),
+        rerankCandidateCount: Number(payload.retrieval.rerankCandidateCount || 0),
+        reranker: {
+          model: String(payload.retrieval.reranker?.model || ""),
+          revision: String(payload.retrieval.reranker?.revision || ""),
+        },
+      } : null,
       inputChannel: event?.channel || "",
       inputEventId: event?.id || "",
     };
@@ -617,9 +629,11 @@ window.TrackerLensAiAgentRuntime = (() => {
           queryId: ragContext.queryId || "",
           resultCount: ragContext.resultCount ?? 0,
           scope: ragContext.scope || {},
+          retrieval: ragContext.retrieval,
           sources: (ragContext.sources || []).map((source, index) => ({
             index: source.index || index + 1,
-            score: Number.isFinite(Number(source.score)) ? Number(source.score) : null,
+            hybridScore: Number.isFinite(Number(source.score)) ? Number(source.score) : null,
+            rerankScore: Number.isFinite(Number(source.rerankScore)) ? Number(source.rerankScore) : null,
             documentId: source.documentId || "",
             chunkId: source.chunkId || "",
             text: compactTextValue(source.text),

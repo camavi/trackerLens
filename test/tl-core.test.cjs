@@ -11,6 +11,23 @@ const { RuntimeManager } = require("../core/runtime/runtime-manager.js");
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
 const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
+const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
+
+test("managed RAG pack pins its local CrossEncoder reranker", () => {
+  const reranker = ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1");
+  assert.equal(ragPackManifest.version, "0.2.0");
+  assert.deepEqual(reranker, {
+    id: "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+    displayName: "Multilingual mMARCO MiniLM Reranker",
+    revision: "1427fd652930e4ba29e8149678df786c240d8825",
+    languages: 15,
+    license: "Apache-2.0",
+    estimatedDownloadBytes: 492745974,
+    downloadFiles: ["config.json", "model.safetensors", "sentencepiece.bpe.model", "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"],
+    localOnlyAfterInstall: true
+  });
+  assert.ok(ragPackManifest.capabilities.includes("text.rerank"));
+});
 
 test("TL Core exposes desktop status without persistence handles", async () => {
   const core = createTlCore({ appVersion: "1.2.3", platform: "darwin", mode: "development" });
@@ -222,6 +239,25 @@ test("Python package resolution is declarative and exposes no installer", async 
   await assert.rejects(createTlCore().request("runtime.pythonPacks.resolve", { execution }), (error) => error.code === "PYTHON_PACKS_UNAVAILABLE");
 });
 
+test("Python package resolution honors a required managed pack ID", () => {
+  const resolver = new PythonPackResolver({
+    packs: [
+      { id: "builtin-nlp", version: "1.0.0", environment: "nlp", lockfile: "python/nlp.lock", trustLevel: "built-in", status: "ready", packages: [{ name: "sentence-transformers", version: "5.5.0" }, { name: "bm25s", version: "0.3.11" }] },
+      { id: "builtin-rag", version: "2.0.0", environment: "nlp", lockfile: "python/nlp.lock", trustLevel: "built-in", status: "unavailable", packages: [{ name: "sentence-transformers", version: "5.5.0" }, { name: "bm25s", version: "0.3.11" }] }
+    ]
+  });
+  const result = resolver.resolve({ dependencies: { python: {
+    packId: "builtin-rag",
+    environment: "nlp",
+    requirements: [{ name: "sentence-transformers", version: "==5.5.0" }, { name: "bm25s", version: "==0.3.11" }],
+    lockfile: "python/nlp.lock",
+    installPolicy: "managed-optional"
+  } } });
+
+  assert.equal(result.code, "PYTHON_PACK_MISSING");
+  assert.equal(result.installPlan.packId, "builtin-rag");
+});
+
 test("Python runtime catalog exposes managed metadata without local paths and requires removal confirmation", async (context) => {
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-python-model-"));
   const modelDirectory = path.join(fixtureDirectory, "model");
@@ -291,7 +327,39 @@ test("managed Python pack installation reports Core-owned progress through verif
   assert.deepEqual(result.verifiedRequirements, [{ name: "sentence-transformers", version: "5.5.0" }]);
   assert.equal(fs.existsSync(modelDirectory), true);
   assert.equal(started, 1);
-  assert.deepEqual(progress.map((event) => event.phase), ["preparing", "installing-requirements", "verifying-requirements", "downloading-model", "starting-runtime", "complete"]);
+  assert.ok(progress.map((event) => event.phase).includes("downloading-model"));
+  assert.deepEqual(progress.map((event) => event.phase).filter((phase) => phase !== "downloading-model"), ["preparing", "installing-requirements", "verifying-requirements", "starting-runtime", "complete"]);
+});
+
+test("managed Python pack installation resumes only a revision-verified partial model download", async (context) => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-python-resume-"));
+  const pythonPath = path.join(fixtureDirectory, "python");
+  const modelDirectory = path.join(fixtureDirectory, "model");
+  const temporaryDirectory = `${modelDirectory}.installing`;
+  fs.writeFileSync(pythonPath, "fixture");
+  fs.mkdirSync(path.join(temporaryDirectory, ".cache", "huggingface", "trees"), { recursive: true });
+  fs.writeFileSync(path.join(temporaryDirectory, ".cache", "huggingface", "trees", "pinned-revision.json"), '{"files":{"partial.bin":{"size":13}}}');
+  fs.writeFileSync(path.join(temporaryDirectory, "partial.bin"), "partial-model");
+  context.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
+  const progress = [];
+  const installer = new ManagedPythonPackInstaller({
+    packs: [{ id: "builtin-rag", version: "1.0.0", trustLevel: "built-in", environment: "nlp", lockfile: "python/rag.lock", lockfilePath: "/managed/python/rag.lock", requirements: [{ name: "sentence-transformers", version: "==5.5.0" }], models: [{ id: "model/test", revision: "pinned-revision", displayName: "Test model", downloadFiles: ["partial.bin"] }] }],
+    environments: [{ id: "nlp", interpreter: "Python 3.11", pythonPath, directory: fixtureDirectory, bootstrapPython: "python3.11", models: [{ id: "model/test", directory: modelDirectory }] }],
+    runProcess: async (_command, args) => {
+      if (args[1] === "pip") return { stdout: "", stderr: "" };
+      if (args[0] === "-c" && String(args[1]).includes("importlib.metadata")) return { stdout: '{"sentence-transformers":"5.5.0"}', stderr: "" };
+      if (args[0] === "-c") { fs.writeFileSync(path.join(args[4], "weights.bin"), "complete"); return { stdout: "", stderr: "" }; }
+      throw new Error(`Unexpected process: ${args.join(" ")}`);
+    }
+  });
+  const plan = await installer.getInstallPlan({ packId: "builtin-rag" });
+  assert.equal(plan.models[0].resumeAvailable, true);
+  assert.ok(plan.models[0].partialBytes > 0);
+  installer.subscribe((event) => progress.push(event));
+  await installer.install({ packId: "builtin-rag", confirmed: true });
+  assert.equal(fs.existsSync(modelDirectory), true);
+  assert.equal(fs.existsSync(temporaryDirectory), false);
+  assert.match(progress.find((event) => event.phase === "downloading-model").message, /^Resuming /);
 });
 
 test("legacy nodes normalize to the JavaScript execution runtime", () => {

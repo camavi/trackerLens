@@ -30,7 +30,7 @@ install or fallback/unavailable outcome; it never performs an implicit network
 install. Execution diagnostics must retain the resolved module, version,
 environment and provenance.
 
-The execution-contract base now normalizes `environment`, `requirements`,
+The execution-contract base now normalizes `packId`, `environment`, `requirements`,
 `lockfile` and `installPolicy` (`bundled`, `managed-required` or
 `managed-optional`). `core/runtime/python-pack-resolver.cjs` now resolves
 those declarations against a Core-owned, trusted pack catalog and returns only
@@ -63,6 +63,13 @@ or download: a missing pack is presented as a trusted installation plan in the
 dedicated Runtime Python page and requires user confirmation. Electron
 registers this manifest in the Core-owned pack catalog as `ready` only when
 its local artifacts are available.
+
+`trackerslens.rag.hybrid` additionally declares the local `text.rerank`
+capability. Its revision-pinned multilingual CrossEncoder receives only an
+already scope-authorized query/candidate set after hybrid retrieval; it has no
+database, filesystem or network API through the SDK. RAG execution is
+unavailable until this managed model is installed; it never substitutes a
+JavaScript ranker.
 
 ## Runtime and Model Transparency
 

@@ -3743,3 +3743,14 @@ button.tl-flow-mini-chip {
     text-align: left;
   }
 }
+.tl-flow-python-pack-copy { display:grid; gap:12px; }
+.tl-flow-python-pack-copy > p { margin:0; }
+.tl-flow-python-pack-copy > div { display:grid; grid-template-columns:150px minmax(0,1fr); gap:12px; padding:10px 12px; border:1px solid rgba(214,226,235,.12); border-radius:8px; background:rgba(3,9,14,.46); }
+.tl-flow-python-pack-copy code { overflow-wrap:anywhere; color:#9ddcff; }
+.tl-flow-python-install-progress { display:grid; gap:8px; padding:13px; border:1px solid rgba(66,215,125,.36); border-radius:8px; background:rgba(66,215,125,.08); }
+.tl-flow-python-install-progress[hidden] { display:none; }
+.tl-flow-python-install-progress > div:first-child { display:flex; justify-content:space-between; gap:12px; }
+.tl-flow-python-install-progress span,.tl-flow-python-install-progress small { color:var(--tl-text-muted); font-size:12px; }
+.tl-flow-python-install-progress-bar { height:9px; overflow:hidden; border-radius:999px; background:rgba(255,255,255,.09); }
+.tl-flow-python-install-progress-bar i { display:block; width:0; height:100%; border-radius:inherit; background:linear-gradient(90deg,#42d77d,#9ddcff); transition:width .24s ease; }
+.tl-flow-python-install-progress.is-error { border-color:rgba(255,107,107,.44); background:rgba(255,107,107,.08); }

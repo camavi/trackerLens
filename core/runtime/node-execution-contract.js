@@ -39,7 +39,9 @@
       }))
       .filter((requirement) => requirement.name);
     const installPolicy = text(value.installPolicy || value.policy, "managed-required").toLowerCase();
+    const packId = text(value.packId || value.pack);
     return {
+      ...(packId ? { packId } : {}),
       environment: text(value.environment || value.env),
       requirements,
       lockfile: text(value.lockfile || value.lock),

@@ -141,6 +141,82 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
   return node || null;
 };
 
+const flowPythonInstallProgressText = (progress = {}) => {
+  const downloaded = Number(progress.downloadedBytes || 0);
+  const total = Number(progress.totalBytes || 0);
+  const format = (bytes) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
+  if (progress.phase === "downloading-model" && total > 0) return `${format(downloaded)} di ${format(total)} · ${Math.round(Number(progress.modelProgress || 0))}% del modello`;
+  return `${Math.round(Number(progress.progress || 0))}% · ${progress.phase || "preparing"}`;
+};
+const flowPythonVisibleInstallProgress = (progress = {}) => progress.phase === "downloading-model" && Number.isFinite(Number(progress.modelProgress))
+  ? Number(progress.modelProgress)
+  : Number(progress.progress || 0);
+
+const openFlowPythonPackInstallDialog = async (packId = "", onComplete = null) => {
+  const runtime = window.trackers?.runtime?.pythonRuntime;
+  const plan = await runtime?.getInstallPlan?.({ packId });
+  if (!plan) throw new Error("Piano di installazione Python non disponibile");
+  const progressId = `tl-flow-python-install-${String(packId).replace(/[^a-z0-9_-]/gi, "-")}`;
+  let unsubscribe = () => {};
+  const syncProgress = (progress = {}) => {
+    if (progress.packId !== packId) return;
+    const root = document.getElementById(progressId);
+    if (!root) return;
+    root.hidden = false;
+    root.classList.toggle("is-error", progress.phase === "error");
+    const message = root.querySelector("[data-flow-install-message]");
+    const fill = root.querySelector("[data-flow-install-fill]");
+    const detail = root.querySelector("[data-flow-install-detail]");
+    if (message) message.textContent = progress.message || "Operazione in corso";
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, flowPythonVisibleInstallProgress(progress)))}%`;
+    if (detail) detail.textContent = flowPythonInstallProgressText(progress);
+  };
+  const dialog = _.Dialog({
+    class: "tl-flow-python-pack-dialog",
+    panelClass: "tl-flow-python-pack-panel",
+    size: "lg",
+    title: "Installare il pack Python?",
+    subtitle: `${plan.pack.id} · v${plan.pack.version}`,
+    icon: "download",
+    closeButton: true,
+    content: () => _.div(
+      { class: "tl-flow-python-pack-copy" },
+      _.p("TL installerà solo il lockfile e i modelli dichiarati da questo pack. Il Nodo non riceve accesso a pip, shell o filesystem."),
+      _.div(_.span("Ambiente"), _.strong(`${plan.environment.id} · ${plan.environment.action === "create" ? "verrà creato" : "verrà riutilizzato"}`)),
+      _.div(_.span("Dipendenze"), _.code(plan.requirements.map((item) => `${item.name} ${item.version}`).join(", "))),
+      _.div(_.span("Modelli"), _.code(plan.models.map((model) => `${model.id}@${model.revision}`).join(", ") || "nessuno")),
+      _.div(_.span("Rete"), _.strong(plan.network.required ? "Richiesta: pacchetti/modelli saranno scaricati" : "Non richiesta")),
+      _.section({ id: progressId, class: "tl-flow-python-install-progress", hidden: true },
+        _.div(_.strong("Installazione in corso"), _.span({ "data-flow-install-message": "" })),
+        _.div({ class: "tl-flow-python-install-progress-bar", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": 100 }, _.i({ "data-flow-install-fill": "", style: "width:0%" })),
+        _.small({ "data-flow-install-detail": "" })
+      )
+    ),
+    actions: ({ close }) => _.Toolbar(
+      { align: "end", gap: 8 },
+      btn({ id: `${progressId}-close`, onclick: () => { unsubscribe(); close(); } }, "Annulla"),
+      btn({ id: `${progressId}-start`, class: "st-btn-primary", onclick: async (event) => {
+        const startButton = event.currentTarget;
+        const closeButton = document.getElementById(`${progressId}-close`);
+        startButton.disabled = true;
+        if (closeButton) closeButton.disabled = true;
+        unsubscribe = runtime.onInstallProgress?.(syncProgress) || (() => {});
+        syncProgress({ packId, phase: "preparing", progress: 0, message: "Preparazione installazione" });
+        try {
+          await runtime.installPack({ packId, confirmed: true });
+          syncProgress({ packId, phase: "complete", progress: 100, message: "Installazione completata e verificata" });
+          if (closeButton) { closeButton.disabled = false; closeButton.textContent = "Chiudi"; }
+          await onComplete?.();
+        } catch (error) {
+          syncProgress({ packId, phase: "error", progress: 0, message: error?.message || "Installazione Python non riuscita" });
+          if (closeButton) { closeButton.disabled = false; closeButton.textContent = "Chiudi"; }
+        }
+      } }, icon("download", "sm"), "Installa pack")
+    )
+  });
+  dialog.open();
+};
+
 const promptMissingManagedPythonPack = async (node = {}, item = {}) => {
   const execution = node.metadata?.manifest?.execution || node.execution || item.manifest?.execution || null;
   const python = execution?.dependencies?.python;
@@ -169,7 +245,17 @@ const promptMissingManagedPythonPack = async (node = {}, item = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       btn({ onclick: close }, "Non ora"),
-      btn({ class: "st-btn-primary", onclick: () => window.TrackerLensSidebar?.navigate?.(`pythonRuntime.html?pack=${encodeURIComponent(packId)}&install=1`) }, icon("download", "sm"), "Installa")
+      btn({ class: "st-btn-primary", onclick: async () => {
+        close();
+        try {
+          await openFlowPythonPackInstallDialog(packId, async () => {
+            await loadRuntime();
+            if (typeof renderFlowCanvas === "function") renderFlowCanvas();
+          });
+        } catch (error) {
+          window.alert(error?.message || "Piano di installazione Python non disponibile");
+        }
+      } }, icon("download", "sm"), "Installa")
     )
   });
   dialog.open();
