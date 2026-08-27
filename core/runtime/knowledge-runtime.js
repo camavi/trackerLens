@@ -3848,6 +3848,43 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return { annotations: validated, pipeline: output.pipeline || {} };
   };
 
+  // Capitalization is not evidence of a name: every German noun is capitalized,
+  // while smaller NER pipelines can falsely mark ordinary nouns as locations.
+  // A model-proposed proper noun therefore needs matching NER *and* proper-name
+  // morphology (or a declared acronym) before it can become a core seed.
+  const dictionaryHasProperNounEvidence = ({ term = "", chunkIds = [], annotations = new Map() } = {}) => {
+    const normalizedTerm = normalizeEntityToken(term);
+    if (!normalizedTerm) return false;
+    if (normalizedTerm.split(/[\s-]+/).some((part) => knownAcronymEntityTokens.has(part))) return true;
+    const requestedChunkIds = new Set([...chunkIds].map((id) => String(id || "")).filter(Boolean));
+    const namedEntityLabels = new Set(["PER", "PERSON", "ORG", "GPE", "LOC", "FAC"]);
+    for (const [chunkId, annotation] of annotations.entries()) {
+      if (requestedChunkIds.size && !requestedChunkIds.has(String(chunkId || ""))) continue;
+      const exactNamedEntity = (annotation.entities || []).some((entity) => {
+        if (!namedEntityLabels.has(String(entity?.label || "").toUpperCase())) return false;
+        if (normalizeEntityToken(entity?.text || "") !== normalizedTerm) return false;
+        const coveredTokens = (annotation.tokens || []).filter((token) => token.start >= entity.start && token.end <= entity.end);
+        return coveredTokens.some((token) => {
+          const pos = String(token?.pos || "").toUpperCase();
+          const tag = String(token?.tag || "").toUpperCase();
+          return pos === "PROPN" || tag === "NE";
+        });
+      });
+      if (exactNamedEntity) return true;
+    }
+    return false;
+  };
+
+  const dictionarySanitizeProperNounTypes = (typeCandidates = [], { properNounSupported = false } = {}) =>
+    (typeCandidates || []).map((candidate) => {
+      if (String(candidate?.type || "").toLowerCase() !== "proper-noun" || properNounSupported) return candidate;
+      return {
+        ...candidate,
+        type: "term",
+        source: `${candidate?.source || "local-context"}-proper-noun-demoted`,
+      };
+    });
+
   const extractDictionaryCandidates = (chunks = [], { language = "", maxTerms = 120, minFrequency = 1, config = {}, annotations = null } = {}) => {
     const profile = languageProfiles[language] || {};
     const rules = customKnowledgeRules(config);
@@ -4623,8 +4660,19 @@ window.TrackerLensKnowledgeRuntime = (() => {
         chunks: scopedChunks,
         maxItems: Math.max(1, Math.min(24, Number(effectiveConfig.evidencePackLimit || 8))),
       });
-      const localTypeCandidates = dictionaryTypeCandidates(candidate.term, chunk.text || "", candidateConfig);
-      const aiTypeCandidates = candidate.ai?.typeCandidates || [];
+      const properNounSupported = dictionaryHasProperNounEvidence({
+        term: candidate.term,
+        chunkIds: candidate.chunkIds || [],
+        annotations: annotationResult.annotations,
+      });
+      const localTypeCandidates = dictionarySanitizeProperNounTypes(
+        dictionaryTypeCandidates(candidate.term, chunk.text || "", candidateConfig),
+        { properNounSupported }
+      );
+      const aiTypeCandidates = dictionarySanitizeProperNounTypes(
+        candidate.ai?.typeCandidates || [],
+        { properNounSupported }
+      );
       const localPrimaryType = String(localTypeCandidates[0]?.type || "").toLowerCase();
       const aiPrimaryType = String(aiTypeCandidates[0]?.type || "").toLowerCase();
       const localTypeIsStrong = ["proper-noun", "source", "location", "object", "concept", "role", "creature", "technology"].includes(localPrimaryType);
