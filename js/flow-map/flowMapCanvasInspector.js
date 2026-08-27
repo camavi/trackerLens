@@ -1564,12 +1564,31 @@ const latestAiAgentJobs = async (node = {}, limit = 8) => {
 
 const aiAgentRuntimeDialogViews = new Map();
 
+const aiAgentRuntimeDialogJobSignature = (jobs = []) => JSON.stringify((jobs || []).map((job) => ({
+  id: job.id || "",
+  status: job.status || job.raw?.status || "",
+  updatedAt: job.updatedAt || job.raw?.updatedAt || "",
+  currentStep: job.raw?.currentStep?.id || job.raw?.currentStep?.status || "",
+  steps: (job.raw?.steps || job.steps || []).map((step) => `${step.id || ""}:${step.status || ""}`).join("|"),
+})));
+
+const stopAiAgentRuntimeDialogLiveRefresh = (entry = {}) => {
+  if (entry.raf) cancelAnimationFrame(entry.raf);
+  if (entry.refreshTimer) clearInterval(entry.refreshTimer);
+  entry.raf = 0;
+  entry.refreshTimer = 0;
+};
+
 const updateAiAgentRuntimeDialogView = async (entry = {}) => {
   if (!entry.node?.id || !entry.body?.isConnected) {
     if (entry.node?.id) aiAgentRuntimeDialogViews.delete(entry.node.id);
+    stopAiAgentRuntimeDialogLiveRefresh(entry);
     return;
   }
   const jobs = await latestAiAgentJobs(entry.node);
+  const signature = aiAgentRuntimeDialogJobSignature(jobs);
+  if (signature === entry.lastJobSignature) return;
+  entry.lastJobSignature = signature;
   entry.body.replaceChildren(renderAiAgentRuntimeDialogContent({ node: entry.node, jobs }));
 };
 
@@ -1977,7 +1996,18 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
     { class: "tl-ai-agent-runtime-live-root" },
     renderAiAgentRuntimeDialogContent({ node, jobs })
   );
-  aiAgentRuntimeDialogViews.set(node.id, { node, body, raf: 0 });
+  const liveEntry = {
+    node,
+    body,
+    raf: 0,
+    refreshTimer: 0,
+    lastJobSignature: aiAgentRuntimeDialogJobSignature(jobs),
+  };
+  stopAiAgentRuntimeDialogLiveRefresh(aiAgentRuntimeDialogViews.get(node.id));
+  aiAgentRuntimeDialogViews.set(node.id, liveEntry);
+  // The EventBus refreshes the dialog immediately when available. This small
+  // read-only fallback also covers runtime events delivered outside that path.
+  liveEntry.refreshTimer = setInterval(() => updateAiAgentRuntimeDialogView(liveEntry), 750);
   const dialog = _.Dialog({
     class: "tl-ai-agent-runtime-view-dialog",
     panelClass: "tl-ai-agent-runtime-view-panel",
@@ -1993,11 +2023,15 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
       { align: "end", gap: 8 },
       btn({
         onclick: () => {
-          updateAiAgentRuntimeDialogView(aiAgentRuntimeDialogViews.get(node.id));
+          const entry = aiAgentRuntimeDialogViews.get(node.id);
+          if (entry) entry.lastJobSignature = "";
+          updateAiAgentRuntimeDialogView(entry);
         },
       }, icon("refresh", "sm"), "Refresh"),
       btn({
         onclick: () => {
+          const entry = aiAgentRuntimeDialogViews.get(node.id);
+          stopAiAgentRuntimeDialogLiveRefresh(entry);
           aiAgentRuntimeDialogViews.delete(node.id);
           close();
         },
@@ -2010,7 +2044,7 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
 const renderKnowledgeRuntimeButton = (node = {}) =>
   btn({
     class: "tl-flow-embedded-map-view-btn",
-    title: "View Knowledge LLM runtime timeline",
+    title: "View Node runtime timeline",
     onPointerDown: stopNodeControlEvent,
     onclick: (event) => {
       event.preventDefault();
@@ -2305,7 +2339,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   return [
     _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
     _.p(view.description),
-    isKnowledgeLlmRuntimeNode(node) ? renderKnowledgeRuntimeButton(node) : null,
+    nodeCategory(node) === "knowledge" ? renderKnowledgeRuntimeButton(node) : null,
     renderInlineNodeSettings(node),
     ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
   ];

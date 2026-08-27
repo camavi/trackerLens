@@ -306,13 +306,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (index >= 0) knowledgeRuntimeDebugStack.splice(index, 1);
   };
 
+  const finalizeKnowledgeRuntimeDebug = async (entry = null) => {
+    if (!entry) return;
+    entry.finalized = true;
+    if (entry.flushTimer) clearTimeout(entry.flushTimer);
+    entry.flushTimer = 0;
+    // A live write may already be in flight. Let it finish before the terminal
+    // record is stored, otherwise it can overwrite Complete/Error afterwards.
+    await entry.flushPromise?.catch(() => null);
+  };
+
   const latestKnowledgeRuntimeDebugEntry = (entry = {}) =>
     [...(entry.entries || [])].reverse().find((item) => item.type !== "node-input") ||
     [...(entry.entries || [])].reverse()[0] ||
     null;
 
-  const knowledgeLlmDebug = (type = "debug", payload = {}) => {
-    const active = knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1];
+  const knowledgeLlmDebug = (type = "debug", payload = {}, debugContext = null) => {
+    const active = debugContext || knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1];
     if (!active) return null;
     const entry = {
       type,
@@ -327,20 +337,76 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return entry;
   };
 
+  const runKnowledgePythonOperation = async ({ executionId = "", operation = "", inputs = {}, context = {}, timeoutMs = 30000, label = "Managed Python", debugContext = null } = {}) => {
+    const bridge = globalThis.trackers?.runtime?.pythonNlp;
+    if (!bridge?.run) throw Object.assign(new Error("Il pack Python richiesto non è disponibile. Installalo da Runtime Python e Modelli."), { code: "PYTHON_PACK_UNAVAILABLE" });
+    const startedAt = performance.now();
+    const inputSummary = [
+      Array.isArray(inputs?.chunks) ? `${inputs.chunks.length} chunks` : "",
+      Array.isArray(inputs?.candidates) ? `${inputs.candidates.length} candidates` : "",
+      typeof inputs?.text === "string" ? `${inputs.text.length} text chars` : "",
+      inputs?.language ? `language=${inputs.language}` : "",
+    ].filter(Boolean).join(" · ");
+    const traceContext = debugContext || knowledgeRuntimeDebugStack[knowledgeRuntimeDebugStack.length - 1] || null;
+    const debug = knowledgeLlmDebug("python-operation", {
+      stepType: "python",
+      label,
+      operation,
+      runtime: "managed-python",
+      workerId: "managed-python-nlp",
+      executionId,
+      inputSummary,
+      status: "working",
+    }, traceContext);
+    try {
+      const result = await bridge.run({ executionId, operation, inputs, context, timeoutMs });
+      if (debug) {
+        debug.status = "complete";
+        debug.durationMs = Math.round(performance.now() - startedAt);
+        debug.outputSummary = Object.keys(result?.outputs || {}).length
+          ? `outputs: ${Object.keys(result.outputs).join(", ")}`
+          : "completed";
+        flushKnowledgeRuntimeDebug(traceContext, { status: "working" });
+      }
+      return result;
+    } catch (error) {
+      if (debug) {
+        debug.status = "error";
+        debug.durationMs = Math.round(performance.now() - startedAt);
+        debug.error = error?.message || String(error);
+        flushKnowledgeRuntimeDebug(traceContext, { status: "working" });
+      }
+      throw error;
+    }
+  };
+
   const knowledgeRuntimeSteps = ({ inputStep = null, debugEntries = [], result = null, outputChannel = "", latencyMs = 0, error = null } = {}) => {
     const steps = [];
     if (inputStep) steps.push(inputStep);
     debugEntries.filter((entry) => entry.type !== "node-input").forEach((entry, index) => {
       const promptChars = Number(entry.promptChars || 0);
       const maxTokens = Number(entry.maxTokens || 0);
-      const status = result || outputChannel || error ? "complete" : (entry.status || "working");
+      const stepType = entry.stepType || (String(entry.type || "").startsWith("python") ? "python" : "llm");
+      const isPython = stepType === "python";
+      const status = entry.status === "error"
+        ? "error"
+        : result || outputChannel || error
+          ? "complete"
+          : (entry.status || "working");
       steps.push({
         id: `knowledge_llm_${index + 1}`,
-        type: "llm",
-        label: [entry.type || "LLM request", entry.promptMode].filter(Boolean).join(" · "),
+        type: stepType,
+        label: isPython
+          ? [entry.label || "Managed Python", entry.operation].filter(Boolean).join(" · ")
+          : [entry.type || "LLM request", entry.promptMode].filter(Boolean).join(" · "),
         status,
-        summary: `${entry.promptMode || "request"} · ${[entry.providerType || entry.provider || "", entry.model || ""].filter(Boolean).join(" / ") || "provider"}`,
+        summary: isPython
+          ? [entry.runtime || "managed-python", entry.operation || "operation", entry.workerId || ""].filter(Boolean).join(" · ")
+          : `${entry.promptMode || "request"} · ${[entry.providerType || entry.provider || "", entry.model || ""].filter(Boolean).join(" / ") || "provider"}`,
         detail: [
+          isPython && entry.inputSummary ? entry.inputSummary : "",
+          isPython && Number.isFinite(Number(entry.durationMs)) ? `${Math.round(Number(entry.durationMs))}ms` : "",
+          isPython && entry.outputSummary ? entry.outputSummary : "",
           entry.sentChunkCount || entry.sourceChunkCount ? `${entry.sentChunkCount || 0}/${entry.sourceChunkCount || 0} chunks` : "",
           promptChars ? `${promptChars} prompt chars` : "",
           maxTokens ? `${maxTokens} sent max tokens` : "",
@@ -399,11 +465,37 @@ window.TrackerLensKnowledgeRuntime = (() => {
     }
   };
 
+  const emitKnowledgeRuntimeStep = ({ entry = {}, status = "working", currentStep = null, provider = "", model = "" } = {}) => {
+    if (!entry?.bus?.emit || !entry?.nodeId) return;
+    entry.bus.emit("knowledge.runtime.step", {
+      nodeId: entry.nodeId,
+      status,
+      step: currentStep,
+      promptMode: latestKnowledgeRuntimeDebugEntry(entry)?.promptMode || "",
+      provider,
+      model,
+    }, {
+      workspaceId: entry.workspaceId,
+      eventType: "knowledge_runtime_step",
+      sourceNodeId: entry.nodeId,
+      status,
+      meta: {
+        knowledgeRuntime: entry.nodeId,
+        runtimeActivityVisual: true,
+        runId: entry.runId || "",
+        subtype: entry.subtype || "",
+        stepType: currentStep?.type || "",
+        visualUntil: runtimeVisualUntil(),
+      },
+    }).catch(() => null);
+  };
+
   const flushKnowledgeRuntimeDebug = (entry = {}, { status = "working" } = {}) => {
-    if (!entry?.jobId || !entry?.nodeId || !entry?.inputStep) return;
+    if (!entry?.jobId || !entry?.nodeId || !entry?.inputStep || entry.finalized) return;
     if (entry.flushTimer) clearTimeout(entry.flushTimer);
     entry.flushTimer = setTimeout(() => {
       entry.flushTimer = 0;
+      if (entry.finalized) return;
       const latest = latestKnowledgeRuntimeDebugEntry(entry);
       const steps = knowledgeRuntimeSteps({
         inputStep: entry.inputStep,
@@ -412,7 +504,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const currentStep = steps[steps.length - 1] || entry.inputStep;
       const provider = latest?.provider || latest?.providerType || entry.provider || "";
       const model = latest?.model || entry.model || "";
-      upsertKnowledgeRuntimeJob({
+      const write = upsertKnowledgeRuntimeJob({
         id: entry.jobId,
         workspaceId: entry.workspaceId,
         runId: entry.runId || "",
@@ -434,27 +526,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         },
         updatedAt: nowIso(),
       }).catch(() => null);
-      entry.bus?.emit?.("knowledge.runtime.step", {
-        nodeId: entry.nodeId,
-        status,
-        step: currentStep,
-        promptMode: latest?.promptMode || "",
-        provider,
-        model,
-      }, {
-        workspaceId: entry.workspaceId,
-        eventType: "knowledge_runtime_step",
-        sourceNodeId: entry.nodeId,
-        status,
-        meta: {
-          knowledgeRuntime: entry.nodeId,
-          runtimeActivityVisual: true,
-          runId: entry.runId || "",
-          subtype: entry.subtype || "",
-          stepType: currentStep.type || "",
-          visualUntil: runtimeVisualUntil(),
-        },
-      }).catch(() => null);
+      entry.flushPromise = write;
+      write.finally(() => {
+        if (entry.flushPromise === write) entry.flushPromise = null;
+      });
+      emitKnowledgeRuntimeStep({ entry, status, currentStep, provider, model });
     }, 0);
   };
 
@@ -1159,12 +1235,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const embeddingRuntime = String(config.embeddingRuntime || "").trim().toLowerCase();
     if (embeddingRuntime === "python-local") {
       try {
-        const result = await globalThis.trackers?.runtime?.pythonNlp?.run?.({
+        const result = await runKnowledgePythonOperation({
           executionId: uniqueId("python_embedding"),
           operation: "text_embedding",
           inputs: { text: String(text || "") },
           context: { capability: "text.embedding" },
-          timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000))
+          timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000)),
+          label: "Generate embeddings",
+          debugContext: config.__knowledgeRuntimeDebug || null,
         });
         const vector = Array.isArray(result?.outputs?.vector) ? result.outputs.vector.map(Number).filter(Number.isFinite) : [];
         if (!vector.length) throw new Error("Python NLP embedding response vuota");
@@ -1228,9 +1306,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const rankRagCandidatesWithPython = async ({ query = "", queryVector = [], candidates = [], config = {} } = {}) => {
-    const bridge = globalThis.trackers?.runtime?.pythonNlp;
-    if (!bridge?.run) throw new Error("Il pack Python RAG non è disponibile. Installalo da Runtime Python e Modelli.");
-    const result = await bridge.run({
+    const result = await runKnowledgePythonOperation({
       executionId: uniqueId("python_rag"),
       operation: "hybrid_search",
       inputs: {
@@ -1242,6 +1318,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
       },
       context: { capability: "knowledge.rag.retrieve", dataAccess: "tl-authorized-candidates-only" },
       timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000)),
+      label: "Hybrid RAG retrieval",
+      debugContext: config.__knowledgeRuntimeDebug || null,
     });
     return {
       ranked: Array.isArray(result?.outputs?.ranked) ? result.outputs.ranked : [],
@@ -1252,15 +1330,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const rerankRagCandidatesWithPython = async ({ query = "", candidates = [], config = {} } = {}) => {
-    const bridge = globalThis.trackers?.runtime?.pythonNlp;
-    if (!bridge?.run) throw Object.assign(new Error("Il pack Python RAG con reranker non è disponibile. Installalo da Runtime Python e Modelli."), { code: "PYTHON_PACK_UNAVAILABLE" });
     try {
-      const result = await bridge.run({
+      const result = await runKnowledgePythonOperation({
         executionId: uniqueId("python_rerank"),
         operation: "cross_encoder_rerank",
         inputs: { query: String(query || ""), candidates },
         context: { capability: "text.rerank", dataAccess: "tl-authorized-rag-candidates-only" },
         timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 30000)),
+        label: "CrossEncoder reranking",
+        debugContext: config.__knowledgeRuntimeDebug || null,
       });
       return {
         ranked: Array.isArray(result?.outputs?.ranked) ? result.outputs.ranked : [],
@@ -3810,14 +3888,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
   };
 
   const annotateDictionaryChunksWithPython = async ({ chunks = [], language = "", config = {} } = {}) => {
-    const bridge = globalThis.trackers?.runtime?.pythonNlp;
-    if (!bridge?.run) throw Object.assign(new Error("Il pack Python per le annotazioni non è disponibile. Installalo da Runtime Python e Modelli."), { code: "PYTHON_PACK_UNAVAILABLE" });
-    const response = await bridge.run({
+    const response = await runKnowledgePythonOperation({
       executionId: uniqueId("python_annotations"),
       operation: "annotations",
       inputs: { language, chunks: chunks.map((chunk) => ({ id: String(chunk.id || ""), text: String(chunk.text || "") })) },
       context: { capability: "nlp.annotations" },
       timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 60000)),
+      label: "spaCy linguistic annotations",
+      debugContext: config.__knowledgeRuntimeDebug || null,
     }).catch((error) => {
       throw Object.assign(new Error(`Pack Python annotazioni non installato o non disponibile: ${error?.message || "unknown error"}`), { code: error?.code || "PYTHON_PACK_UNAVAILABLE" });
     });
@@ -11471,6 +11549,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       debugContext.inputStep = inputStep;
       debugContext.provider = config.providerProfile || config.providerType || config.provider || "";
       debugContext.model = config.model || "";
+      // EventBus listeners run concurrently. Keep runtime tracing owned by this
+      // exact Node instead of relying on the globally most recent listener.
+      config.__knowledgeRuntimeDebug = debugContext;
       await upsertKnowledgeRuntimeJob({
         id: jobId,
         workspaceId: this.workspaceId,
@@ -12025,6 +12106,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           outputChannel,
           latencyMs,
         });
+        await finalizeKnowledgeRuntimeDebug(debugContext);
         await upsertKnowledgeRuntimeJob({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -12055,6 +12137,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
           error: resultSummary.error || "",
           updatedAt: nowIso(),
         });
+        emitKnowledgeRuntimeStep({
+          entry: debugContext,
+          status: finalStatus,
+          currentStep: steps[steps.length - 1] || null,
+          provider: resultSummary.provider || config.providerProfile || config.providerType || config.provider || "",
+          model: resultSummary.model || config.model || "",
+        });
         if (subtype === "knowledge-graph-builder-agent" || subtype === "world-generator-agent") {
           await emitKnowledgeRuntimeActivity({
             bus: this.bus,
@@ -12083,6 +12172,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           latencyMs,
           error,
         });
+        await finalizeKnowledgeRuntimeDebug(debugContext);
         await upsertKnowledgeRuntimeJob({
           id: jobId,
           workspaceId: this.workspaceId,
@@ -12110,6 +12200,13 @@ window.TrackerLensKnowledgeRuntime = (() => {
           },
           error: error.message || String(error),
           updatedAt: nowIso(),
+        });
+        emitKnowledgeRuntimeStep({
+          entry: debugContext,
+          status: "error",
+          currentStep: steps[steps.length - 1] || null,
+          provider: config.providerProfile || config.providerType || config.provider || "",
+          model: config.model || "",
         });
         await this.bus.emit("knowledge.error", {
           error: error.message || String(error),
