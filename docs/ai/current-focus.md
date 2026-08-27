@@ -3,15 +3,15 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-08-26.
+Last updated: 2026-08-27.
 
 ## Active Area
 
-Managed Python RAG reranking.
+Managed Python runtime: RAG verified; identify the next audited capability.
 
 ## Next Task
 
-The immediate implementation slice is a direct RAG Search cutover to its pinned local CrossEncoder reranker after Python Hybrid retrieval. The reranker is part of the managed RAG pack, is installed only through the consented Runtime Python e Modelli plan and receives only TL-authorized candidate text. Validate it after explicit in-app installation; Graph Query reuse remains a later independent decision. Custom Node Packages follow after this focused RAG capability is complete. See `docs/ai/runtime/custom-node-packages.md`.
+The direct RAG Search cutover is complete and verified: its pinned local CrossEncoder reranks Python Hybrid candidates after explicit managed-pack installation, and its clean output exposes execution provenance. The next implementation decision is to select the next audited Python-capability target; Graph Query reuse remains a separate decision. Custom Node Packages follow this focused runtime capability work. See `docs/ai/runtime/custom-node-packages.md`.
 
 ## Current Work
 
@@ -33,7 +33,7 @@ The immediate implementation slice is a direct RAG Search cutover to its pinned 
 - RAG Search now also requires its pinned local `text.rerank` capability: after Python Hybrid retrieval, the built-in `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` CrossEncoder reorders only TL-authorized candidate text. The model revision is pinned in `trackerslens.rag.hybrid`; a missing reranker leaves this pack unavailable, prompts installation for a newly added RAG node and fails existing execution explicitly. There is no user migration or legacy-ranking mode in this first-development phase.
 - Clean AI/Preview RAG output preserves retrieval provenance for transparent verification: `python-hybrid-rerank`, hybrid algorithm/weights, candidate counts, the pinned CrossEncoder model/revision, plus each source's Hybrid and rerank score. It exposes no Python path, model files or runtime handle.
 - Preview JSON normalization: Preview keeps the original runtime payload untouched, but in `auto`/`json` display modes it now recognizes a complete Markdown-fenced ` ```json ` response, parses it and renders formatted JSON. Invalid JSON and `raw` mode remain verbatim, so model output is never silently repaired or overwritten.
-- RAG end-to-end validation is complete: `Document -> Python embedding -> Python Hybrid RAG -> AI Debugger -> Preview` produced a source-grounded positive answer and a valid negative-case behavior. For an unstated cause, the generic AI prompt did not fabricate a causal fact; it explained the documented condition with evidence. Exact abstention wording remains a user-controlled system-prompt choice, not a story-specific runtime rule.
+- RAG end-to-end validation is complete: `Document -> Python embedding -> Python Hybrid RAG -> CrossEncoder rerank -> AI Debugger -> Preview` produced source-grounded positive and negative-case behavior. The emitted provenance confirms the pinned `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` ran after Hybrid retrieval and exposes per-source Hybrid/rerank scores. For an unstated cause, the generic AI prompt did not fabricate a causal fact; it explained the documented condition with evidence. Exact abstention wording remains a user-controlled system-prompt choice, not a story-specific runtime rule.
 
 - Electron desktop persistence is SQLite-only by product decision. Graph, observations, pages/widgets, connections, channels, Knowledge, Workspace editor and StorageRuntime use TL Core SQLite.
 - `database.html` is the desktop read-only SQLite Explorer: it lists Core-approved logical collections, their record counts and JSON records through the restricted preload bridge; no database path, handle, arbitrary SQL or demo-data fallback reaches the renderer. The UI exposes only inspection, copy and local JSON export—not mutation actions.

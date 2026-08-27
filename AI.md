@@ -3,7 +3,7 @@
 Purpose: minimal entrypoint for AI agents working on Trackers Lens.
 Read when: always, before touching code.
 Do not read when: never; this file is intentionally short.
-Last updated: 2026-06-25.
+Last updated: 2026-08-27.
 
 ## Read Order
 
@@ -39,6 +39,9 @@ Last updated: 2026-06-25.
 - Managed Python POC: `docs/ai/runtime/python-poc.md`
 - Python Node SDK and capabilities: `docs/ai/runtime/python-node-sdk.md`
 - Python node suitability audit: `docs/ai/runtime/python-node-audit.md`
+- Python migration direction: `docs/ai/python_migration_guide.md`
+- Managed Python packs, installation and Runtime Python e Modelli: `docs/ai/runtime/python-node-sdk.md`, plus `docs/ai/current-focus.md`
+- Python Hybrid RAG and CrossEncoder reranking: `docs/ai/current-focus.md` and `docs/ai/task-registry.md`
 - Agent runtime: `docs/ai/runtime/agent-runtime.md`
 - Connected node tools: `docs/ai/runtime/connected-node-tools.md`
 - AI memory runtime: `docs/ai/runtime/ai-memory.md`
