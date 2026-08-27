@@ -2842,6 +2842,25 @@ const renderCanvas = () => {
               icon(graphIcon(node), "sm"),
               _.strong(view.title),
               btn({
+                class: "tl-flow-node-menu",
+                "aria-label": `${state.inspectorOpen && state.focus.nodeId === node.id ? "Close" : "Open"} menu for ${view.title}`,
+                "aria-pressed": state.inspectorOpen && state.focus.nodeId === node.id ? "true" : "false",
+                title: state.inspectorOpen && state.focus.nodeId === node.id ? "Close node menu" : "Open node menu",
+                onPointerDown: (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                },
+                onclick: (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (state.inspectorOpen && state.focus.nodeId === node.id) {
+                    closeInspector();
+                    return;
+                  }
+                  selectNode(node, { openInspector: true });
+                },
+              }, icon("menu", "sm")),
+              btn({
                 class: "tl-flow-node-settings",
                 "aria-label": `Configure ${view.title}`,
                 title: node.type === "boxTracker" ? "Open Box Tracker editor" : node.type === "boxLens" ? "Open Box Lens editor" : "Configure node",

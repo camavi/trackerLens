@@ -2376,7 +2376,7 @@ const centerViewportOnNode = (node = {}, index = 0, { select = false, zoom = Mat
   });
 };
 
-const selectNode = (node) => {
+const selectNode = (node, { openInspector = false } = {}) => {
   closeContextMenu();
   bringNodeToFront(node.id);
   setFocusState({
@@ -2387,7 +2387,10 @@ const selectNode = (node) => {
     channel: nodeChannels(node)[0] || "",
     connectionId: "",
   });
-  state.inspectorOpen = true;
+  // Selecting or moving a card must stay lightweight. The Node menu is an
+  // explicit action from the header control, so it never interrupts canvas
+  // work by opening the inspector on every click.
+  state.inspectorOpen = Boolean(openInspector);
   mount();
 };
 

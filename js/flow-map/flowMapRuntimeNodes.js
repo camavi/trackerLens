@@ -7736,7 +7736,7 @@ const requestNodeRename = (node) => {
 
 const viewEdgeNode = (node) => {
   if (!node) return;
-  selectNode(node);
+  selectNode(node, { openInspector: true });
 };
 
 const connectionWorkspaceId = (source, target) => {
