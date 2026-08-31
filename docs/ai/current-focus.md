@@ -703,7 +703,7 @@ Knowledge Dictionary Runtime is complete for the document-scoped product path. U
 
 Current active work: Custom Node Packages. Phase 1 uses an importable `.tl-node.zip` artifact; Electron Main/TL Core validates and copies it into app data, SQLite catalogs its hash/provenance/permissions/trust, and runtime JavaScript stays blocked. Explicit cross-document/collection Dictionary promotion remains an optional, separately scoped future capability.
 
-- Custom Node Package manifest-only backend is implemented: Core parses and validates `.tl-node.zip` archives, rejects unsafe paths/encryption/unsupported compression, stores the exact SHA-256 artifact in app data and writes opaque `tl_packages` metadata. The renderer can only invoke the narrow inspect/install/list bridge and never sees a filesystem path; `runtime.js` is not loaded. Next within Phase 1: CMSwift import/review UI and disabled palette registration.
+- Custom Node Package manifest-only backend and CMSwift review UI are implemented: Core parses and validates `.tl-node.zip` archives, rejects unsafe paths/encryption/unsupported compression, stores the exact SHA-256 artifact in app data and writes opaque `tl_packages` metadata. Flow Map’s `Custom Nodes` dialog reviews manifest/permissions/trust/hash before explicit import and lists installed packages. The renderer never sees a filesystem path; `runtime.js` is not loaded. Next within Phase 1: disabled palette registration.
 
 ## Required Updates When Work Changes
 

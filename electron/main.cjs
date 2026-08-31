@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, session } = require("electron");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createTlCore } = require("../core/desktop/tl-core.cjs");
@@ -59,6 +60,7 @@ let pythonNlp = null;
 let pythonGraphRelations = null;
 let persistence = null;
 let customNodePackageManager = null;
+const pendingCustomNodeImports = new Map();
 const createPythonNlpRuntime = () => {
   if (!fs.existsSync(pythonNlpPythonPath)) return null;
   if (!pythonNlp) pythonNlp = new ManagedPythonRuntime({
@@ -296,11 +298,17 @@ app.whenReady().then(() => {
   const customNodePackages = {
     inspect: async () => {
       const archivePath = await selectCustomNodeArchive();
-      return archivePath ? customNodePackageManager.inspectFile(archivePath) : { cancelled: true };
+      if (!archivePath) return { cancelled: true };
+      const inspection = await customNodePackageManager.inspectFile(archivePath);
+      const importId = crypto.randomUUID();
+      pendingCustomNodeImports.set(importId, archivePath);
+      return { ...inspection, importId };
     },
-    install: async () => {
-      const archivePath = await selectCustomNodeArchive();
-      return archivePath ? customNodePackageManager.installFile(archivePath) : { cancelled: true };
+    install: async ({ importId = "" } = {}) => {
+      const archivePath = pendingCustomNodeImports.get(String(importId || ""));
+      if (!archivePath) throw Object.assign(new Error("La revisione del pacchetto è scaduta. Seleziona di nuovo l'archivio."), { code: "CUSTOM_NODE_IMPORT_REVIEW_EXPIRED" });
+      pendingCustomNodeImports.delete(String(importId));
+      return customNodePackageManager.installFile(archivePath);
     },
     list: () => customNodePackageManager.listInstalled()
   };

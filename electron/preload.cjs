@@ -22,7 +22,7 @@ const trackers = Object.freeze({
     }),
     customNodePackages: Object.freeze({
       inspect: () => request("desktop.customNodePackages.inspect"),
-      install: () => request("desktop.customNodePackages.install"),
+      install: ({ importId } = {}) => request("desktop.customNodePackages.install", { importId: String(importId || "") }),
       list: () => request("desktop.customNodePackages.list")
     })
   }),

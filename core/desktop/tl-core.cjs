@@ -94,7 +94,7 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
         return customNodePackages.inspect();
       case "desktop.customNodePackages.install":
         if (!customNodePackages?.install) throw errorWithCode("Custom Node package import is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
-        return customNodePackages.install();
+        return customNodePackages.install({ importId: String(payload?.importId || "") });
       case "desktop.customNodePackages.list":
         if (!customNodePackages?.list) throw errorWithCode("Custom Node package catalog is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
         return customNodePackages.list();

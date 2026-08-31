@@ -6251,6 +6251,9 @@ const renderHeader = () =>
         ? btn({ onclick: restoreLastChannelAction }, icon("undo", "sm"), "Undo Channel")
         : null,
       btn({ onclick: loadRuntime }, icon("sync", "sm"), "Refresh"),
+      window.TrackerLensCustomNodePackages?.isAvailable?.()
+        ? btn({ title: "Importa e gestisci Custom Node .tl-node.zip", onclick: () => window.TrackerLensCustomNodePackages.openDialog() }, icon("extension", "sm"), "Custom Nodes")
+        : null,
       btn({
         class: state.testRun.running ? "is-primary is-running" : "",
         title: state.testRun.summary || "Run graph pulse test from root Sources and Trackers only; child nodes start from parent payloads",
