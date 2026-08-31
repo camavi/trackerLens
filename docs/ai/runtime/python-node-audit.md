@@ -1,9 +1,9 @@
 # Python Node Audit
 
-Purpose: classify every current Flow Map palette node for Python-runtime suitability before implementing a production Python capability.
+Purpose: classify every current Flow Map palette node for Python-runtime suitability and record the implemented managed capabilities.
 Read when: selecting a Python node, evaluating a module dependency or changing a node execution runtime.
 Do not read when: making a UI-only node change.
-Last updated: 2026-08-27.
+Last updated: 2026-08-31.
 
 ## Scope and Result
 
@@ -18,9 +18,9 @@ silently changing the existing node.
 
 | Decision | Nodes | Reason |
 | --- | --- | --- |
-| JS or POC | 80 | Control plane, I/O, UI, persistence, Flow routing and LLM orchestration remain in TL; Python Test remains an isolated POC. |
-| Managed Python implemented | 3 | Embedding Generator, Vector Memory and RAG Search retain TL contracts while using installed Sentence Transformers/BM25S/CrossEncoder capabilities. |
-| Hybrid candidate | 5 | Existing Knowledge contracts can benefit from a bounded Python computation without changing Flow semantics. |
+| JS or POC | 79 | Control plane, I/O, UI, persistence, Flow routing and LLM orchestration remain in TL; Python Test remains an isolated POC. |
+| Managed Python implemented | 5 | Embedding Generator, Vector Memory, RAG Search, Knowledge Dictionary Builder and Knowledge Graph Builder Agent retain TL contracts while calling installed specialist capabilities. |
+| Hybrid candidate | 4 | Existing Knowledge contracts can benefit from a bounded Python computation without changing Flow semantics. |
 | Direct Python migration | 0 | No current node is approved to change its execution runtime directly. Future Python capabilities are additive. |
 
 No existing node is approved to switch its whole execution runtime. Every
@@ -62,11 +62,12 @@ Manager responsibilities.
 | Knowledge (1) | RAG Search | Managed Python implemented | `knowledge.rag.retrieve` and `text.rerank` use the managed Hybrid/CrossEncoder pack. TL keeps scope, evidence/context construction, output and persistence. |
 | Knowledge (1) | Graph Query | Hybrid candidate — later decision | Keep graph/evidence policy and query output in TL. It does not inherit RAG reranking automatically. |
 | Knowledge (1) | Knowledge Graph | Future capability | Keep graph materialization in TL. Add a separate read-only graph-analytics capability only when algorithms beyond the current graph needs are justified. |
-| Knowledge (1) | Knowledge Dictionary Builder | Hybrid candidate — next active slice | A managed `nlp.annotations` capability will use local revision-pinned spaCy pipeline(s) to propose tokens, lemmas, POS, dependencies and named-entity spans. TL retains all existing evidence validation, ranking and persistence. |
-| Knowledge (1) | Entity Extractor | Hybrid candidate — follows annotations | It may consume validated `nlp.annotations` output. TL retains dictionary constraints, deduplication, evidence checks and persistence. |
+| Knowledge (1) | Knowledge Dictionary Builder | Managed Python implemented | `nlp.annotations` uses the installed revision-pinned spaCy pipelines for IT/EN/ES/FR/DE to return token, lemma, POS, dependency and NER proposals. TL retains evidence validation, ranking, scope and persistence. |
+| Knowledge (1) | Entity Extractor | Hybrid candidate | It consumes scoped Dictionary/annotation-derived hints; a dedicated Entity Python capability is not currently required. TL retains dictionary constraints, deduplication, evidence checks and persistence. |
 | Knowledge (1) | Knowledge Event Builder | Hybrid candidate — priority 4 | A later NLP capability may propose structured events. TL retains timeline ordering, role normalization, evidence validation and fallback rules. |
 | Knowledge (1) | Semantic Relation Enricher | Hybrid candidate — priority 4 | Python may score/propose relations, but TL keeps allowed relation types, orientation, evidence and persistence. |
-| Knowledge (3) | Knowledge Mechanism Cue Agent, Knowledge Reasoning Composer, Knowledge Graph Builder Agent | JS | These are LLM orchestration and evidence-policy nodes. A model provider may be local, but the orchestration contract remains TL. |
+| Knowledge (2) | Knowledge Mechanism Cue Agent, Knowledge Reasoning Composer | JS | These are LLM orchestration and evidence-policy nodes. A model provider may be local, but the orchestration contract remains TL. |
+| Knowledge (1) | Knowledge Graph Builder Agent | Managed Python implemented | TL retains LLM orchestration, scope, evidence, persistence and quality labels; the managed isolated `graph` environment runs GLiNER2 relation extraction and multilingual NLI verification. |
 | AI Agents (13) | Existing Agents, Task Node, Orchestrator Agent, AI Analyzer, AI Sentiment, AI Summarizer, AI Classifier, AI Predictor, AI Memory, AI Planner, AI Router, AI Debugger, AI Decision | JS | Agents, jobs, tools, memory and safe execution remain TL. Classical Python NLP/ML classifiers or predictors may be added as distinct opt-in capability nodes; do not silently change AI-agent semantics. |
 | Actions (11) | Telegram Message, WhatsApp Message, Email, Webhook POST, HTTP PUT/PATCH, Browser Notification, Discord Message, Slack Message, Sound Alert, Popup Alert, Runtime Trigger | JS | Side effects and confirmations remain behind TL safe-executor and platform permissions. |
 | Storage (8) | Save SQLite Record, Save File, Local Cache, Runtime Memory, Snapshot, JSON Export, CSV Export, History Store | JS | Persistence, export and user-data ownership remain TL Core responsibilities. |
@@ -82,16 +83,16 @@ node.
 | --- | --- | --- | --- | --- |
 | `text.embedding` | Embedding Generator, Vector Memory | Sentence Transformers | scoped chunks, model/pack policy, vector record write and provenance | vectors, dimensions, model/version, metrics |
 | `text.rerank` | RAG Search | Sentence Transformers `CrossEncoder` | retrieval candidate set, evidence scope/order, final context and provenance | scored candidate IDs and model/version |
-| `nlp.annotations` | Dictionary Builder first; then Entity Extractor, Event Builder, Semantic Relation Enricher | spaCy, selected for managed-pack evaluation | chunks, allowed schema, validation, persistence and evidence rules | token/lemma/POS/dependency/entity proposals with offsets |
+| `nlp.annotations` | Knowledge Dictionary Builder | spaCy 3.8.14, implemented in the managed `nlp` pack with IT/EN/ES/FR/DE pipelines | chunks, allowed schema, validation, persistence and evidence rules | token/lemma/POS/dependency/entity proposals with UTF-16-compatible offsets |
+| `knowledge.graph.relation_extract` / `knowledge.graph.relation_verify` | Knowledge Graph Builder Agent | GLiNER2 2.0.0 + multilingual mDeBERTa NLI, implemented in the isolated managed `graph` pack | authorized chunks, relation schema, scope, provenance, quality labels and persistence | evidence-grounded relation candidates plus entailment/neutral/contradiction verification |
 | `graph.analytics` | future read-only companion to Knowledge Graph | NetworkX | graph snapshot, scope, output policy and visualization | metrics, paths, communities or ranked node IDs |
 | `ml.classify` / `ml.predict` | future distinct nodes, not current AI Agents | scikit-learn or another selected managed pack | dataset scope, training policy, model storage, actions and fallback | labels/scores/predictions and metrics |
 
-Sentence Transformers is implemented for embeddings/reranking. spaCy is the
-selected module family for the next `nlp.annotations` design slice because it
-exposes linguistic annotations, NER and dependency parsing and has pipelines
-for TL's supported languages. The exact package versions, pipeline revisions,
-licenses and benchmark remain approval gates before the pack is installable.
-NetworkX and scikit-learn remain future candidates.
+Sentence Transformers is implemented for embeddings/reranking; spaCy is
+implemented for linguistic annotations; and GLiNER2 plus multilingual NLI is
+implemented for managed graph relations. All use pinned managed packs and keep
+TL as the contract, scope, persistence and provenance owner. NetworkX and
+scikit-learn remain future candidates.
 
 Reference material for the capability fit: [Sentence Transformers embeddings
 and rerankers](https://sbert.net/docs/quickstart.html), [spaCy linguistic
@@ -99,24 +100,16 @@ features](https://spacy.io/usage/linguistic-features), [NetworkX
 algorithms](https://networkx.org/documentation/stable/reference/algorithms/index.html)
 and [scikit-learn text feature extraction](https://scikit-learn.org/stable/modules/feature_extraction.html).
 
-## Next Implementation Slice
+## Remaining Optional Capability Candidates
 
-Start with `nlp.annotations` for **Knowledge Dictionary Builder**, not a broad
-Knowledge migration:
+No Python-node migration is required for the current product path. Evaluate a
+new capability only when it has a measurable benefit and a bounded contract:
 
-1. Preserve Dictionary ports, `tl_knowledge_dictionary` records, evidence
-   validation, scope and event contracts.
-2. Define a trusted managed spaCy pack and exact local model pipeline(s) before
-   enabling installation; no node/worker uses `spacy download`.
-3. Add a thin Python adapter that returns only sentence/token/lemma/POS/
-   dependency/entity proposals with UTF-16-compatible offsets and provenance.
-4. Let TL validate, rank and persist only supported proposals; do not move
-   dictionary policy or hardcoded language rules into Python.
-5. Compare coverage, precision, latency and memory on the existing five-language
-   fixtures before Entity Extractor reuses the capability.
-
-This order gives measurable value while leaving the high-regression extraction
-and graph-answering paths untouched.
+1. `graph.analytics` as a read-only NetworkX companion to Knowledge Graph.
+2. A dedicated Entity/Event/Semantic extraction capability only if it improves
+   over the current Dictionary, rule and provider paths.
+3. Separate opt-in ML classification/prediction or media-analysis nodes; do not
+   repurpose existing TL control-plane or Agent nodes.
 
 ## Required Follow-up Before Any Candidate Ships
 
