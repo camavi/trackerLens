@@ -1641,6 +1641,7 @@ const graphIcon = (nodeOrType = "") => {
 };
 
 const nodeRuntimeStatus = (node = {}, live = null) => {
+  if (node.metadata?.runtimeBlocked || node.metadata?.customPackage?.runtimeExecution === "blocked") return "disabled";
   const raw = node.runtime?.status || node.metadata?.runtimeStatus || node.status || (live ? "active" : "idle");
   const status = isDraftNode(node) ? "idle" : String(raw || "idle").toLowerCase();
   if (live?.status === "error") return "error";
@@ -1661,6 +1662,9 @@ const nodeSubtype = (node = {}) => {
 
 const nodeRuntimeDescription = (node = {}, live = null) => {
   const category = nodeCategory(node);
+  if (node.metadata?.runtimeBlocked || node.metadata?.customPackage?.runtimeExecution === "blocked") {
+    return "Imported Custom Node package. Runtime execution is blocked until the package runtime sandbox is available.";
+  }
   if (node.metadata?.description) return node.metadata.description;
   if (category === "sources" && nodeSubtype(node) === "task") return "Agent task source emitting objective, context and success conditions.";
   if (category === "sources") return "Input adapter ingesting raw external data.";

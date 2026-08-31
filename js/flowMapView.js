@@ -77,6 +77,10 @@ runFlowMapStartupRepair().then((repairResult) => {
   loadRuntime();
 });
 connectLiveEventBus();
+window.addEventListener("trackers-custom-node-packages-updated", () => {
+  if (state.mounted) mount({ preserveScroll: true });
+});
+window.TrackerLensCustomNodePackages?.refreshInstalled?.();
 window.setInterval(() => {
   if (isFlowMapRecoveryMode()) return;
   if (state.loading || state.runtimeLoadInFlight) return;

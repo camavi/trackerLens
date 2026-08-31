@@ -36,8 +36,12 @@ const isKnowledgeDocumentStarterNode = (node = {}) => {
   return nodeCategory(node) === "knowledge" && ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(subtype);
 };
 
+const isManifestOnlyCustomPackageNode = (node = {}) =>
+  Boolean(node.metadata?.runtimeBlocked || node.metadata?.customPackage?.runtimeExecution === "blocked");
+
 const isLiveTestableStarterNode = (node = {}) =>
-  isDirectAiTestNode(node) || isManualInputSource(node) || isKnowledgeDocumentStarterNode(node) || isCustomRuntimeNode(node) || (isTestableStarterNode(node) && Boolean(nodeEndpoint(node)));
+  !isManifestOnlyCustomPackageNode(node) &&
+  (isDirectAiTestNode(node) || isManualInputSource(node) || isKnowledgeDocumentStarterNode(node) || isCustomRuntimeNode(node) || (isTestableStarterNode(node) && Boolean(nodeEndpoint(node))));
 
 const runtimeRuleGraph = () =>
   graphModelApi().build({

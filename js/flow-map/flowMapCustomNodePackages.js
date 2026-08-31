@@ -1,7 +1,49 @@
 // Core-owned Custom Node package import/review UI. Package code is never loaded here.
 window.TrackerLensCustomNodePackages = (() => {
+  let installed = [];
   const bridge = () => window.trackers?.desktop?.customNodePackages || null;
   const isAvailable = () => Boolean(bridge()?.inspect && bridge()?.install && bridge()?.list);
+  const declaredPermissions = (permissions = {}) => Object.entries(permissions || {})
+    .filter(([, value]) => Boolean(value) && value !== "none")
+    .map(([key, value]) => value === true ? `custom.${key}` : `custom.${key}.${value}`);
+  const paletteItem = (pkg = {}) => {
+    const manifest = pkg.manifest || {};
+    return {
+      label: pkg.name || manifest.name || pkg.packageId || "Custom Node",
+      icon: manifest.icon || "extension",
+      tone: "gold",
+      nodeType: "custom",
+      subtype: pkg.subtype || manifest.subtype || pkg.packageId || "custom-package",
+      category: "custom-packages",
+      inputs: manifest.inputs || [],
+      outputs: manifest.outputs || [],
+      // This is a normalized display/graph permission list. The original
+      // declared object stays in metadata below for the review surface.
+      permissions: declaredPermissions(pkg.permissions || manifest.permissions),
+      settingsSchema: manifest.ui?.settingsSchema || manifest.settingsSchema || {},
+      runtime: { execution: "blocked", installState: pkg.installState || "manifest-only" },
+      manifest: { ...manifest, permissions: declaredPermissions(pkg.permissions || manifest.permissions) },
+      customPackage: {
+        packageId: pkg.packageId,
+        version: pkg.version,
+        archive: pkg.archive || {},
+        trustLevel: pkg.trustLevel || "local-dev",
+        installState: pkg.installState || "manifest-only",
+        runtimeExecution: "blocked",
+        declaredPermissions: pkg.permissions || manifest.permissions || {},
+      },
+      connectionType: "Custom package · runtime blocked",
+      runtimeBlocked: true,
+    };
+  };
+  const notifyPaletteChanged = () => window.dispatchEvent(new CustomEvent("trackers-custom-node-packages-updated"));
+  const refreshInstalled = async () => {
+    if (!isAvailable()) { installed = []; return installed; }
+    installed = await bridge().list().catch(() => []);
+    notifyPaletteChanged();
+    return installed;
+  };
+  const paletteGroups = () => installed.length ? [["Custom Packages", installed.map(paletteItem)]] : [];
   const permissionText = (permissions = {}) => [
     permissions.network ? "network" : null,
     permissions.filesystem ? "filesystem" : null,
@@ -23,7 +65,7 @@ window.TrackerLensCustomNodePackages = (() => {
   };
   const openDialog = async () => {
     if (!isAvailable()) return CMSwift.notify?.error?.("L'import Custom Node è disponibile solo nell'app desktop.");
-    let packages = await bridge().list().catch(() => []);
+    let packages = await refreshInstalled();
     let review = null;
     let busy = false;
     let dialog = null;
@@ -33,7 +75,7 @@ window.TrackerLensCustomNodePackages = (() => {
       review ? _.section({ class: "tl-flow-package-review" }, _.h3("Revisione import"), summary(review), _.div({ class: "tl-flow-package-actions" },
         btn({ class: "st-btn-primary", disabled: busy, onclick: async () => {
           busy = true; refresh();
-          try { await bridge().install({ importId: review.importId }); review = null; packages = await bridge().list(); CMSwift.notify?.success?.("Custom Node importato: runtime bloccato."); }
+          try { await bridge().install({ importId: review.importId }); review = null; packages = await refreshInstalled(); CMSwift.notify?.success?.("Custom Node importato: aggiungilo dalla palette, runtime bloccato."); }
           catch (error) { CMSwift.notify?.error?.(error?.message || "Import non riuscito."); }
           finally { busy = false; refresh(); }
         } }, icon("archive", "sm"), busy ? "Importazione…" : "Importa pacchetto"),
@@ -59,5 +101,6 @@ window.TrackerLensCustomNodePackages = (() => {
     });
     dialog.open();
   };
-  return Object.freeze({ isAvailable, openDialog });
+  if (isAvailable()) refreshInstalled();
+  return Object.freeze({ isAvailable, openDialog, paletteGroups, refreshInstalled });
 })();

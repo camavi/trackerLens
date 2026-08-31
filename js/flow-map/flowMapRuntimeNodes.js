@@ -4877,6 +4877,15 @@ const renderCustomRuntimeNodeInlineComponent = (node = {}, layoutNode = {}, conf
 };
 
 const renderCustomRuntimeNodeInlineForm = (node = {}) => {
+  if (node.metadata?.runtimeBlocked || node.metadata?.customPackage?.runtimeExecution === "blocked") {
+    const pkg = node.metadata?.customPackage || {};
+    return _.div(
+      { class: "tl-flow-node-builder-live-form tl-flow-custom-node-live-form", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
+      _.strong("Runtime blocked"),
+      _.span(`${pkg.packageId || node.label} · ${pkg.version || "local package"}`),
+      _.small(`Trust: ${pkg.trustLevel || "local-dev"} · Manifest-only import`)
+    );
+  }
   const layout = customNodeFormLayout(node);
   if (!layout.length) return null;
   const config = nodeConfigObject(node);

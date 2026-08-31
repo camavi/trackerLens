@@ -264,7 +264,12 @@ const nodePalette = [
   ]],
 ];
 
-const flatPalette = () => nodePalette.flatMap(([, items]) => items);
+const effectiveNodePalette = () => [
+  ...nodePalette,
+  ...(window.TrackerLensCustomNodePackages?.paletteGroups?.() || []),
+];
+
+const flatPalette = () => effectiveNodePalette().flatMap(([, items]) => items);
 
 const paletteItemForNode = (node = {}) => {
   const label = node.metadata?.paletteLabel || node.label || "";
@@ -316,6 +321,9 @@ const saveNodeBuilderTemplate = (template = {}) => {
 const nodeBuilderTemplateGroups = () => [
   ["Custom", [blankNodeTemplate()]],
   ...(loadSavedNodeBuilderTemplates().length ? [["My Templates", loadSavedNodeBuilderTemplates()]] : []),
+  // Imported packages are placed only from the Flow Map palette. Their
+  // package reference and execution block must not be rebuilt as a user
+  // template by the Custom Node builder.
   ...nodePalette,
 ];
 

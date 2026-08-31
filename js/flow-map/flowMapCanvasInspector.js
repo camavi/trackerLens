@@ -205,8 +205,9 @@ const paletteItemSearchScore = (item = {}, group = "", query = String(state.pale
 
 const filteredNodePalette = () => {
   const query = String(state.paletteSearch || "").trim().toLowerCase();
-  if (!query) return nodePalette;
-  return nodePalette
+  const palette = typeof effectiveNodePalette === "function" ? effectiveNodePalette() : nodePalette;
+  if (!query) return palette;
+  return palette
     .map(([title, items]) => [title, items.filter((item) => paletteItemSearchScore(item, title, query) > 0)])
     .filter(([, items]) => items.length);
 };
@@ -335,7 +336,7 @@ const renderCanvasNodeMenu = () =>
               },
             }, icon("add_box", "sm"))
           ),
-        ...nodePalette.map(([title, items]) => {
+        ...(typeof effectiveNodePalette === "function" ? effectiveNodePalette() : nodePalette).map(([title, items]) => {
           const hasVisibleItems = items.some((item) => paletteItemMatchesSearch(item, title));
           const collapsed = isNodeMenuGroupCollapsed(title) && !state.paletteSearch;
           return (
@@ -370,7 +371,8 @@ const renderCanvasNodeMenu = () =>
                     },
                   },
                   icon(item.icon, "sm"),
-                  _.span(item.label)
+                  _.span(item.label),
+                  item.runtimeBlocked ? _.em("Runtime blocked") : null
                 )
               )
             )

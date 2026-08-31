@@ -576,6 +576,21 @@ test("Runtime Manager routes legacy nodes through the JavaScript executor", asyn
   assert.equal(javascript.activeJobs, 0);
 });
 
+test("Runtime Manager blocks manifest-only Custom Node packages before a task can run", async () => {
+  const manager = new RuntimeManager();
+  let executed = false;
+
+  await assert.rejects(
+    manager.runLegacyTask({
+      node: { id: "custom_package", metadata: { runtimeBlocked: true, customPackage: { runtimeExecution: "blocked" } } },
+      task: async () => { executed = true; }
+    }),
+    (error) => error.code === "CUSTOM_NODE_RUNTIME_BLOCKED"
+  );
+  assert.equal(executed, false);
+  assert.equal(manager.getExecutor("javascript").completedJobs, 0);
+});
+
 test("Runtime Manager isolates unavailable Python nodes from the JavaScript executor", async () => {
   const manager = new RuntimeManager();
 

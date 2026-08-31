@@ -112,6 +112,11 @@
 
     async runLegacyTask({ node = {}, task, context = {} } = {}) {
       if (typeof task !== "function") throw new Error("Invalid node execution task");
+      if (node.metadata?.runtimeBlocked || node.metadata?.customPackage?.runtimeExecution === "blocked") {
+        const error = new Error("Custom Node package runtime is blocked until its sandbox is available.");
+        error.code = "CUSTOM_NODE_RUNTIME_BLOCKED";
+        throw error;
+      }
       const manifest = node.metadata?.manifest || {};
       const execution = manifest.execution || node.execution || {};
       const resolved = this.resolve(execution);

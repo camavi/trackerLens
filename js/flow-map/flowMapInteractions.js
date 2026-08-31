@@ -122,6 +122,13 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
       permissions: item.permissions || item.manifest?.permissions || [],
       settingsSchema: item.settingsSchema || item.manifest?.settingsSchema || {},
       runtimeMetadata: item.runtime || item.manifest?.runtime || {},
+      customPackage: item.customPackage ? {
+        ...item.customPackage,
+        runtimeExecution: "blocked",
+      } : null,
+      runtimeBlocked: Boolean(item.runtimeBlocked || item.customPackage?.runtimeExecution === "blocked"),
+      runtimeStatus: item.runtimeBlocked || item.customPackage?.runtimeExecution === "blocked" ? "disabled" : "",
+      configured: Boolean(item.customPackage),
     },
   });
 
