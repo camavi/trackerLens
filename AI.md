@@ -3,7 +3,7 @@
 Purpose: minimal entrypoint for AI agents working on Trackers Lens.
 Read when: always, before touching code.
 Do not read when: never; this file is intentionally short.
-Last updated: 2026-08-27.
+Last updated: 2026-08-31.
 
 ## Read Order
 
@@ -60,6 +60,7 @@ Last updated: 2026-08-27.
 - Do not invent endpoint URLs or domain-specific data. Endpoint discovery must be attributed and confirmed.
 - Mutating Flow Agent commands must go through the registered tool layer and safe executor.
 - Destructive operations must be dependency-aware and must preserve user data unless explicitly confirmed.
+- TL is an organizer and transparent supervisor of runtime output, never a hidden semantic judge: it must not silently block, rank away, rewrite or filter producer/LLM/Python facts. Preserve representable output and its provenance; expose uncertainty through explicit, inspectable quality/attention labels. Only technically non-representable records (for example blank endpoints) may be blocked. User-configured limits remain authoritative.
 - Do not hardcode Trackers Lens limits that hide, truncate, cap or partially save runtime data, prompts, tokens, chunks, debug traces, previews or exports. User-configured limits are allowed; internal safeguards must be opt-in/configurable and must never override explicit user settings or prevent full inspection.
 - Update `docs/ai/current-focus.md` and `docs/ai/task-registry.md` when task state changes.
 
