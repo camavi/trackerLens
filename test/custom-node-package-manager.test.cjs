@@ -72,12 +72,13 @@ test("Custom Node ZIP inspection validates the root manifest without executing r
     "node.json": JSON.stringify(manifest),
     "runtime.js": "throw new Error('must not execute');",
     "ui.json": "{}",
+    "assets/": "",
     "assets/icon.svg": "<svg/>"
   });
   const inspected = inspectArchive(archive);
   assert.equal(inspected.manifest.id, "custom.example-node");
   assert.equal(inspected.runtimeExecution, "blocked");
-  assert.equal(inspected.files.length, 4);
+  assert.equal(inspected.files.length, 5);
   assert.match(inspected.archiveSha256, /^[a-f0-9]{64}$/);
 });
 

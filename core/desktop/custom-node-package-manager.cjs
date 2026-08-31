@@ -19,11 +19,13 @@ const safePackageSegment = (value) => text(value).replace(/[^a-zA-Z0-9._-]+/g, "
 
 const isSafeArchivePath = (value) => {
   const entry = String(value || "").replace(/\\/g, "/");
+  const normalized = entry.endsWith("/") ? entry.slice(0, -1) : entry;
   return Boolean(entry)
-    && !entry.startsWith("/")
-    && !/^[A-Za-z]:\//.test(entry)
-    && !entry.includes("\0")
-    && entry.split("/").every((part) => part && part !== "." && part !== "..");
+    && Boolean(normalized)
+    && !normalized.startsWith("/")
+    && !/^[A-Za-z]:\//.test(normalized)
+    && !normalized.includes("\0")
+    && normalized.split("/").every((part) => part && part !== "." && part !== "..");
 };
 
 const findEndOfCentralDirectory = (archive) => {
