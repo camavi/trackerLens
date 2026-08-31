@@ -3,7 +3,7 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-08-28.
+Last updated: 2026-08-31.
 
 ## Active
 
@@ -110,7 +110,7 @@ Current sub-steps:
 
 ### TASK-027: Knowledge Runtime
 
-Status: Knowledge Dictionary Runtime foundation is the next active path after Semantic Enricher and Graph Builder validation exposed the limit of case-specific graph rules.
+Status: Knowledge Dictionary Runtime is complete for the document-scoped product path. The next active work is controlled end-to-end QA for the managed Graph pack (GLiNER2 + NLI); optional cross-document Dictionary promotion remains a separate future capability.
 Priority: High.
 Risk: Medium/High because it adds a first-class runtime type and new local persistence.
 
@@ -167,15 +167,16 @@ Current sub-steps:
 - Knowledge graph clear controls: Entity Extractor exposes `replaceExisting` and a manual `Clear Entities` card button, Semantic Relation Enricher now clears stale same-scope semantic relations via `replaceExisting`/`Clear Semantic`, and Graph Builder Agent shows `replaceExisting` plus `Clear Builder`.
 - Knowledge AI chunk prompt budgets: Dictionary Builder, Entity Extractor, Knowledge Graph Builder Agent and Mechanism Cue Agent now use `maxChunkTokens` in UI/schema and trim supplied LLM chunks by estimated tokens, while legacy saved `maxChunkChars` values remain supported as token-estimated fallback.
 - Knowledge Graph Builder JSON recovery: Builder AI requests now use the shared JSON response-format helper where supported, retry without that format if the provider rejects it, and repair non-parseable model output before falling through to compact/micro attempts.
-- Step 15 Knowledge Dictionary Runtime: started. Do not delete the existing Semantic Relation Enricher or Knowledge Graph Builder Agent; reuse their local stores, evidence validation, provider/proxy integration, graph persistence, debug/export and test harness. Freeze growth of case-specific Builder micro-rules except generic safety validation. Add a scoped dictionary layer before graph construction so language terms, lemmas, aliases, type candidates, semantic hints and relation cues are learned from document evidence and can guide Entity Extractor/Graph Builder without hardcoding one book/story. Dictionary scope must default to document/flow isolation, with explicit promotion to collection/workspace/global language scopes only when requested.
+- Step 15 Knowledge Dictionary Runtime: complete for the document-scoped product path. It reuses the existing Semantic Relation Enricher/Graph Builder stores, evidence validation, provider/proxy integration, graph persistence and debug/export harness. Dictionary terms, lemmas, aliases, type candidates, semantic hints and relation cues remain evidence-grounded and guide Entity Extractor/Graph Builder without book/story-specific rules. Scope defaults to document/Flow isolation.
 - Step 15 timeline:
   1. Phase 0 document architecture pivot and freeze graph-builder rule expansion: complete.
   2. Phase 1 add local `tl_knowledge_dictionary` model/store plus document cleanup behavior: base implemented under cache `knowledge-dict-1`.
   3. Phase 2 add Knowledge Dictionary Builder node emitting `knowledge.dictionary.updated` and `knowledge.lexicon.context`: base implemented under cache `knowledge-dict-1`.
   4. Phase 3 make Entity Extractor and Graph Builder consume dictionary hints for typing, aliases and ambiguity: complete. Both consume only `usableAsSeed` `core`/`typed` entries; each still validates actual source evidence independently.
-  5. Phase 4 add Dictionary Debug/View/export for terms, type candidates, evidence and scope.
-  6. Phase 5 add optional provider-backed enrichment with rule fallback and strict evidence quotes.
-  7. Phase 6 add explicit cross-document/collection merge and promotion policy.
+  5. Phase 4 Dictionary Debug/View/export for terms, type candidates, evidence and scope: complete.
+  6. Phase 5 provider-backed enrichment with strict evidence validation: complete.
+  7. Phase 6 explicit cross-document/collection merge and promotion policy: deferred as an optional, separately scoped future capability; it is not required by the document-scoped Dictionary.
+- Step 15 multilingual completion verification: user-verified Dictionary checks completed for Italian, Spanish, English, French and German.
 - Step 15 first preview follow-up: `knowledge-dict-2` fixes the initial over-broad local dictionary by filtering sentence-start/function words before proper-noun promotion, adding generic lexical typing for common location/object/role terms and stripping leading articles from lemmas. Runtime/debug surfaces must preserve full payloads instead of compacting or truncating data.
 - Knowledge runtime routing follow-up: `knowledge-dict-3` fixes disconnected Knowledge nodes still consuming workspace-global channel events. Non-source Knowledge nodes now require a matching visual dependency or explicit `targetNodeId`, preventing an unlinked `Knowledge Graph Builder Agent` from starting local provider work when document/chunk nodes emit.
 - Dictionary ranking follow-up: `knowledge-dict-5` adds `tier`, `usableAsSeed`, `seedScore`, `tierCounts` and `usableSeedCount` so later Entity Extractor/Graph Builder integration can use only `core`/`typed` dictionary entries as seeds while preserving `context` terms for lexical understanding and debug.

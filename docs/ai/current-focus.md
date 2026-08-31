@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-08-28.
+Last updated: 2026-08-31.
 
 ## Active Area
 
@@ -699,15 +699,9 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 
 ## Next Logical Step
 
-Knowledge Dictionary Runtime foundation.
+Knowledge Dictionary Runtime is complete for the document-scoped product path. User verification covers Italian, Spanish, English, French and German; the Dictionary has evidence-grounded terms, scope/cleanup, ranking, Debug/View/export and consumer integration.
 
-Target behavior:
-
-- add a scoped lexical layer before graph construction, not a new hardcoded relation-rule list;
-- keep existing graph-builder work as reusable infrastructure and validation, not disposable code;
-- dictionary entries should update when documents are regenerated and be removed with document cleanup; base behavior is implemented in `knowledge-dict-1`;
-- Flow Maps and Knowledge Graphs should remain isolated unless the user explicitly links or promotes dictionary knowledge;
-- debug panels should make dictionary terms, type candidates, aliases, evidence and promotion scope inspectable without raw database access.
+Next: perform controlled end-to-end installation/inference QA of the managed Graph pack (GLiNER2 + multilingual NLI) before proceeding to Custom Node Packages. Explicit cross-document/collection Dictionary promotion remains an optional, separately scoped future capability.
 
 ## Required Updates When Work Changes
 
