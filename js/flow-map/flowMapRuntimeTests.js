@@ -6252,7 +6252,7 @@ const renderHeader = () =>
         : null,
       btn({ onclick: loadRuntime }, icon("sync", "sm"), "Refresh"),
       window.TrackerLensCustomNodePackages?.isAvailable?.()
-        ? btn({ title: "Importa e gestisci Custom Node .tl-node.zip", onclick: () => window.TrackerLensCustomNodePackages.openDialog() }, icon("extension", "sm"), "Custom Nodes")
+        ? btn({ title: "Importa e gestisci Custom Node .tl-node.zip", onclick: () => window.TrackerLensCustomNodePackages.openDialog() }, icon("extension", "sm"), "Import Node")
         : null,
       btn({
         class: state.testRun.running ? "is-primary is-running" : "",
