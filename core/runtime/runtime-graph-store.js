@@ -20,6 +20,25 @@ window.TrackerLensRuntimeGraphStore = (() => {
   ]);
   let desktopSqliteMode = null;
 
+  // Runtime objects can temporarily contain renderer-only references. Every record
+  // crossing the Electron IPC boundary must be structured-clone safe.
+  const bridgeSafeValue = (value) => {
+    const seen = new WeakSet();
+    try {
+      return JSON.parse(JSON.stringify(value, (_key, candidate) => {
+        if (typeof candidate === "function" || typeof candidate === "symbol") return undefined;
+        if (typeof candidate === "bigint") return String(candidate);
+        if (candidate && typeof candidate === "object") {
+          if (seen.has(candidate)) return undefined;
+          seen.add(candidate);
+        }
+        return candidate;
+      }));
+    } catch (_) {
+      return null;
+    }
+  };
+
   const desktopPersistence = () => window.trackers?.desktop?.persistence || null;
   const usesDesktopSqlite = async () => {
     if (desktopSqliteMode !== null) return desktopSqliteMode;
@@ -40,8 +59,10 @@ window.TrackerLensRuntimeGraphStore = (() => {
   const putRecords = async (storeName, records = []) => {
     if (!records.length) return [];
     if (!FIRST_COHORT_STORES.has(storeName)) throw new Error(`Repository SQLite non supportato: ${storeName}`);
-    await (await ensureStores()).writeDevelopmentRecords({ storeName, records });
-    return records;
+    const safeRecords = records.map(bridgeSafeValue).filter((record) => record?.id);
+    if (!safeRecords.length) throw new Error(`Record runtime non serializzabile: ${storeName}`);
+    await (await ensureStores()).writeDevelopmentRecords({ storeName, records: safeRecords });
+    return safeRecords;
   };
 
   const readAll = async (storeName) => {

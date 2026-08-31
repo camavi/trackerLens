@@ -7326,6 +7326,8 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
       });
       const entityCount = visible.entities.length;
       const relationCount = visible.relations.length;
+      const attentionEntities = visible.entities.filter((entity) => entity.metadata?.quality?.status === "attention").length;
+      const attentionRelations = visible.relations.filter((relation) => relation.metadata?.quality?.status === "attention").length;
       const possiblePairs = entityCount > 1 ? (entityCount * (entityCount - 1)) / 2 : 0;
       return {
         avgDegree: entityCount ? (relationCount * 2) / entityCount : 0,
@@ -7337,6 +7339,8 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
         repeatedEvidence: repeatedEvidence
           .sort((a, b) => b.occurrenceCount - a.occurrenceCount || String(a.relation.sourceLabel || "").localeCompare(String(b.relation.sourceLabel || "")))
           .slice(0, 6),
+        attentionEntities,
+        attentionRelations,
         topEntities: visible.entities
           .map((entity) => ({ entity, degree: localDegree.get(entity.id) || 0 }))
           .sort((a, b) => b.degree - a.degree || String(a.entity.label || "").localeCompare(String(b.entity.label || "")))
@@ -7352,6 +7356,12 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
         ),
         _.div(_.span("Connections"), _.strong(String(visible.degree.get(entity.id) || 0))),
         _.div(_.span("Confidence"), _.strong(Number.isFinite(Number(entity.confidence)) ? Number(entity.confidence).toFixed(2) : "N/D")),
+        ...(entity.metadata?.quality?.status === "attention"
+          ? [
+            _.div(_.span("Quality"), _.strong("Attention")),
+            _.div(_.span("Warnings"), _.strong((entity.metadata.quality.warnings || []).join(", ") || "needs review")),
+          ]
+          : [_.div(_.span("Quality"), _.strong("Verified"))]),
         ...(Array.isArray(entity.metadata?.aliases) && entity.metadata.aliases.length
           ? [_.div(_.span("Aliases"), _.strong(entity.metadata.aliases.slice(0, 4).join(", ")))]
           : []),
@@ -7658,6 +7668,8 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 _.div(_.span("Entities"), _.strong(String(visible.entities.length))),
                 _.div(_.span("Relations"), _.strong(String(visible.relations.length))),
                 _.div(_.span("Semantic relations"), _.strong(String(visible.relations.filter((relation) => relation.metadata?.semantic).length))),
+                _.div(_.span("Attention entities"), _.strong(String(analytics.attentionEntities))),
+                _.div(_.span("Attention relations"), _.strong(String(analytics.attentionRelations))),
                 _.div(_.span("Avg degree"), _.strong(analytics.avgDegree.toFixed(2))),
                 _.div(_.span("Density"), _.strong(analytics.density.toFixed(3))),
                 _.div(_.span("Components"), _.strong(String(analytics.components))),
@@ -7683,6 +7695,20 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                       _.strong(`${occurrenceCount}x`)
                     )
                   )
+                )
+                : null,
+              analytics.attentionRelations
+                ? _.section(
+                  _.h3("Relations needing attention"),
+                  ...visible.relations
+                    .filter((relation) => relation.metadata?.quality?.status === "attention")
+                    .map((relation) =>
+                      _.div(
+                        { class: "tl-kg-view-evidence" },
+                        _.span(`${relation.sourceLabel || "source"} -${relation.relationType || "related_to"}-> ${relation.targetLabel || "target"}`),
+                        _.strong((relation.metadata?.quality?.warnings || []).join(", ") || "needs review")
+                      )
+                    )
                 )
                 : null,
               _.section(

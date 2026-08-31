@@ -1,5 +1,5 @@
 window.TrackerLensRuntimeWorker = (() => {
-  const WORKER_VERSION = "world-character-mode-enforce-1";
+  const WORKER_VERSION = "graph-nli-verifier-1";
   let worker = null;
   let port = null;
   let connected = false;

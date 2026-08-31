@@ -13,6 +13,7 @@ const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog
 const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
 const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
 const annotationsPackManifest = require("../runtimes/python/packs/annotations/pack.json");
+const graphRelationsPackManifest = require("../runtimes/python/packs/graph-relations/pack.json");
 
 test("managed RAG pack pins its local CrossEncoder reranker", () => {
   const reranker = ragPackManifest.models.find((model) => model.id === "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1");
@@ -43,6 +44,82 @@ test("managed annotations pack pins five official spaCy CPU wheel artifacts", ()
     assert.equal(model.artifact.sizeBytes, model.estimatedDownloadBytes);
     assert.equal(model.artifact.package, model.id);
   }
+});
+
+test("managed graph relations pack pins local GLiNER2 extraction and multilingual NLI verification", () => {
+  assert.equal(graphRelationsPackManifest.id, "trackerslens.graph.relations.gliner2");
+  assert.equal(graphRelationsPackManifest.version, "0.2.0");
+  assert.deepEqual(graphRelationsPackManifest.requirements, [
+    { name: "gliner2", version: "==2.0.0" },
+    { name: "protobuf", version: "==7.36.0" }
+  ]);
+  assert.deepEqual(graphRelationsPackManifest.capabilities, ["knowledge.graph.relation_extract", "knowledge.graph.relation_verify"]);
+  assert.deepEqual(graphRelationsPackManifest.models[0].downloadFiles, [
+    "config.json",
+    "encoder_config/config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json"
+  ]);
+  assert.equal(graphRelationsPackManifest.models[0].revision, "aaecfe45db1d828c963717054ccb868e8ad1f1d5");
+  assert.equal(graphRelationsPackManifest.models[0].license, "Apache-2.0");
+  assert.equal(graphRelationsPackManifest.models[1].id, "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli");
+  assert.equal(graphRelationsPackManifest.models[1].revision, "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c");
+  assert.equal(graphRelationsPackManifest.models[1].license, "MIT");
+  assert.equal(graphRelationsPackManifest.models[1].estimatedDownloadBytes, 578291075);
+  assert.deepEqual(graphRelationsPackManifest.models[1].downloadFiles, ["config.json", "model.safetensors", "special_tokens_map.json", "spm.model", "tokenizer.json", "tokenizer_config.json"]);
+  const lock = fs.readFileSync(path.join(__dirname, "../runtimes/python/packs/graph-relations/requirements.lock"), "utf8");
+  assert.match(lock, /^gliner2\[local\]==2\.0\.0$/m);
+  assert.match(lock, /^torch==2\.13\.0$/m);
+  assert.match(lock, /^transformers==4\.57\.6$/m);
+  assert.match(lock, /^protobuf==7\.36\.0$/m);
+});
+
+test("graph relations install plan resolves both local models only in the isolated graph environment", async () => {
+  const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "trackers-lens-gliner2-plan-"));
+  const models = graphRelationsPackManifest.models.map((model) => ({ ...model, directory: path.join(fixtureDirectory, model.id.replaceAll("/", "--")) }));
+  const installer = new ManagedPythonPackInstaller({
+    packs: [{ ...graphRelationsPackManifest, lockfilePath: path.join(__dirname, "../", graphRelationsPackManifest.lockfile) }],
+    environments: [{
+      id: "graph",
+      interpreter: "Python 3.11",
+      pythonPath: path.join(fixtureDirectory, "bin/python"),
+      directory: path.join(fixtureDirectory, "env"),
+      models
+    }]
+  });
+  const plan = await installer.getInstallPlan({ packId: graphRelationsPackManifest.id });
+  assert.equal(plan.environment.id, "graph");
+  assert.equal(plan.models.length, 2);
+  assert.deepEqual(plan.models.map((model) => model.id), graphRelationsPackManifest.models.map((model) => model.id));
+  assert.ok(plan.models.every((model) => model.installed === false));
+  fs.rmSync(fixtureDirectory, { recursive: true, force: true });
+});
+
+test("graph builder requirement resolves the managed GLiNER2 pack and prompts before installation", () => {
+  const resolver = new PythonPackResolver({
+    packs: [{
+      ...graphRelationsPackManifest,
+      packages: graphRelationsPackManifest.requirements.map((requirement) => ({ ...requirement, version: requirement.version.replace(/^==/, "") })),
+      status: "unavailable"
+    }]
+  });
+  const resolution = resolver.resolve({
+    dependencies: {
+      python: {
+        packId: "trackerslens.graph.relations.gliner2",
+        environment: "graph",
+        requirements: [{ name: "gliner2", version: "==2.0.0" }, { name: "protobuf", version: "==7.36.0" }],
+        lockfile: "runtimes/python/packs/graph-relations/requirements.lock",
+        installPolicy: "managed-optional",
+        requiredByDefault: true
+      }
+    }
+  });
+  assert.equal(resolution.status, "unavailable");
+  assert.equal(resolution.installPlan.supported, true);
+  assert.equal(resolution.installPlan.packId, "trackerslens.graph.relations.gliner2");
+  assert.equal(resolution.installPlan.environment, "graph");
 });
 
 test("TL Core exposes desktop status without persistence handles", async () => {

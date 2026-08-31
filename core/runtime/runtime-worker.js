@@ -1,6 +1,6 @@
 self.window = self;
 
-const RUNTIME_WORKER_VERSION = "0.1.278-world-character-mode-enforce-1";
+const RUNTIME_WORKER_VERSION = "0.1.284-graph-nli-verifier-1";
 const ports = new Set();
 const workspaces = new Map();
 
@@ -37,7 +37,7 @@ const loadRuntimeScripts = () => {
     "processor-runtime.js?v=agent-tool-links-1",
     "action-runtime.js?v=agent-tool-links-1",
     "storage-runtime.js?v=agent-tool-links-1",
-    "knowledge-runtime.js?v=world-character-mode-enforce-1",
+    "knowledge-runtime.js?v=knowledge-context-retries-3",
     "agent-runtime.js?v=structured-world-store-1",
     "ai-agent-runtime.js?v=agent-trigger-policy-1",
     "orchestrator-agent-runtime.js?v=structured-world-store-1"

@@ -11,6 +11,7 @@ const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs
 const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
 const ragPackManifest = require("../runtimes/python/packs/rag/pack.json");
 const annotationsPackManifest = require("../runtimes/python/packs/annotations/pack.json");
+const graphRelationsPackManifest = require("../runtimes/python/packs/graph-relations/pack.json");
 
 const projectRoot = path.resolve(__dirname, "..");
 const preloadPath = path.join(__dirname, "preload.cjs");
@@ -21,12 +22,21 @@ const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
 const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
 const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
 const pythonRagRerankModelPath = path.join(projectRoot, "runtimes/python/models/mmarco-mMiniLMv2-L12-H384-v1");
+const pythonGraphRelationsModelPath = path.join(projectRoot, "runtimes/python/models/gliner2.5-multi-v1");
+const pythonGraphNliModelPath = path.join(projectRoot, "runtimes/python/models/mdeberta-v3-base-mnli-xnli");
 const pythonAnnotationModelPaths = new Map(annotationsPackManifest.models.map((model) => [model.id, path.join(projectRoot, "runtimes/python/models/spacy", model.id)]));
 const pythonNlpEnvironmentPath = path.join(projectRoot, "runtimes/python/envs/nlp");
+const pythonGraphEnvironmentPath = path.join(projectRoot, "runtimes/python/envs/graph");
+const pythonGraphPythonPath = path.join(pythonGraphEnvironmentPath, "bin/python");
+const pythonGraphProtobufPath = path.join(pythonGraphEnvironmentPath, "lib/python3.11/site-packages/google/protobuf");
 const pythonNlpBootstrap = process.env.TL_PYTHON_BOOTSTRAP || "python3.11";
 const pythonNlpEnabled = () => fs.existsSync(pythonNlpPythonPath) && fs.existsSync(pythonNlpModelPath);
 const pythonRagEnabled = () => pythonNlpEnabled() && fs.existsSync(pythonRagRerankModelPath);
 const pythonAnnotationsEnabled = () => fs.existsSync(pythonNlpPythonPath) && annotationsPackManifest.models.every((model) => fs.existsSync(pythonAnnotationModelPaths.get(model.id)));
+const pythonGraphRelationsEnabled = () => fs.existsSync(pythonGraphPythonPath)
+  && fs.existsSync(pythonGraphRelationsModelPath)
+  && fs.existsSync(pythonGraphNliModelPath)
+  && fs.existsSync(pythonGraphProtobufPath);
 const annotationLanguageByModelId = { en_core_web_sm: "en", it_core_news_sm: "it", es_core_news_sm: "es", fr_core_news_sm: "fr", de_core_news_sm: "de" };
 const annotationWorkerModels = () => pythonAnnotationsEnabled() ? annotationsPackManifest.models.map((model) => ({
   id: model.id,
@@ -38,11 +48,13 @@ const annotationWorkerModels = () => pythonAnnotationsEnabled() ? annotationsPac
 const pythonPackStatus = (manifest) => {
   if (manifest.id === ragPackManifest.id) return pythonRagEnabled() ? "ready" : "unavailable";
   if (manifest.id === annotationsPackManifest.id) return pythonAnnotationsEnabled() ? "ready" : "unavailable";
+  if (manifest.id === graphRelationsPackManifest.id) return pythonGraphRelationsEnabled() ? "ready" : "unavailable";
   return pythonNlpEnabled() ? "ready" : "unavailable";
 };
 let tlCore = null;
 let pythonPoc = null;
 let pythonNlp = null;
+let pythonGraphRelations = null;
 let persistence = null;
 const createPythonNlpRuntime = () => {
   if (!fs.existsSync(pythonNlpPythonPath)) return null;
@@ -63,15 +75,38 @@ const createPythonNlpRuntime = () => {
   });
   return pythonNlp;
 };
+const createPythonGraphRelationsRuntime = () => {
+  if (!fs.existsSync(pythonGraphPythonPath)) return null;
+  if (!pythonGraphRelations) pythonGraphRelations = new ManagedPythonRuntime({
+    pythonPath: pythonGraphPythonPath,
+    workerId: "managed-python-graph-relations",
+    environment: {
+      TL_GRAPH_RELATIONS_MODEL_DIR: pythonGraphRelationsModelPath,
+      TL_GRAPH_RELATIONS_MODEL_ID: "fastino/gliner2.5-multi-v1",
+      TL_GRAPH_RELATIONS_MODEL_REVISION: "aaecfe45db1d828c963717054ccb868e8ad1f1d5",
+      TL_GRAPH_NLI_MODEL_DIR: pythonGraphNliModelPath,
+      TL_GRAPH_NLI_MODEL_ID: "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+      TL_GRAPH_NLI_MODEL_REVISION: "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+      HF_HUB_OFFLINE: "1",
+      HF_HOME: path.join(projectRoot, "runtimes/python/.cache")
+    }
+  });
+  return pythonGraphRelations;
+};
 const pythonNlpAdapter = {
-  status: () => createPythonNlpRuntime()?.status() || { runtime: "python", workerId: "managed-python-nlp", status: "unavailable", reason: "NLP pack is not installed" },
+  status: () => ({
+    ...(createPythonNlpRuntime()?.status() || { runtime: "python", workerId: "managed-python-nlp", status: "unavailable", reason: "NLP pack is not installed" }),
+    graphRelations: createPythonGraphRelationsRuntime()?.status() || { runtime: "python", workerId: "managed-python-graph-relations", status: "unavailable", reason: "Graph relations pack is not installed" }
+  }),
   start: () => createPythonNlpRuntime()?.start() || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" })),
-  execute: (payload) => createPythonNlpRuntime()?.execute(payload) || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" })),
-  cancel: (executionId) => createPythonNlpRuntime()?.cancel(executionId),
+  execute: (payload) => new Set(["gliner2_relations", "nli_verify_relations"]).has(String(payload?.operation || ""))
+    ? createPythonGraphRelationsRuntime()?.execute(payload) || Promise.reject(Object.assign(new Error("Python GLiNER2 graph relations pack is not installed"), { code: "PYTHON_GRAPH_RELATIONS_DISABLED" }))
+    : createPythonNlpRuntime()?.execute(payload) || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" })),
+  cancel: (executionId) => { createPythonNlpRuntime()?.cancel(executionId); createPythonGraphRelationsRuntime()?.cancel(executionId); },
   restart: () => createPythonNlpRuntime()?.restart() || Promise.reject(Object.assign(new Error("Python NLP pack is not installed"), { code: "PYTHON_NLP_DISABLED" }))
 };
 const pythonPacks = new PythonPackResolver({
-  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest].map((manifest) => ({
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest, graphRelationsPackManifest].map((manifest) => ({
     ...manifest,
     packages: manifest.requirements.map((requirement) => ({ ...requirement, version: String(requirement.version || "").replace(/^==/, "") })),
     status: pythonPackStatus(manifest)
@@ -110,13 +145,37 @@ const nlpEnvironment = {
     ...annotationsPackManifest.models.map((model) => ({ ...model, directory: pythonAnnotationModelPaths.get(model.id) }))
   ]
 };
+const graphEnvironment = {
+  id: "graph",
+  interpreter: "Python 3.11",
+  interpreterPath: pythonGraphPythonPath,
+  pythonPath: pythonGraphPythonPath,
+  directory: pythonGraphEnvironmentPath,
+  bootstrapPython: pythonNlpBootstrap,
+  requested: () => true,
+  enabled: pythonGraphRelationsEnabled,
+  runtimeStatus: () => createPythonGraphRelationsRuntime()?.status() || { status: "stopped" },
+  stopRuntime: () => pythonGraphRelations?.stop?.(),
+  onInstalled: async () => {
+    pythonPacks.setStatus(graphRelationsPackManifest.id, pythonGraphRelationsEnabled() ? "ready" : "unavailable");
+    await createPythonGraphRelationsRuntime()?.restart();
+  },
+  onModelRemoved: async () => {
+    pythonPacks.setStatus(graphRelationsPackManifest.id, pythonGraphRelationsEnabled() ? "ready" : "unavailable");
+    await pythonGraphRelations?.restart();
+  },
+  models: [
+    { ...graphRelationsPackManifest.models[0], directory: pythonGraphRelationsModelPath },
+    { ...graphRelationsPackManifest.models[1], directory: pythonGraphNliModelPath }
+  ]
+};
 const pythonRuntimeCatalog = new PythonRuntimeCatalog({
-  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest],
-  environments: [nlpEnvironment]
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest, graphRelationsPackManifest],
+  environments: [nlpEnvironment, graphEnvironment]
 });
 const pythonPackInstaller = new ManagedPythonPackInstaller({
-  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest].map((pack) => ({ ...pack, lockfilePath: path.join(projectRoot, pack.lockfile) })),
-  environments: [nlpEnvironment]
+  packs: [nlpPackManifest, ragPackManifest, annotationsPackManifest, graphRelationsPackManifest].map((pack) => ({ ...pack, lockfilePath: path.join(projectRoot, pack.lockfile) })),
+  environments: [nlpEnvironment, graphEnvironment]
 });
 pythonPackInstaller.subscribe((progress) => {
   BrowserWindow.getAllWindows().forEach((window) => window.webContents.send("trackers-core:python-install-progress", progress));
@@ -243,4 +302,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => { void pythonPoc?.stop?.(); void pythonNlp?.stop?.(); });
+app.on("before-quit", () => { void pythonPoc?.stop?.(); void pythonNlp?.stop?.(); void pythonGraphRelations?.stop?.(); });

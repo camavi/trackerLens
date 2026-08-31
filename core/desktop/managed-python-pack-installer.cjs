@@ -6,6 +6,16 @@ const path = require("node:path");
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const errorWithCode = (message, code) => Object.assign(new Error(message), { code });
+const installationErrorForUser = (error) => {
+  const message = String(error?.message || error || "Python pack installation failed");
+  if (/connection reset|connection aborted|connectionerror|protocolerror|localentrynotfounderror/i.test(message)) {
+    return errorWithCode(
+      "Il download del modello è stato interrotto dalla connessione al provider. Nessun file incompleto verrà eseguito: verifica la rete e riprova l'installazione.",
+      "PYTHON_MODEL_NETWORK_INTERRUPTED"
+    );
+  }
+  return error;
+};
 const exists = async (target) => fs.access(target).then(() => true).catch(() => false);
 const expectedVersion = (value = "") => String(value || "").trim().replace(/^==/, "");
 const directorySize = async (target) => {
@@ -280,7 +290,7 @@ class ManagedPythonPackInstaller {
           await fs.rm(downloaded.wheelPath, { force: true });
           await fs.rm(artifactMetadataPath(temporaryDirectory), { force: true });
         } else {
-          const code = "from huggingface_hub import snapshot_download; import json,sys; files=json.loads(sys.argv[4]); snapshot_download(repo_id=sys.argv[1],revision=sys.argv[2],local_dir=sys.argv[3],allow_patterns=files or None)";
+          const code = "from huggingface_hub import snapshot_download; import json,sys,time; files=json.loads(sys.argv[4]); last=None\nfor attempt in range(3):\n    try:\n        snapshot_download(repo_id=sys.argv[1],revision=sys.argv[2],local_dir=sys.argv[3],allow_patterns=files or None,max_workers=1)\n        last=None\n        break\n    except Exception as error:\n        last=error\n        if attempt == 2: raise\n        time.sleep(2 * (attempt + 1))\nif last: raise last";
           const progressTimer = setInterval(() => { void reportMeasuredProgress(); }, 750);
           try {
             await this.runProcess(environment.pythonPath, ["-c", code, model.id, modelRevision, temporaryDirectory, JSON.stringify(downloadFiles)]);
@@ -298,8 +308,9 @@ class ManagedPythonPackInstaller {
       this.emitProgress({ packId: pack.id, environmentId: environment.id, phase: "complete", progress: 100, message: "Python pack installed and ready" });
       return result;
     } catch (error) {
-      this.emitProgress({ packId: pack.id, environmentId: environment.id, phase: "error", progress: 0, message: error?.message || "Python pack installation failed" });
-      throw error;
+      const userError = installationErrorForUser(error);
+      this.emitProgress({ packId: pack.id, environmentId: environment.id, phase: "error", progress: 0, message: userError?.message || "Python pack installation failed" });
+      throw userError;
     } finally {
       this.installing.delete(environment.id);
     }

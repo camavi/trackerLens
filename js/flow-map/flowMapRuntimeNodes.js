@@ -1103,7 +1103,7 @@ const knowledgeAiPromptDefaults = (subtype = "") => {
   if (subtype === "knowledge-graph-builder-agent") {
     return {
       systemPrompt: "You are a Knowledge Graph Builder Agent. Build a verified, evidence-backed knowledge graph from local document chunks while preserving temporal order, causal roles and source-language labels.",
-      promptTemplate: "Use chunks, existing entities and base relations as context. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence.",
+      promptTemplate: "Use chunks, existing entities, base relations and verified Dictionary seeds as context. Dictionary seeds can clarify an existing label's type or alias, but never create a fact on their own. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence.",
       outputInstructions: "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity.",
     };
   }
@@ -1941,6 +1941,9 @@ const configFieldDefinitions = (node = {}) => {
     }
     if (subtype === "knowledge-graph-builder-agent") {
       return withAiProviderConfigFields([
+        { key: "relationExtractionMode", label: "Relation extraction", type: "select", options: [{ value: "hybrid", label: "GLiNER2 + local NLI + LLM for ambiguous" }, { value: "llm", label: "LLM only" }], defaultValue: "hybrid", description: "GLiNER2 proposes evidence-backed candidates; the managed multilingual NLI model accepts or rejects clear cases locally. The LLM reviews only the remaining ambiguous candidates before TL persists the graph." },
+        { key: "nliAcceptThreshold", label: "NLI acceptance threshold", type: "number", placeholder: "0.72", defaultValue: 0.72, description: "Relations at or above this local entailment score are accepted, subject to TL evidence and entity validation." },
+        { key: "nliRejectThreshold", label: "NLI rejection threshold", type: "number", placeholder: "0.12", defaultValue: 0.12, description: "Relations at or below this local entailment score are rejected; the remaining cases go to the configured LLM." },
         ...knowledgeAiPromptFieldDefinitions(subtype),
         { key: "domainHint", label: "Domain hint", type: "textarea", placeholder: "technical documentation, narrative story, theology, API docs..." },
         { key: "maxChunks", label: "Max chunks", placeholder: "6" },
@@ -1950,6 +1953,9 @@ const configFieldDefinitions = (node = {}) => {
         { key: "confidenceThreshold", label: "Confidence threshold", placeholder: "0.65" },
         { key: "relationTypes", label: "Allowed relation types", placeholder: "uses,implements,explains,stores_in,retrieves_from,powered_by" },
         { key: "technicalNormalization", label: "Technical normalization", type: "checkbox", defaultValue: true },
+        { key: "useDictionarySeeds", label: "Use verified Dictionary seeds", type: "checkbox", defaultValue: true },
+        { key: "minDictionarySeedTier", label: "Minimum Dictionary seed tier", type: "select", options: ["core", "typed"], defaultValue: "typed" },
+        { key: "maxDictionarySeeds", label: "Max Dictionary seeds", type: "number", placeholder: "all" },
         { key: "replaceExisting", label: "Replace existing builder graph", type: "checkbox", defaultValue: true },
         { key: "documentId", label: "Document ID", placeholder: "optional" },
         { key: "collectionId", label: "Collection ID", placeholder: "knowledge_sample_current" },
@@ -4241,6 +4247,7 @@ const knowledgeInlineConfigRows = (subtype = "", config = {}) => {
       { iconName: "hub", label: "Output", value: output || "knowledge.semantic.relations" },
     ],
     "knowledge-graph-builder-agent": [
+      { iconName: "memory", label: "Relations", value: config.relationExtractionMode === "llm" ? "LLM" : "GLiNER2 + NLI + LLM" },
       { iconName: "auto_awesome", label: "Provider", value: config.providerProfile || config.provider || "local" },
       { iconName: "memory", label: "Model", value: config.model || "local-model" },
       { iconName: "article", label: "Chunks", value: config.maxChunks || "6" },

@@ -881,14 +881,61 @@ const runtimeChannelForDependency = (nodesById = new Map(), dependency = {}) => 
   return naturalChannel || normalizePortChannel(targetPort) || channel || "runtime";
 };
 
+// A few early Knowledge canvases were saved while Entity Extractor exposed only
+// its entity port. The relation event is a separate, real output of that node;
+// routing it as an entity event makes Semantic Relation Enricher run after the
+// wrong payload. This is an unambiguous contract repair, not a content rule.
+const repairKnowledgeDependencyContract = (nodesById = new Map(), dependency = {}) => {
+  const source = nodesById.get(dependency.sourceNodeId);
+  const target = nodesById.get(dependency.targetNodeId);
+  const sourceSubtype = String(nodeSubtype(source) || "").toLowerCase();
+  const targetSubtype = String(nodeSubtype(target) || "").toLowerCase();
+  const savedChannel = dependency.channel || dependency.metadata?.channel || "";
+  const sourcePort = dependency.metadata?.sourcePort || dependency.sourcePort || savedChannel;
+  const targetPort = dependency.metadata?.targetPort || dependency.targetPort || "";
+  const isEntityToSemantic = sourceSubtype === "entity-extractor" && targetSubtype === "semantic-relation-enricher";
+  const channel = isEntityToSemantic && (sourcePort === "knowledge.entity.created" || savedChannel === "knowledge.entity.created")
+    ? "knowledge.relation.created"
+    : savedChannel;
+  const canonicalTargetPort = (() => {
+    if (sourceSubtype === "chunk-processor" && targetSubtype === "knowledge-dictionary-builder" && channel === "knowledge.chunk.created") return channel;
+    if (sourceSubtype === "knowledge-dictionary-builder" && targetSubtype === "knowledge-event-builder" && channel === "knowledge.dictionary.updated") return channel;
+    if (sourceSubtype === "entity-extractor" && targetSubtype === "knowledge-graph-builder-agent" && channel === "knowledge.entity.created") return channel;
+    if (sourceSubtype === "semantic-relation-enricher" && targetSubtype === "knowledge-graph-builder-agent" && channel === "knowledge.semantic.relations") return channel;
+    if (sourceSubtype === "knowledge-event-builder" && targetSubtype === "knowledge-graph-builder-agent" && ["knowledge.events.updated", "knowledge.event.context"].includes(channel)) return channel;
+    if (sourceSubtype === "knowledge-graph-builder-agent" && targetSubtype === "knowledge-graph" && ["knowledge.graph.proposed", "knowledge.graph.enriched"].includes(channel)) return channel;
+    if (isEntityToSemantic && channel === "knowledge.relation.created") return channel;
+    return "";
+  })();
+  if (!canonicalTargetPort) return dependency;
+  const canonicalSourcePort = isEntityToSemantic ? channel : sourcePort;
+  if (savedChannel === channel && sourcePort === canonicalSourcePort && targetPort === canonicalTargetPort) return dependency;
+
+  return {
+    ...dependency,
+    channel,
+    sourcePort: canonicalSourcePort,
+    targetPort: canonicalTargetPort,
+    metadata: {
+      ...(dependency.metadata || {}),
+      channel,
+      sourcePort: canonicalSourcePort,
+      targetPort: canonicalTargetPort,
+      contractRepair: "knowledge-connection-contract/v2",
+    },
+  };
+};
+
 const normalizeRuntimeDependencyChannels = async (nodes = [], dependencies = [], connections = []) => {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const connectionsById = new Map((connections || []).map((connection) => [connection.id, connection]));
   const changed = [];
   const normalized = dependencies.map((dependency) => {
-    const channel = runtimeChannelForDependency(nodesById, dependency);
-    if (!channel || channel === dependency.channel) return dependency;
-    const next = { ...dependency, channel, updatedAt: new Date().toISOString() };
+    const repaired = repairKnowledgeDependencyContract(nodesById, dependency);
+    const channel = runtimeChannelForDependency(nodesById, repaired);
+    const mappingChanged = repaired !== dependency;
+    if (!channel || (channel === dependency.channel && !mappingChanged)) return dependency;
+    const next = { ...repaired, channel, updatedAt: new Date().toISOString() };
     changed.push(next);
     return next;
   });
@@ -896,11 +943,18 @@ const normalizeRuntimeDependencyChannels = async (nodes = [], dependencies = [],
     await Promise.all(changed.map(async (dependency) => {
       await window.TrackerLensRuntimeGraphStore?.upsertDependency?.({ dependency }).catch(() => null);
       const connection = connectionsById.get(dependency.connectionId || "");
-      if (connection && connection.channel !== dependency.channel) {
+      const mapping = {
+        ...(connection?.mapping || {}),
+        sourcePort: dependency.metadata?.sourcePort || dependency.sourcePort || connection?.mapping?.sourcePort || "all",
+        targetPort: dependency.metadata?.targetPort || dependency.targetPort || connection?.mapping?.targetPort || "all",
+        channel: dependency.channel,
+      };
+      if (connection && (connection.channel !== dependency.channel || JSON.stringify(connection.mapping || {}) !== JSON.stringify(mapping))) {
         await window.TrackerLensConnectionsStore?.upsert?.({
           ...connection,
           channel: dependency.channel,
           frequency: dependency.channel,
+          mapping,
           updatedAt: new Date().toISOString(),
         }).catch(() => null);
       }
@@ -986,21 +1040,31 @@ const normalizeLoadedNodeManifest = (node = {}) => {
       outputChannel: metadata.config?.outputChannel === "knowledge.graph.context" ? "world.database.updated" : metadata.config?.outputChannel,
     }
     : metadata.config;
+  const knowledgePortAdditions = (() => {
+    if (node.type !== "knowledge") return { inputs: [], outputs: [] };
+    if (subtype === "entity-extractor") return { inputs: [], outputs: ["knowledge.relation.created"] };
+    if (subtype === "semantic-relation-enricher") return { inputs: ["knowledge.relation.created"], outputs: [] };
+    return { inputs: [], outputs: [] };
+  })();
   const manifest = window.TrackerLensRuntimeManifest?.normalizeManifest?.({
     ...(metadata.manifest || {}),
     type: metadata.manifest?.type || (node.type === "boxLens" ? "lens" : node.type),
     subtype: metadata.manifest?.subtype || subtype,
     category: metadata.manifest?.category || metadata.category || nodeCategory(node),
-    inputs: stripWorldGraphContextPort(metadata.manifest?.inputs || node.inputs || []),
-    outputs: stripWorldGraphContextPort(metadata.manifest?.outputs || node.outputs || []),
+    inputs: [...stripWorldGraphContextPort(metadata.manifest?.inputs || node.inputs || []), ...knowledgePortAdditions.inputs],
+    outputs: [...stripWorldGraphContextPort(metadata.manifest?.outputs || node.outputs || []), ...knowledgePortAdditions.outputs],
     permissions: metadata.manifest?.permissions || metadata.permissions || node.permissions || [],
     settingsSchema: metadata.manifest?.settingsSchema || metadata.settingsSchema || {},
     runtime: metadata.manifest?.runtime || metadata.runtimeMetadata || node.runtime || {},
   });
   if (!manifest) return node;
-  const inputs = stripWorldGraphContextPort(node.inputs || manifest.inputs || []);
-  const outputs = stripWorldGraphContextPort(node.outputs || manifest.outputs || []);
-  const channels = stripWorldGraphContextPort(node.channels || [...inputs, ...outputs]);
+  const inputs = [...new Set([...stripWorldGraphContextPort(node.inputs || manifest.inputs || []), ...knowledgePortAdditions.inputs])];
+  const outputs = [...new Set([...stripWorldGraphContextPort(node.outputs || manifest.outputs || []), ...knowledgePortAdditions.outputs])];
+  const channels = [...new Set([
+    ...stripWorldGraphContextPort(node.channels || [...inputs, ...outputs]),
+    ...knowledgePortAdditions.inputs,
+    ...knowledgePortAdditions.outputs,
+  ])];
   return {
     ...node,
     inputs,

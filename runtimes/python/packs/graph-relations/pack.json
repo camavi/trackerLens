@@ -1,0 +1,51 @@
+{
+  "id": "trackerslens.graph.relations.gliner2",
+  "version": "0.2.0",
+  "environment": "graph",
+  "status": "development-ready",
+  "trustLevel": "built-in",
+  "installPolicy": "managed-optional",
+  "python": ">=3.10,<3.13",
+  "developmentInterpreter": "python3.11",
+  "lockfile": "runtimes/python/packs/graph-relations/requirements.lock",
+  "requirements": [
+    { "name": "gliner2", "version": "==2.0.0" },
+    { "name": "protobuf", "version": "==7.36.0" }
+  ],
+  "models": [
+    {
+      "id": "fastino/gliner2.5-multi-v1",
+      "displayName": "GLiNER2.5 Multilingual Relation Extractor",
+      "revision": "aaecfe45db1d828c963717054ccb868e8ad1f1d5",
+      "languages": 50,
+      "license": "Apache-2.0",
+      "downloadFiles": [
+        "config.json",
+        "encoder_config/config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json"
+      ],
+      "localOnlyAfterInstall": true
+    },
+    {
+      "id": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+      "displayName": "Multilingual NLI Relation Verifier",
+      "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+      "languages": 100,
+      "license": "MIT",
+      "estimatedDownloadBytes": 578291075,
+      "downloadFiles": [
+        "config.json",
+        "model.safetensors",
+        "special_tokens_map.json",
+        "spm.model",
+        "tokenizer.json",
+        "tokenizer_config.json"
+      ],
+      "localOnlyAfterInstall": true
+    }
+  ],
+  "capabilities": ["knowledge.graph.relation_extract", "knowledge.graph.relation_verify"],
+  "dataAccess": "TL-authorized chunk text and relation schema only; no direct database, filesystem or network access"
+}

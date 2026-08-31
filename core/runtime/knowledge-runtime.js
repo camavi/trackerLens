@@ -408,6 +408,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           isPython && Number.isFinite(Number(entry.durationMs)) ? `${Math.round(Number(entry.durationMs))}ms` : "",
           isPython && entry.outputSummary ? entry.outputSummary : "",
           entry.sentChunkCount || entry.sourceChunkCount ? `${entry.sentChunkCount || 0}/${entry.sourceChunkCount || 0} chunks` : "",
+          Number.isFinite(Number(entry.dictionarySeedCount)) ? `${entry.dictionarySeedCount} Dictionary seeds` : "",
           promptChars ? `${promptChars} prompt chars` : "",
           maxTokens ? `${maxTokens} sent max tokens` : "",
           entry.configuredMaxTokens ? `${entry.configuredMaxTokens} configured max tokens` : "",
@@ -1417,13 +1418,43 @@ window.TrackerLensKnowledgeRuntime = (() => {
     ].some((channel) => String(channel || "") === "all");
   const dependencyAcceptsChannel = (dependency = {}, eventChannel = "") =>
     dependencyUsesAllChannel(dependency) || dependencyChannels(dependency).includes(String(eventChannel || ""));
+  // Palette schemas evolve while saved Flow Maps retain their original input arrays.
+  // Keep the runtime subscriptions forward-compatible; dependency ownership is still
+  // enforced below by acceptsDependencyEvent, so this does not make unlinked nodes run.
+  const builtInKnowledgeInputs = (node = {}) => {
+    if (nodeSubtype(node) === "knowledge-graph") {
+      return [
+        "knowledge.entity.created",
+        "knowledge.relation.created",
+        "knowledge.graph.proposed",
+        "knowledge.graph.enriched",
+      ];
+    }
+    if (nodeSubtype(node) === "knowledge-graph-builder-agent") {
+      return [
+        "knowledge.chunk.created",
+        "knowledge.dictionary.updated",
+        "knowledge.lexicon.context",
+        "knowledge.events.updated",
+        "knowledge.event.context",
+        "knowledge.entity.created",
+        "knowledge.relation.created",
+        "knowledge.graph.updated",
+      ];
+    }
+    return [];
+  };
   const nodeInputs = (node = {}, dependencies = []) => {
     const incomingDependencies = nodeIncomingDependencies(node, dependencies);
     const incoming = incomingDependencies
       .flatMap(dependencyChannels)
       .filter(Boolean);
-    if (incoming.length) return unique(incoming);
-    return unique([...(node.inputs || []), ...(node.channels || [])]);
+    return unique([
+      ...incoming,
+      ...builtInKnowledgeInputs(node),
+      ...(node.inputs || []),
+      ...(node.channels || []),
+    ]);
   };
   const allowsUnlinkedKnowledgeEvents = (node = {}) =>
     ["document-store", "text-knowledge", "workspace-memory", "conversation-memory"].includes(nodeSubtype(node));
@@ -4269,8 +4300,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const compact = promptMode === "compact";
         const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
-        const chunkLimit = chunkPass ? 1 : configuredChunkLimit;
-        const maxChunkTokens = configuredMaxChunkTokens;
+        const chunkLimit = chunkPass ? 1 : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
+        const fullChunkTokens = configuredMaxChunkTokens || 0;
+        const maxChunkTokens = chunkPass ? Math.min(350, fullChunkTokens || 350) : micro ? Math.min(225, fullChunkTokens || 225) : compact ? Math.min(300, fullChunkTokens || 300) : fullChunkTokens;
         const maxEntries = Number.isFinite(maxTerms) ? maxTerms : undefined;
         const sourceChunkIds = new Set(sourceChunks.slice(0, chunkLimit).map((chunk) => String(chunk?.id || "")).filter(Boolean));
         const proposals = hybridVerification
@@ -4506,9 +4538,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
       };
       const minGlobalDictionaryCandidates = Math.max(6, Math.min(maxTerms, Number(config.minLlmDictionaryTerms || Math.max(12, chunks.length))));
       let fallbackResult = null;
-      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
+      let recoveredChunkOffset = 0;
+      // A 400 context retry is transport recovery, not a second hybrid
+      // extraction policy. Stop at the first usable provider result.
+      for (const promptMode of ["full", "compact", "micro"]) {
         const attempt = await runDictionaryPromptAttempt({ promptMode });
         if (attempt.candidates.length >= minGlobalDictionaryCandidates) {
+          // A compact request covers only the leading source chunks. Keep its
+          // verified result, then process the remaining chunks below so a
+          // provider context window never becomes a document-level filter.
+          if (promptMode !== "full" && chunks.length > (promptMode === "compact" ? 4 : 2)) {
+            fallbackResult = attempt;
+            recoveredChunkOffset = promptMode === "compact" ? 4 : 2;
+            break;
+          }
           return {
             candidates: attempt.candidates,
             provider: provider.id || providerType || "provider",
@@ -4525,8 +4568,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const chunkCandidates = [];
       const chunkPromptModes = [];
       const globalCandidates = fallbackResult?.candidates || [];
-      const shouldRunChunkPass = mode === "llm" || (mode === "hybrid" && globalCandidates.length < minGlobalDictionaryCandidates);
-      for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
+      const shouldRunChunkPass = mode === "llm" || recoveredChunkOffset > 0 || (mode === "hybrid" && globalCandidates.length < minGlobalDictionaryCandidates);
+      const chunkPassSource = recoveredChunkOffset > 0 ? chunks.slice(recoveredChunkOffset) : chunks.slice(0, chunkPassLimit);
+      for (const chunk of (shouldRunChunkPass ? chunkPassSource : [])) {
         attemptedChunkIds.add(chunk.id || "");
         const attempt = await runDictionaryPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (attempt.candidates.length) {
@@ -5300,6 +5344,25 @@ window.TrackerLensKnowledgeRuntime = (() => {
     totalTokens: Number(total.totalTokens || 0) + Number(usage.totalTokens || usage.total_tokens || 0),
   });
 
+  // Runtime Nodes originate in the renderer and can temporarily carry UI-only
+  // callbacks/references. SQLite persistence must receive data only.
+  const knowledgePersistenceValue = (value) => {
+    const seen = new WeakSet();
+    try {
+      return JSON.parse(JSON.stringify(value, (_key, candidate) => {
+        if (typeof candidate === "function" || typeof candidate === "symbol") return undefined;
+        if (typeof candidate === "bigint") return String(candidate);
+        if (candidate && typeof candidate === "object") {
+          if (seen.has(candidate)) return undefined;
+          seen.add(candidate);
+        }
+        return candidate;
+      }));
+    } catch (_) {
+      return null;
+    }
+  };
+
   const persistKnowledgeNodeTokenUsage = async ({ node, usage = {}, provider = "", model = "" } = {}) => {
     const totalTokens = Number(usage.totalTokens || usage.total_tokens || 0);
     if (!node?.id || !totalTokens) return;
@@ -5332,9 +5395,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
       },
       updatedAt: nowIso(),
     };
+    const persistedNode = knowledgePersistenceValue(nextNode);
+    if (!persistedNode?.id) {
+      console.warn("Knowledge token usage non persistito: runtime node non serializzabile");
+      return;
+    }
     try {
-      await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: nextNode });
-      const instance = instances.get(nextNode.workspaceId || node.workspaceId || "workspace_global");
+      await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node: persistedNode });
+      const instance = instances.get(persistedNode.workspaceId || node.workspaceId || "workspace_global");
       if (instance?.runtime?.nodes) {
         instance.runtime.nodes = (instance.runtime.nodes || []).map((item) => item.id === nextNode.id ? nextNode : item);
       }
@@ -5385,6 +5453,29 @@ window.TrackerLensKnowledgeRuntime = (() => {
     normalizeKnowledgeEventType(candidate.eventType),
     normalizeKnowledgeText(candidate.evidence?.quote || candidate.quote || ""),
   ].join("::");
+
+  // Rules are deliberately conservative.  Unlike an LLM, they cannot safely
+  // decide that an omitted actor is the same person as in a distant sentence.
+  // Keeping an unresolved action as a graph event creates misleading edges
+  // (for example, a bare mention of water becoming a `drinks` event).  This is
+  // a language- and document-independent evidence gate; custom rules still
+  // supply the action cue, but must meet the same ownership requirement.
+  const validateRuleKnowledgeEventCandidate = ({ eventType = "", subject = "", subjectResolution = {}, sentence = "" } = {}) => {
+    const normalizedType = normalizeKnowledgeEventType(eventType);
+    if (!normalizedType || !sentenceHasNarrativeAction(sentence, normalizedType)) {
+      return { accepted: false, reason: "rule-action-cue-not-supported" };
+    }
+    const actorRequired = new Set([
+      "cannot_speak", "drinks", "finds", "heals", "moves", "seeks",
+      "signals", "speaks", "takes",
+    ]);
+    if (!actorRequired.has(normalizedType)) return { accepted: true, reason: "" };
+    const method = String(subjectResolution?.method || "");
+    if (!normalizeKnowledgeEventSubject(subject) || !["explicit", "coreference"].includes(method)) {
+      return { accepted: false, reason: "rule-actor-not-grounded" };
+    }
+    return { accepted: true, reason: "" };
+  };
 
   const normalizeAiKnowledgeEventTypeForEvidence = (eventType = "", quote = "") => {
     const type = normalizeKnowledgeEventType(eventType);
@@ -5785,6 +5876,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const wantsAi = ["llm", "hybrid"].includes(extractionMode);
     const wantsRules = extractionMode !== "llm";
     const ruleCandidates = [];
+    const ruleRejectedCandidates = [];
     let previousContext = { subject: "", participants: [] };
     if (wantsRules) {
       for (const chunk of scopedChunks) {
@@ -5801,6 +5893,20 @@ window.TrackerLensKnowledgeRuntime = (() => {
             const subject = subjectInfo.subject || "";
             const confidence = narrativeEventImportance(spec.eventType, spec.objects, sentence, effectiveConfig);
             if (confidence < minConfidence) continue;
+            const ruleValidation = validateRuleKnowledgeEventCandidate({
+              eventType: spec.eventType,
+              subject,
+              subjectResolution: subjectInfo.subjectResolution,
+              sentence,
+            });
+            if (!ruleValidation.accepted) {
+              ruleRejectedCandidates.push({
+                label: spec.eventType,
+                reason: ruleValidation.reason,
+                quote: sentence,
+              });
+              continue;
+            }
             const offsets = knowledgeEventQuoteOffsets(chunk, sentence);
             const modality = knowledgeEventModalityForEvidence(sentence);
             const polarity = knowledgeEventPolarityForEvidence(sentence, spec.eventType);
@@ -5860,7 +5966,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
     if (wantsAi && aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
     }
-    const rejectedCandidates = Array.isArray(aiResult.rejectedCandidates) ? [...aiResult.rejectedCandidates] : [];
+    const rejectedCandidates = [
+      ...(Array.isArray(aiResult.rejectedCandidates) ? aiResult.rejectedCandidates : []),
+      ...ruleRejectedCandidates,
+    ];
     const aiCandidates = [];
     if (wantsAi) {
       for (const item of (aiResult.events || []).slice(0, maxEvents * 2)) {
@@ -6481,7 +6590,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const micro = promptMode === "micro";
         const chunkPass = promptMode === "chunk";
         const chunkLimit = chunkPass ? Math.min(1, sourceChunks.length) : micro ? Math.min(2, configuredChunkLimit) : compact ? Math.min(4, configuredChunkLimit) : configuredChunkLimit;
-        const maxChunkTokens = chunkPass ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : compact ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens;
+        const fullChunkTokens = configuredMaxChunkTokens || 0;
+        const maxChunkTokens = chunkPass ? Math.min(350, fullChunkTokens || 350) : micro ? Math.min(225, fullChunkTokens || 225) : compact ? Math.min(300, fullChunkTokens || 300) : fullChunkTokens;
         const promptMaxEntities = Number.isFinite(maxEntities) ? maxEntities : undefined;
         const promptMaxRelations = micro ? 0 : Number.isFinite(maxRelations) ? maxRelations : undefined;
         const schema = micro
@@ -6674,7 +6784,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           prompt,
           sentChunks: sourceChunks.slice(0, entityPromptChunkLimit).map((chunk, index) => {
             const rawText = String(chunk.text || "");
-            const sentText = trimTextToEstimatedTokens(rawText, promptMode === "chunk" ? Math.min(350, configuredMaxChunkTokens) : micro ? Math.min(225, configuredMaxChunkTokens) : promptMode === "compact" ? Math.min(300, configuredMaxChunkTokens) : configuredMaxChunkTokens);
+            const fullChunkTokens = configuredMaxChunkTokens || 0;
+            const sentText = trimTextToEstimatedTokens(rawText, promptMode === "chunk" ? Math.min(350, fullChunkTokens || 350) : micro ? Math.min(225, fullChunkTokens || 225) : promptMode === "compact" ? Math.min(300, fullChunkTokens || 300) : fullChunkTokens);
             return {
               id: chunk.id || `chunk_${index + 1}`,
               ordinal: chunk.ordinal ?? chunk.index ?? index,
@@ -6819,12 +6930,24 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ? 0
         : Math.max(1, Math.min(maxRelations, Number(config.minLlmEntityRelations || defaultMinGlobalEntityRelations)));
       const minGlobalEntityCandidates = Math.max(1, Math.min(maxEntities, Number(config.minLlmEntityCandidates || defaultMinGlobalEntityCandidates)));
-      for (const promptMode of (mode === "hybrid" ? ["full"] : ["full", "compact", "micro"])) {
+      let recoveredChunkOffset = 0;
+      // Hybrid keeps one successful model result. Context/transport retries do
+      // not change that contract; they only make the same request fit the
+      // provider's physical window.
+      for (const promptMode of ["full", "compact", "micro"]) {
         const attempt = await runPromptAttempt({ promptMode });
         const attemptUsable = maxRelations === 0
           ? attempt.entities.length >= minGlobalEntityCandidates
           : attempt.relations.length >= minGlobalEntityRelations && attempt.entities.length >= Math.min(minGlobalEntityCandidates, maxEntities);
         if (attemptUsable && mode !== "llm") {
+          // A compact retry is valid transport recovery, but it contains only
+          // the first source chunks. Continue with the remainder rather than
+          // silently turning a context limit into a document filter.
+          if (promptMode !== "full" && chunks.length > (promptMode === "compact" ? 4 : 2)) {
+            fallbackResult = attempt;
+            recoveredChunkOffset = promptMode === "compact" ? 4 : 2;
+            break;
+          }
           return { entities: attempt.entities, relations: attempt.relations, provider: provider.id || providerType || "provider", model: lastModel, usage: totalUsage, error: "", promptMode: attempt.promptMode || promptMode };
         }
         if (attempt.entities.length || attempt.relations.length) fallbackResult = attempt;
@@ -6836,8 +6959,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       const chunkPromptModes = [];
       const globalEntities = fallbackResult?.entities || [];
       const globalRelations = fallbackResult?.relations || [];
-      const shouldRunChunkPass = mode === "llm";
-      for (const chunk of (shouldRunChunkPass ? chunks.slice(0, chunkPassLimit) : [])) {
+      const shouldRunChunkPass = mode === "llm" || recoveredChunkOffset > 0;
+      const chunkPassSource = recoveredChunkOffset > 0 ? chunks.slice(recoveredChunkOffset) : chunks.slice(0, chunkPassLimit);
+      for (const chunk of (shouldRunChunkPass ? chunkPassSource : [])) {
         const attempt = await runPromptAttempt({ promptMode: "chunk", sourceChunks: [chunk] });
         if (attempt.entities.length || attempt.relations.length) {
           chunkEntities.push(...attempt.entities);
@@ -6936,8 +7060,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
     pushCustomEntityTerms(entityTermGroups.source || rules.sourceTerms, "source");
     pushCustomEntityTerms(entityTermGroups.symbol || rules.symbolTerms, "symbol");
     pushCustomEntityTerms(entityTermGroups.technology || rules.technologyTerms, "technology");
-    (clean.match(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}\b/g) || [])
-      .forEach((value) => push(value, "proper-noun", value.includes(" ") ? 0.82 : 0.64));
+    // A bare capitalised token is not enough to be a name: sentence-initial
+    // verbs/adverbs otherwise become entities in every Latin-script language.
+    // Declared names and Python/LLM annotations use their own evidence paths.
+    for (const match of clean.matchAll(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+){0,3}\b/g)) {
+      const value = match[0];
+      if (dictionarySentenceStartWeak(clean, match.index || 0, value, languageConfig.language)) continue;
+      push(value, "proper-noun", value.includes(" ") ? 0.82 : 0.64);
+    }
     customRuleValues(config.seedTerms || config.terms, rules.seedTerms, rules.seeds).forEach((value) => {
       if (value && clean.toLowerCase().includes(value.toLowerCase())) push(value, "seed", 0.9);
     });
@@ -7011,6 +7141,41 @@ window.TrackerLensKnowledgeRuntime = (() => {
         seen.set(key, entry);
       });
     return [...seen.values()].slice(0, maxSeeds);
+  };
+
+  const dictionaryEntryOccurrenceCount = (entry = {}) => {
+    const source = typeof entry.source === "string"
+      ? (() => { try { return JSON.parse(entry.source); } catch (_) { return {}; } })()
+      : (entry.source || {});
+    return Number(entry.occurrenceCount || entry.count || source?.occurrenceCount || 0);
+  };
+
+  // Graph construction can use repeated lexical evidence as an endpoint
+  // registry even when a term is not promoted to a typed Dictionary seed.
+  // A typed/core seed still has stronger type authority; this only restores
+  // recall for source-backed recurring terms such as story objects/actions.
+  const dictionaryRegistryEntriesForDocument = async ({ workspaceId, documentId = "", collectionId = "", payload = {}, seeds = [] } = {}) => {
+    const payloadEntries = Array.isArray(payload?.dictionaryEntries) ? payload.dictionaryEntries : [];
+    const storedEntries = documentId
+      ? byWorkspace(await listStore(STORES.dictionary), workspaceId)
+        .filter((entry) => entry.documentId === documentId)
+        .filter((entry) => !collectionId || entry.collectionId === collectionId)
+      : [];
+    const byKey = new Map();
+    [...payloadEntries, ...storedEntries, ...(seeds || [])]
+      .filter(Boolean)
+      .filter((entry) => entry.usableAsSeed === true || dictionaryEntryOccurrenceCount(entry) >= 2)
+      .forEach((entry) => {
+        const key = normalizeEntityToken(entry.term || entry.label || "");
+        if (!key) return;
+        const previous = byKey.get(key);
+        const rank = (candidate = {}) => candidate.usableAsSeed === true ? 2 : 1;
+        if (!previous || rank(entry) > rank(previous) ||
+          (rank(entry) === rank(previous) && Number(entry.confidence || 0) >= Number(previous.confidence || 0))) {
+          byKey.set(key, entry);
+        }
+      });
+    return [...byKey.values()];
   };
 
   const findRelationEndpointEntity = (entities = [], label = "") => {
@@ -8266,6 +8431,28 @@ window.TrackerLensKnowledgeRuntime = (() => {
   const callSemanticAi = async ({ candidates = [], config = {} } = {}) => {
     const mode = String(config.enrichmentMode || "ai").toLowerCase();
     if (!["ai", "hybrid"].includes(mode) || !candidates.length) return { relations: [], provider: "", model: "", error: "" };
+    // Semantic enrichment is a classification pass, not a ranking/filter.
+    // Send every candidate, but in transport-sized batches so one large graph
+    // cannot exceed a local provider's context window.
+    if (!config.__semanticBatch && candidates.length > 2) {
+      const relations = [];
+      let usage = {};
+      let provider = "";
+      let model = "";
+      let error = "";
+      for (let index = 0; index < candidates.length; index += 2) {
+        const result = await callSemanticAi({
+          candidates: candidates.slice(index, index + 4),
+          config: { ...config, __semanticBatch: true },
+        });
+        relations.push(...(result.relations || []));
+        usage = addKnowledgeAiUsage(usage, result.usage || {});
+        provider = provider || result.provider || "";
+        model = model || result.model || "";
+        error = error || result.error || "";
+      }
+      return { relations, provider, model, usage, error };
+    }
     const provider = await pickAiProvider(config);
     if (!provider) return { relations: [], provider: "", model: "", error: "provider-not-found" };
     const providerType = String(provider.provider || provider.providerType || config.providerType || config.provider || "").toLowerCase();
@@ -8289,61 +8476,82 @@ window.TrackerLensKnowledgeRuntime = (() => {
       config.outputInstructions,
       "Return strict JSON with relations containing candidateId, relationType, confidence and explanation."
     );
-    const prompt = [
-      systemPrompt,
-      promptTemplate,
-      outputInstructions,
-      `Allowed relation types: ${[...semanticRelationTypes].join(", ")}`,
-      "Return strict JSON only: {\"relations\":[{\"candidateId\":\"...\",\"relationType\":\"helps\",\"confidence\":0.0,\"explanation\":\"short evidence reason\"}]}",
-      "Use only the provided evidence text. Do not invent facts.",
-      "Reject a candidate by omitting it from relations.",
-      JSON.stringify({ candidates }, null, 2),
-    ].join("\n\n");
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
       const url = providerType === "ollama"
         ? `${endpoint}/api/generate`
         : `${endpoint.endsWith("/v1") ? endpoint : `${endpoint}/v1`}/chat/completions`;
-      const body = providerType === "ollama"
-        ? {
-          model,
-          prompt,
-          stream: false,
-          options: {
+      let lastError = "";
+      // This is only a request-size recovery. Every candidate remains in the
+      // batch; compact modes shorten duplicate chunk context, not the set of
+      // candidate relations that TL asks the model to classify.
+      for (const promptMode of ["full", "compact", "micro"]) {
+        const contextLimit = promptMode === "micro" ? 350 : promptMode === "compact" ? 900 : 0;
+        const evidenceLimit = promptMode === "micro" ? 180 : promptMode === "compact" ? 320 : 0;
+        const promptCandidates = candidates.map((candidate) => ({
+          ...candidate,
+          evidence: trimTextToEstimatedTokens(candidate.evidence || "", evidenceLimit),
+          chunkContext: trimTextToEstimatedTokens(candidate.chunkContext || "", contextLimit),
+        }));
+        const prompt = [
+          systemPrompt,
+          promptTemplate,
+          outputInstructions,
+          `Allowed relation types: ${[...semanticRelationTypes].join(", ")}`,
+          "Return strict JSON only: {\"relations\":[{\"candidateId\":\"...\",\"relationType\":\"helps\",\"confidence\":0.0,\"explanation\":\"short evidence reason\"}]}",
+          "Use only the provided evidence text. Do not invent facts.",
+          "Reject a candidate by omitting it from relations.",
+          JSON.stringify({ candidates: promptCandidates }, null, 2),
+        ].join("\n\n");
+        const body = providerType === "ollama"
+          ? {
+            model,
+            prompt,
+            stream: false,
+            options: {
+              temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
+              top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+              num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
+            },
+          }
+          : {
+            model,
+            messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
+            max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-            num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
-          },
-        }
-        : {
+          };
+        knowledgeLlmDebug("semantic-enricher:request", {
+          mode,
+          promptMode,
+          provider: provider.id || providerType || "",
+          providerType,
           model,
-          messages: [{ role: "user", content: prompt }],
-          temperature: knowledgeAiNumberConfig(config.temperature, 0.1),
-          max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 900, min: 1 }),
-          top_p: knowledgeAiNumberConfig(config.topP, 0.9),
+          candidateCount: candidates.length,
+          promptChars: prompt.length,
+          maxTokens: body.max_tokens || body.options?.num_predict || 0,
+          promptPreview: compactDebugText(prompt),
+        });
+        const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
+        if (!response.ok) {
+          const errorText = await chatErrorText(response);
+          lastError = `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`;
+          const canShrink = response.status === 400 || /context|token|too large|size|json|format/i.test(errorText);
+          if (canShrink) continue;
+          break;
+        }
+        const data = await response.json();
+        const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
+        const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
+        return {
+          relations: parseSemanticAiRelations(text),
+          provider: provider.id || providerType || "provider",
+          model: data.model || model,
+          usage,
+          error: "",
         };
-      knowledgeLlmDebug("semantic-enricher:request", {
-        mode,
-        provider: provider.id || providerType || "",
-        providerType,
-        model,
-        candidateCount: candidates.length,
-        promptChars: prompt.length,
-        maxTokens: body.max_tokens || body.options?.num_predict || 0,
-        promptPreview: compactDebugText(prompt),
-      });
-      const response = await postChatJson({ url, body, headers: headersForProvider(provider, config) });
-      if (!response.ok) return { relations: [], provider: provider.id || providerType, model, error: `HTTP ${response.status}` };
-      const data = await response.json();
-      const text = data.response || data.choices?.[0]?.message?.content || data.output_text || "";
-      const usage = knowledgeAiUsageFromResponse({ data, prompt, text });
-      return {
-        relations: parseSemanticAiRelations(text),
-        provider: provider.id || providerType || "provider",
-        model: data.model || model,
-        usage,
-        error: "",
-      };
+      }
+      return { relations: [], provider: provider.id || providerType || "provider", model, usage: {}, error: lastError || "ai-error" };
     } catch (error) {
       return { relations: [], provider: provider.id || providerType || "provider", model, usage: {}, error: error?.message || "ai-error" };
     }
@@ -8355,7 +8563,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return new Set(allowed.filter((item) => graphBuilderRelationTypes.has(item)));
   };
 
-  const callGraphBuilderAi = async ({ chunks = [], entities = [], relations = [], config = {} } = {}) => {
+  const callGraphBuilderAi = async ({ chunks = [], entities = [], relations = [], events = [], relationCandidates = [], dictionaryEntries = [], config = {} } = {}) => {
     const provider = await pickAiProvider({ ...config, enrichmentMode: "ai" });
     if (!provider) return { proposal: null, provider: "", model: "", error: "provider-not-found" };
     const providerType = String(provider.provider || provider.providerType || config.providerType || config.provider || "").toLowerCase();
@@ -8376,21 +8584,28 @@ window.TrackerLensKnowledgeRuntime = (() => {
     );
     const promptTemplate = knowledgeAiTextConfig(
       config.promptTemplate,
-      "Use chunks, existing entities and base relations as context. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence."
+      "Use chunks, existing entities, base relations, ordered event context and verified Dictionary seeds as context. Events clarify sequence, roles, polarity and causal order, but never create a fact on their own. Dictionary seeds can clarify an existing label's type or alias, but never create a fact on their own. Propose only stable entities and precise relations directly supported by exact source quotes. Prefer explicit narrative or domain semantics over generic links, but reject weak or absent evidence."
     );
     const outputInstructions = knowledgeAiTextConfig(
       config.outputInstructions,
       "Return strict JSON with entities, relations and rejectedCandidates. Every accepted entity/relation must include confidence, explanation and an exact evidence.quote copied from one supplied chunk. Do not infer unsupported sequence, cause, count or identity."
     );
-    const promptFor = ({ mode = "full" } = {}) => {
+    const promptFor = ({ mode = "full", contextLimit = 0, completionTokens = 0 } = {}) => {
       const compact = mode === "compact";
       const micro = mode === "micro";
       const chunkLimit = chunks.length;
-      const chunkTokens = micro
-        ? promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 })
-        : compact
-          ? promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 })
-          : promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 });
+      const configuredChunkTokens = promptChunkTokenBudget({ maxChunkTokens: config.maxChunkTokens || config.aiChunkTokens || config.chunkTokens, maxChunkChars: config.maxChunkChars, defaultChunkTokens: 0 });
+      // A provider context window is a physical request boundary, not a hidden
+      // semantic limit. On retry we preserve every graph record in TL/Python
+      // and compact only the LLM's duplicate context so the model can answer.
+      const usablePromptTokens = Number(contextLimit) > Number(completionTokens) + 512
+        ? Math.floor(Number(contextLimit) - Number(completionTokens) - 512)
+        : 0;
+      const compactChunkTokens = usablePromptTokens
+        ? Math.max(64, Math.floor((usablePromptTokens * (micro ? 0.52 : 0.78)) / Math.max(1, chunkLimit)))
+        : configuredChunkTokens;
+      const chunkTokens = compact || micro ? compactChunkTokens : configuredChunkTokens;
+      const compactContext = (compact || micro) && usablePromptTokens > 0;
       const entityLimit = Number.POSITIVE_INFINITY;
       const relationLimit = Number.POSITIVE_INFINITY;
       const effectiveMaxEntities = maxEntities;
@@ -8400,11 +8615,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         Number.isFinite(effectiveMaxRelations) ? `relations <= ${effectiveMaxRelations}` : "",
       ].filter(Boolean).join(", ");
       const compactSchema = {
-        entities: [{ label: "", entityType: "proper-noun|technology|concept|object|location|source|term|symbol", confidence: 0.0, evidence: { chunkId: "", quote: "" } }],
+        entities: [{ label: "", entityType: "proper-noun|role|location|object|concept|creature|source|symbol|technology|term|quote", confidence: 0.0, evidence: { chunkId: "", quote: "" } }],
         relations: [{ sourceLabel: "", targetLabel: "", relationType: allowedRelationTypes[0] || "mentions", confidence: 0.0, evidence: { chunkId: "", quote: "" }, explanation: "" }],
         rejectedCandidates: [],
       };
-      return [
+      const prompt = [
         micro ? "Build a tiny verified knowledge graph. Return JSON only." : systemPrompt,
         promptTemplate,
         outputInstructions,
@@ -8412,6 +8627,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
         "Reject weak or absent evidence. Do not invent facts.",
         "Prefer high-signal semantic relations over generic mentions/contains. For stories, prefer friend_of, helps, reveals, protects, opposes, healed_by, asks_for, gives_to, receives_from when explicit evidence supports them.",
         "Use mentions only for source/document/reference statements, not for ordinary character encounters.",
+        "Ordered events are verified runtime context. Use them only to preserve chronology, participant roles, modality and cause/effect direction. Every entity and relation still requires an exact evidence.quote copied from a supplied chunk.",
+        "Dictionary seeds are verified local hints only: use them to resolve an existing source label, type or alias; never invent an entity, relation or evidence from a seed.",
+        relationCandidates.length
+          ? "Python relation candidates are evidence-backed suggestions. Use them to check coverage, then build every other relation supported by the supplied chunks. Prefer existing entities and Dictionary labels, but preserve a source-language endpoint discovered in a quote even when it is new; TL will mark uncertain provenance for review instead of deleting it."
+          : "Python produced no unresolved suggestion. Build the complete graph from the supplied chunks, existing entities and Dictionary labels. Preserve source-language entities that are useful to the graph; TL records evidence/provenance quality separately.",
         `Allowed relationType values: ${allowedRelationTypes.join(", ")}`,
         limitInstruction ? `Limits: ${limitInstruction}.` : "No Trackers Lens entity/relation cap is applied; return every supported graph fact.",
         !micro && config.domainHint ? `Domain hint: ${String(config.domainHint)}` : "",
@@ -8419,10 +8639,49 @@ window.TrackerLensKnowledgeRuntime = (() => {
         JSON.stringify(compactSchema),
         JSON.stringify({
           chunks: chunks.slice(0, chunkLimit).map((chunk) => ({ id: chunk.id, text: trimTextToEstimatedTokens(chunk.text || "", chunkTokens) })),
-          entities: entities.slice(0, entityLimit).map((entity) => ({ id: entity.id, label: entity.label, entityType: entity.entityType })),
-          relations: relations.slice(0, relationLimit).map((relation) => ({ source: relation.sourceLabel, type: relation.relationType, target: relation.targetLabel })),
+          entities: (compactContext ? [] : entities.slice(0, entityLimit)).map((entity) => ({ id: entity.id, label: entity.label, entityType: entity.entityType })),
+          relations: (compactContext ? [] : relations.slice(0, relationLimit)).map((relation) => ({ source: relation.sourceLabel, type: relation.relationType, target: relation.targetLabel })),
+          orderedEvents: (compactContext ? [] : events).map((entry) => ({
+            id: entry.id || "",
+            sequence: entry.sequence,
+            eventType: entry.eventType || "",
+            subject: entry.subject || "",
+            objects: entry.objects || [],
+            participants: entry.participants || [],
+            roles: entry.roles || {},
+            polarity: entry.polarity || "",
+            modality: entry.modality || "",
+            evidence: entry.evidence || {},
+          })),
+          pythonRelationCandidates: (compactContext ? [] : relationCandidates).map((relation) => ({
+            sourceLabel: relation.sourceLabel,
+            targetLabel: relation.targetLabel,
+            relationType: relation.relationType,
+            confidence: relation.confidence,
+            evidence: relation.evidence,
+          })),
+          dictionarySeeds: (compactContext ? [] : dictionaryEntries).map((entry) => ({
+            id: entry.id || "",
+            term: entry.term || entry.label || "",
+            lemma: entry.lemma || "",
+            aliases: entry.aliases || [],
+            type: entry.typeCandidates?.[0]?.type || entry.entityType || "term",
+            tier: entry.tier || "",
+            seedScore: entry.seedScore || entry.confidence || 0,
+          })),
         }),
+        compactContext ? "Context retry: source chunks are retained; existing graph, event, Python-suggestion and Dictionary context remains persisted by TL but is omitted from this LLM request solely to fit the provider's reported context window." : "",
       ].filter(Boolean).join("\n\n");
+      return {
+        prompt,
+        context: {
+          providerContextTokens: Number(contextLimit) || 0,
+          usablePromptTokens,
+          compactContext,
+          chunkTokenBudget: chunkTokens,
+          omittedDuplicateContext: compactContext ? ["entities", "relations", "orderedEvents", "pythonRelationCandidates", "dictionarySeeds"] : [],
+        },
+      };
     };
     try {
       const endpoint = String(provider.endpoint || (providerType === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234")).replace(/\/+$/g, "");
@@ -8436,6 +8695,11 @@ window.TrackerLensKnowledgeRuntime = (() => {
       let proposal = null;
       let lastModel = model;
       let totalUsage = {};
+      let providerContextLimit = knowledgeContextSize(config, providerType, provider);
+      const contextLimitFromError = (value = "") => {
+        const match = String(value || "").match(/(?:n_ctx|context(?:\s+size)?)[^\d]{0,48}(\d{4,})/i);
+        return Number(match?.[1] || 0);
+      };
       const proposalHasPayload = (item = null) =>
         Array.isArray(item?.entities) || Array.isArray(item?.relations) || Array.isArray(item?.rejectedCandidates);
       const proposalHasSignal = (item = null) =>
@@ -8446,7 +8710,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
         const repairPrompt = [
           "Convert the following model output into one strict JSON object for Knowledge Graph Builder.",
           "Return ONLY JSON. No markdown, no prose.",
-          "Schema: {\"entities\":[{\"label\":\"\",\"entityType\":\"proper-noun|technology|concept|object|location|source|term|symbol\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"relations\":[{\"sourceLabel\":\"\",\"targetLabel\":\"\",\"relationType\":\"\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"rejectedCandidates\":[]}",
+          "Schema: {\"entities\":[{\"label\":\"\",\"entityType\":\"proper-noun|role|location|object|concept|creature|source|symbol|technology|term|quote\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"relations\":[{\"sourceLabel\":\"\",\"targetLabel\":\"\",\"relationType\":\"\",\"confidence\":0.0,\"evidence\":{\"chunkId\":\"\",\"quote\":\"\"},\"explanation\":\"\"}],\"rejectedCandidates\":[]}",
           `Allowed relationType values: ${allowedRelationTypes.join(", ")}`,
           "Keep only labels, relation types and evidence quotes already present in the model output. Do not invent new graph facts.",
           "Input:",
@@ -8478,7 +8742,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
       };
       for (const mode of attemptModes) {
         usedMode = mode;
-        const prompt = promptFor({ mode });
+        const completionTokens = knowledgeCompletionLimit({ config, providerType, provider, requested: 1400, min: 1 });
+        const promptBuild = promptFor({ mode, contextLimit: providerContextLimit, completionTokens });
+        const prompt = promptBuild.prompt;
         const body = providerType === "ollama"
           ? {
             model,
@@ -8487,14 +8753,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
             options: {
               temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
               top_p: knowledgeAiNumberConfig(config.topP, 0.9),
-              num_predict: knowledgeCompletionLimit({ config, providerType, provider, requested: 1400, min: 1 }),
+              num_predict: completionTokens,
             },
           }
           : {
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: knowledgeAiNumberConfig(config.temperature, 0.05),
-            max_tokens: knowledgeCompletionLimit({ config, providerType, provider, requested: 1400, min: 1 }),
+            max_tokens: completionTokens,
             top_p: knowledgeAiNumberConfig(config.topP, 0.9),
           };
         const requestBody = providerType === "ollama"
@@ -8508,7 +8774,14 @@ window.TrackerLensKnowledgeRuntime = (() => {
           chunkCount: chunks.length,
           entityCount: entities.length,
           relationCount: relations.length,
+          eventContextCount: events.length,
+          pythonRelationCandidateCount: relationCandidates.length,
+          dictionarySeedCount: dictionaryEntries.length,
           promptChars: prompt.length,
+          providerContextTokens: promptBuild.context.providerContextTokens,
+          usablePromptTokens: promptBuild.context.usablePromptTokens,
+          chunkTokenBudget: promptBuild.context.chunkTokenBudget,
+          omittedDuplicateContext: promptBuild.context.omittedDuplicateContext,
           maxTokens: requestBody.max_tokens || requestBody.options?.num_predict || 0,
           promptPreview: compactDebugText(prompt),
         });
@@ -8556,6 +8829,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
           continue;
         }
         lastError = `HTTP ${response.status}${errorText ? `: ${errorText}` : ""}`;
+        const reportedContextLimit = contextLimitFromError(errorText);
+        if (reportedContextLimit > 0) providerContextLimit = reportedContextLimit;
         const canShrink = response.status === 400 || /context|token|too large|size/i.test(errorText);
         if (!canShrink) break;
       }
@@ -8576,35 +8851,67 @@ window.TrackerLensKnowledgeRuntime = (() => {
 
   const graphBuilderEntityType = (value = "") => {
     const type = String(value || "term").toLowerCase();
-    return ["proper-noun", "technology", "concept", "object", "location", "source", "term", "symbol"].includes(type) ? type : "term";
+    return ["proper-noun", "technology", "concept", "object", "location", "source", "term", "symbol", "creature", "role", "quote"].includes(type) ? type : "term";
   };
 
-  const graphBuilderNarrativeRelationTypes = new Set([
-    "friend_of", "helps", "tries_to_help", "healed_by", "cannot_speak", "lives_in", "seeks",
-    "protects", "opposes", "causes", "leads_to", "teaches", "discovers", "asks_for", "receives_from", "gives_to", "works_for", "encounters", "reveals",
-  ]);
-
-  const graphBuilderTechnicalRelationTypes = new Set([
-    "uses", "implements", "explains", "stores_in", "retrieves_from", "powered_by", "depends_on",
-    "interfaces_with", "connects_to", "configures", "loads", "splits", "splits_into", "processes", "transforms",
-  ]);
-
-  const graphBuilderTechnicalContext = (context = "", source = {}, target = {}) => {
-    const text = normalizeEntityToken([
-      context,
-      source.label,
-      source.normalized,
-      source.entityType,
-      target.label,
-      target.normalized,
-      target.entityType,
-    ].filter(Boolean).join(" "));
-    return /\b(?:api|app|application|browser|cache|class|client|code|component|config|configuration|database|db|dependency|endpoint|function|graph|http|indexeddb|interface|json|library|llm|model|node|php|prompt|provider|query|runtime|schema|script|server|service|store|system|token|tool|url|worker|workspace)\b/.test(text);
+  // Relation extraction is deliberately recall-oriented: a model may suggest
+  // many endpoints from a chunk.  Materialisation is stricter.  An endpoint
+  // must already be grounded by the Dictionary (core/typed seeds) or by a
+  // non-Builder node.  This avoids deriving an entity type from typography:
+  // in particular, German capitalises ordinary nouns, so an uppercase letter
+  // is not evidence that an item is a proper noun.
+  const graphBuilderEntityRegistry = ({ dictionaryEntries = [], entities = [] } = {}) => {
+    const registry = new Map();
+    const add = ({ label = "", aliases = [], entityType = "term", confidence = 0, source = "" } = {}) => {
+      const canonicalLabel = String(label || "").replace(/\s+/g, " ").trim();
+      const keys = [canonicalLabel, ...(Array.isArray(aliases) ? aliases : [])]
+        .map((value) => normalizeEntityToken(value))
+        .filter(Boolean);
+      if (!canonicalLabel || !keys.length) return;
+      const record = {
+        label: canonicalLabel,
+        entityType: graphBuilderEntityType(entityType),
+        confidence: Number(confidence || 0),
+        source,
+      };
+      keys.forEach((key) => {
+        const previous = registry.get(key);
+        const sourceRank = (value = "") => value === "dictionary" ? 3 : value === "declared-name" ? 2 : 1;
+        if (!previous || sourceRank(record.source) > sourceRank(previous.source) ||
+          (sourceRank(record.source) === sourceRank(previous.source) && record.confidence >= previous.confidence)) {
+          registry.set(key, record);
+        }
+      });
+    };
+    (dictionaryEntries || []).forEach((entry) => add({
+      label: entry.term || entry.label || "",
+      aliases: entry.aliases || [],
+      entityType: entry.typeCandidates?.[0]?.type || entry.entityType || "term",
+      confidence: entry.seedScore || entry.confidence || 0,
+      source: "dictionary",
+    }));
+    // Builder output is intentionally excluded: a previous noisy run must
+    // never become authority for the next run.
+    (entities || []).filter((entity) => !entity?.metadata?.graphBuilder).forEach((entity) => {
+      const key = normalizeEntityToken(entity.label || entity.normalized || "");
+      // Legacy local capitalisation extraction has no independently auditable
+      // name evidence. It may be used only when the Dictionary has already
+      // confirmed that same label; this prevents sentence starters such as
+      // "Sembrava" and "All'improvviso" from entering the graph registry.
+      const labelWords = String(entity.label || "").trim().split(/\s+/).filter(Boolean);
+      const compoundName = labelWords.length > 1 && labelWords.every((word) => /^[A-ZÀ-Ý][A-Za-zÀ-ÿ'’-]+$/.test(word));
+      const directQuote = String(entity.entityType || "").toLowerCase() === "quote";
+      if (entity.source === "proper-noun" && !registry.has(key) && !compoundName && !directQuote) return;
+      add({
+      label: entity.label || entity.normalized || "",
+      aliases: entity.metadata?.aliases || entity.aliases || [],
+      entityType: entity.entityType || "term",
+      confidence: entity.confidence || 0,
+      source: entity.source || "runtime",
+      });
+    });
+    return registry;
   };
-
-  const graphBuilderTechnicalEntity = (entity = {}) =>
-    ["source", "symbol", "technology"].includes(String(entity.entityType || "").toLowerCase()) ||
-    graphBuilderTechnicalContext("", entity, {});
 
   const graphBuilderSymmetricRelationTypes = new Set(["friend_of", "compares_with"]);
 
@@ -8641,78 +8948,37 @@ window.TrackerLensKnowledgeRuntime = (() => {
     return false;
   };
 
-  const graphBuilderRelationCompatible = ({ relationType = "", source = {}, target = {}, chunk = {}, quote = "" } = {}) => {
-    const type = String(relationType || "").toLowerCase();
-    const sourceType = String(source.entityType || "").toLowerCase();
-    const targetType = String(target.entityType || "").toLowerCase();
-    const context = graphBuilderEvidenceContext(chunk, quote, 320);
-    if (type === "uses" && sourceType === "proper-noun" && targetType === "object") {
-      const text = normalizeEntityToken(context);
-      return graphBuilderLabelInText(source.label || source.sourceLabel || "", text) &&
-        graphBuilderLabelInText(target.label || target.targetLabel || "", text) &&
-        /\b(?:uses|used|use|using|utilizza|utilizz[oò]|usa|us[oò]|afferra|afferr[oò]|prende|prese|preso|impugna|impugn[oò]|brandisce|brand[iì]|wields|wielded|grabs|grabbed|takes|took|colpisce|colp[iì]|hit|hits|struck|strike|attacca|attacc[oò])\b/.test(text);
-    }
-    if (graphBuilderTechnicalRelationTypes.has(type)) {
-      if (!graphBuilderTechnicalContext(context, source, target) && !graphBuilderTechnicalEntity(source) && !graphBuilderTechnicalEntity(target)) return false;
-      return true;
-    }
-    if (!graphBuilderNarrativeRelationTypes.has(type)) return true;
-    if (!graphBuilderLabelInText(source.label || source.sourceLabel || "", context)) return false;
-    const targetLabel = normalizeEntityToken(target.label || target.targetLabel || "");
-    const targetInContext = graphBuilderLabelInText(target.label || target.targetLabel || "", context);
-    const speechCueTarget = type === "cannot_speak" &&
-      ["speech", "voice", "voce", "parola", "speaking"].includes(targetLabel) &&
-      /\b(?:cannot|can t|could not|unable|mute|speak|talk|voice|speech|non poteva|voce|parlare)\b/.test(normalizeEntityToken(context));
-    if (!targetInContext && !speechCueTarget) return false;
-    if (["friend_of", "helps", "tries_to_help", "protects", "teaches", "asks_for", "receives_from", "gives_to"].includes(type)) {
-      if (sourceType !== "proper-noun") return false;
-      if (!["proper-noun", "creature"].includes(targetType)) return false;
-    }
-    if (type === "friend_of" && !/\b(?:friend|friendship|amica|amico|amici|amicizia|legame|comprensione|bond)\b/.test(normalizeEntityToken(context))) return false;
-    if (type === "mentions") {
-      if (!["source", "technology"].includes(sourceType) && !["source", "technology"].includes(targetType)) return false;
-    }
-    if (type === "encounters") {
-      if (!["proper-noun", "term"].includes(sourceType)) return false;
-      if (!["proper-noun", "term", "creature"].includes(targetType)) return false;
-      if (!/\b(?:meets|met|encounters|encountered|approaches|approached|avvicin[oò]|si avvicin[oò]|incontra|incontr[oò]|trova|trov[oò])\b/.test(normalizeEntityToken(context))) return false;
-    }
-    if (type === "works_for") {
-      if (!["proper-noun", "source", "term"].includes(sourceType)) return false;
-      if (!["proper-noun", "source", "technology", "term"].includes(targetType)) return false;
-      if (!/\b(?:works for|work for|worked for|employee of|employed by|has a works for relationship|collaborates with|affiliated with|lavora per|empleado de|travaille pour)\b/.test(normalizeEntityToken(context))) return false;
-    }
-    if (type === "opposes") {
-      const text = normalizeEntityToken(context);
-      const strongOpposition = /\b(?:attack|attacked|struck|strike|hit|fight|fought|defeat|defeated|confront|confronted|against|opposes|opposed|contro|attacc|colp|sconfisse|sconfigge|affront|combatt)\b/.test(text);
-      const weakDismissal = /\b(?:ignore|ignored|ignora|ignor[oò]|parole|words)\b/.test(text);
-      if (!strongOpposition || weakDismissal) return false;
-    }
-    if (type === "seeks") {
-      if (sourceType !== "proper-noun") return false;
-      if (!["concept", "object", "source", "term"].includes(targetType)) return false;
-    }
-    if (type === "healed_by" && targetType === "concept") return false;
-    if (type === "cannot_speak") {
-      if (sourceType !== "proper-noun") return false;
-      if (!["concept", "quote", "term"].includes(targetType)) return false;
-      if (!["speech", "voice", "voce", "parola", "speaking"].includes(targetLabel)) return false;
-    }
-    if (["causes", "leads_to"].includes(type)) {
-      const quoteText = normalizeEntityToken(quote);
-      if (!graphBuilderLabelInText(source.label || source.sourceLabel || "", quoteText)) return false;
-      if (!graphBuilderLabelInText(target.label || target.targetLabel || "", quoteText)) return false;
-      if (!/\b(?:because|cause|caused|causes|leads to|led to|therefore|result|results|resulted|consequence|consequences|porta a|conduce|causa|caus[oò]|provoca|provoc[oò])\b/.test(quoteText)) return false;
-    }
-    return true;
+  // Graph Builder producers own semantic discovery.  TL never uses these
+  // diagnostics to discard a graph fact: they are transparent, inspectable
+  // attention labels for consumers that want a stricter view.
+  const graphBuilderEntityQuality = ({ label = "", entityType = "", quote = "", chunk = {}, confidence = 0, threshold = 0 } = {}) => {
+    const warnings = [];
+    if (!evidenceQuoteInChunk(chunk, quote)) warnings.push("evidence-not-found-in-source");
+    if (graphBuilderWeakEntityCandidate({ label, entityType, quote, chunk })) warnings.push("weak-or-ambiguous-entity");
+    if (Number(confidence || 0) < threshold) warnings.push("below-configured-confidence");
+    return {
+      status: warnings.length ? "attention" : "verified",
+      warnings,
+      evidenceStatus: warnings.includes("evidence-not-found-in-source") ? "unmatched" : "matched",
+    };
   };
 
-  const graphBuilderCredentialAtomLabels = new Set([
-    "api key", "apikey", "credential", "credentials", "password", "secret", "token", "user name", "username",
-  ]);
-
-  const isGraphBuilderCredentialAtom = (label = "") =>
-    graphBuilderCredentialAtomLabels.has(normalizeEntityToken(label));
+  const graphBuilderRelationQuality = ({ item = {}, relationType = "", chunk = {}, quote = "", allowedRelationTypes = new Set(), threshold = 0 } = {}) => {
+    const warnings = [];
+    if (!allowedRelationTypes.has(relationType)) warnings.push("relation-type-not-configured");
+    if (!evidenceQuoteInChunk(chunk, quote)) warnings.push("evidence-not-found-in-source");
+    if (Number(item?.confidence || 0) < threshold) warnings.push("below-configured-confidence");
+    const nliStatus = String(item?.nliStatus || "");
+    if (nliStatus === "ambiguous") warnings.push("nli-ambiguous");
+    if (nliStatus === "rejected") warnings.push("nli-contradiction-or-low-entailment");
+    if (nliStatus === "not-run" && String(item?.originalRelationType || "") === "gliner2-candidate") warnings.push("nli-not-run");
+    return {
+      status: warnings.length ? "attention" : "verified",
+      warnings,
+      evidenceStatus: warnings.includes("evidence-not-found-in-source") ? "unmatched" : "matched",
+      nliStatus,
+    };
+  };
 
   const normalizeGraphBuilderRelationType = (relation = {}) => {
     const relationType = String(relation?.relationType || "").toLowerCase().trim();
@@ -8744,8 +9010,6 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const relations = Array.isArray(proposal.relations) ? proposal.relations.map((item) => ({ ...item })) : [];
     const rejectedCandidates = Array.isArray(proposal.rejectedCandidates) ? [...proposal.rejectedCandidates] : [];
     const normalizations = [];
-    const chunkById = new Map(selectedChunks.map((chunk) => [chunk.id, chunk]));
-    const fallbackChunk = selectedChunks[0] || null;
     const enabled = config.technicalNormalization !== false && String(config.technicalNormalization || "true").toLowerCase() !== "false";
     if (!enabled) return { entities, relations, rejectedCandidates, normalizations };
 
@@ -8787,168 +9051,140 @@ window.TrackerLensKnowledgeRuntime = (() => {
       }
     });
 
-    const credentialRelations = relations.filter((relation) =>
-      ["depends_on", "configures"].includes(String(relation?.relationType || "").toLowerCase()) &&
-      isGraphBuilderCredentialAtom(relation?.targetLabel || "")
-    );
-    const credentialLabels = new Set(credentialRelations.map((relation) => normalizeEntityToken(relation.targetLabel || "")).filter(Boolean));
-    if (credentialLabels.has("username") && credentialLabels.has("password")) {
-      const seedRelation = credentialRelations.find((relation) => normalizeEntityToken(relation?.evidence?.quote || "").includes("username") && normalizeEntityToken(relation?.evidence?.quote || "").includes("password"))
-        || credentialRelations[0];
-      const seedChunk = chunkById.get(seedRelation?.evidence?.chunkId || "") || fallbackChunk;
-      const quote = String(seedRelation?.evidence?.quote || "").trim();
-      if (seedChunk && evidenceQuoteInChunk(seedChunk, quote)) {
-        const aggregateLabel = "connection credentials";
-        const aggregateKey = normalizeEntityToken(aggregateLabel);
-        const hasAggregate = entities.some((entity) => normalizeEntityToken(entity?.label || "") === aggregateKey);
-        if (!hasAggregate) {
-          entities.push({
-            label: aggregateLabel,
-            entityType: "term",
-            confidence: Math.max(0.72, Math.min(0.96, Number(seedRelation.confidence || 0.78))),
-            evidence: { chunkId: seedChunk.id || "", quote },
-          });
-        }
-        const sourceLabel = String(seedRelation.sourceLabel || "").trim();
-        relations.push({
-          sourceLabel,
-          targetLabel: aggregateLabel,
-          relationType: "depends_on",
-          confidence: Math.max(0.72, Math.min(0.96, Number(seedRelation.confidence || 0.78))),
-          evidence: { chunkId: seedChunk.id || "", quote },
-          explanation: "Connection credentials are grouped from username/password evidence.",
-          originalRelationType: "credential-aggregate",
-        });
-        normalizations.push({
-          type: "credential-aggregate",
-          labels: [...credentialLabels],
-          sourceLabel,
-          targetLabel: aggregateLabel,
-        });
-      }
-    }
-
-    const credentialRelationKeys = new Set(
-      credentialLabels.has("username") && credentialLabels.has("password")
-        ? ["username", "password"]
-        : []
-    );
-    const filteredEntities = entities.filter((entity) => !credentialRelationKeys.has(normalizeEntityToken(entity?.label || "")));
-    const filteredRelations = relations.filter((relation) => !credentialRelationKeys.has(normalizeEntityToken(relation?.targetLabel || "")));
-    credentialRelationKeys.forEach((label) => rejectedCandidates.push({ label, reason: "normalized-into-connection-credentials" }));
-    return { entities: filteredEntities, relations: filteredRelations, rejectedCandidates, normalizations };
+    // Keep the producer's labels and relation payload intact.  The runtime can
+    // annotate quality/provenance later, but must not silently collapse valid
+    // concepts (for example username/password) into a different graph fact.
+    return { entities, relations, rejectedCandidates, normalizations };
   };
 
-  const graphBuilderEvidenceSentence = (text = "", patterns = [], labels = []) => {
-    const source = String(text || "");
-    const sentences = source.match(/[^.!?\n\r]+[.!?]?/g) || [source];
-    const normalizedLabels = labels.map((label) => normalizeEntityToken(label)).filter(Boolean);
-    const found = sentences.find((sentence) => {
-      const normalized = normalizeEntityToken(sentence);
-      return patterns.some((pattern) => pattern.test(normalized)) &&
-        normalizedLabels.every((label) => new RegExp(`\\b${escapedRegExp(label)}\\b`).test(normalized));
-    });
-    return String(found || "").replace(/\s+/g, " ").trim();
+  const graphBuilderRelationExtractionMode = (config = {}) => {
+    const mode = String(config.relationExtractionMode || "hybrid").trim().toLowerCase();
+    return ["hybrid", "llm"].includes(mode) ? mode : "hybrid";
   };
 
-  const graphBuilderEvidenceBetween = (text = "", source = {}, target = {}, radius = 180) =>
-    String(relationContextBetween(text, source, target, radius) || "").replace(/\s+/g, " ").trim();
-
-  const graphBuilderPersonBeforeTarget = (text = "", people = [], target = {}) => {
-    const normalizedText = normalizeEntityToken(text);
-    const targetLabel = normalizeEntityToken(target?.label || target?.targetLabel || "");
-    if (!normalizedText || !targetLabel) return null;
-    const targetPositions = [...normalizedText.matchAll(new RegExp(`\\b${escapedRegExp(targetLabel)}\\b`, "g"))].map((match) => match.index || 0);
-    if (!targetPositions.length) return null;
-    const targetPosition = Math.min(...targetPositions);
-    const candidates = people
-      .map((person) => {
-        const label = normalizeEntityToken(person?.label || "");
-        if (!label) return null;
-        const positions = [...normalizedText.matchAll(new RegExp(`\\b${escapedRegExp(label)}\\b`, "g"))]
-          .map((match) => match.index || 0)
-          .filter((position) => position < targetPosition);
-        if (!positions.length) return null;
-        const position = Math.max(...positions);
-        return { person, distance: targetPosition - position };
-      })
-      .filter(Boolean)
-      .sort((left, right) => left.distance - right.distance);
-    return candidates[0]?.person || null;
-  };
-
-  const addGraphBuilderSupplementalRelation = (relations = [], seen = new Set(), relation = {}) => {
-    const key = [
-      normalizeEntityToken(relation.sourceLabel || ""),
-      String(relation.relationType || "").toLowerCase(),
-      normalizeEntityToken(relation.targetLabel || ""),
-      normalizeKnowledgeText(relation.evidence?.quote || ""),
-    ].join("::");
-    if (!relation.sourceLabel || !relation.targetLabel || !relation.relationType || !relation.evidence?.quote || seen.has(key)) return;
-    seen.add(key);
-    relations.push(relation);
-  };
-
-  const supplementGraphBuilderNarrativeRelations = ({ chunks = [], entityByLabel = new Map(), relations = [] } = {}) => {
-    const supplemental = [];
-    const seen = new Set(relations.map((relation) => [
-      normalizeEntityToken(relation.sourceLabel || ""),
-      String(relation.relationType || "").toLowerCase(),
-      normalizeEntityToken(relation.targetLabel || ""),
-      normalizeKnowledgeText(relation.evidence?.quote || ""),
-    ].join("::")));
-    const entities = [...entityByLabel.values()];
-    const people = entities.filter((entity) =>
-      String(entity.entityType || "").toLowerCase() === "proper-noun" &&
-      !semanticNonPersonProperNoun(entity)
-    );
-    const quotes = entities.filter((entity) => String(entity.entityType || "").toLowerCase() === "quote");
-    chunks.forEach((chunk) => {
-      const text = String(chunk.text || "");
-      const normalized = normalizeEntityToken(text);
-      if (!normalized) return;
-      const chunkPeople = people.filter((entity) => graphBuilderLabelInText(entity.label || "", text));
-      if (chunkPeople.length >= 2 && /\b(?:friend|friendship|amica|amico|legame|comprensione|bond)\b/.test(normalized)) {
-        for (let leftIndex = 0; leftIndex < chunkPeople.length; leftIndex += 1) {
-          for (let rightIndex = leftIndex + 1; rightIndex < chunkPeople.length; rightIndex += 1) {
-            const left = chunkPeople[leftIndex];
-            const right = chunkPeople[rightIndex];
-            const quote = graphBuilderEvidenceSentence(text, [/\b(?:friend|friendship|amica|amico|legame|comprensione|bond)\b/], [left.label, right.label]) ||
-              graphBuilderEvidenceBetween(text, left, right, 160);
-            if (!/\b(?:friend|friendship|amica|amico|legame|comprensione|bond)\b/.test(normalizeEntityToken(quote))) continue;
-            addGraphBuilderSupplementalRelation(supplemental, seen, {
-              sourceLabel: left.label,
-              targetLabel: right.label,
-              relationType: "friend_of",
-              confidence: 0.86,
-              evidence: { chunkId: chunk.id || "", quote },
-              explanation: "Rule fallback found explicit friendship/bond evidence in the chunk.",
-              originalRelationType: "rule-supplement",
-            });
-          }
-        }
-      }
-      quotes.forEach((quoteEntity) => {
-        if (!graphBuilderLabelInText(quoteEntity.label || "", text)) return;
-        const speaker = graphBuilderPersonBeforeTarget(text, chunkPeople, quoteEntity);
-        if (!speaker) return;
-        const speakerContext = normalizeEntityToken(graphBuilderEvidenceBetween(text, speaker, quoteEntity, 220));
-        if (!/\b(?:grido|grid[oò]|disse|dice|usc[iì]|shouted|said|cried|bocca|voce)\b/.test(speakerContext)) return;
-        const quote = graphBuilderEvidenceSentence(text, [/\b(?:grido|grid[oò]|disse|dice|usc[iì]|shouted|said|cried)\b/], [speaker.label, quoteEntity.label]) ||
-          graphBuilderEvidenceBetween(text, speaker, quoteEntity, 180) ||
-          graphBuilderEvidenceSentence(text, [/\b(?:grido|grid[oò]|disse|dice|usc[iì]|shouted|said|cried)\b/], [quoteEntity.label]);
-        addGraphBuilderSupplementalRelation(supplemental, seen, {
-          sourceLabel: speaker.label,
-          targetLabel: quoteEntity.label,
-          relationType: "reveals",
-          confidence: 0.84,
-          evidence: { chunkId: chunk.id || "", quote },
-          explanation: "Rule fallback found explicit speech/revelation evidence in the chunk.",
-          originalRelationType: "rule-supplement",
-        });
+  const extractGraphRelationsWithPython = async ({ chunks = [], config = {} } = {}) => {
+    const allowedRelationTypes = [...builderAllowedRelationTypes(config)];
+    const response = await runKnowledgePythonOperation({
+      executionId: uniqueId("python_gliner2_relations"),
+      operation: "gliner2_relations",
+      inputs: {
+        chunks: chunks.map((chunk) => ({ id: String(chunk.id || ""), text: String(chunk.text || "") })),
+        relationTypes: allowedRelationTypes,
+      },
+      context: { capability: "knowledge.graph.relation_extract" },
+      timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 180000)),
+      label: "GLiNER2 relation candidates",
+      debugContext: config.__knowledgeRuntimeDebug || null,
+    }).catch((error) => {
+      throw Object.assign(new Error(`Pack Python GLiNER2 non installato o non disponibile: ${error?.message || "unknown error"}`), {
+        code: error?.code || "PYTHON_PACK_UNAVAILABLE",
       });
     });
-    return supplemental;
+    const output = response?.outputs || {};
+    if (!Array.isArray(output.candidates)) {
+      throw Object.assign(new Error("Il worker Python GLiNER2 ha restituito candidati relazione non validi."), { code: "PYTHON_GRAPH_RELATIONS_INVALID" });
+    }
+    const chunksById = new Map(chunks.map((chunk) => [String(chunk.id || ""), chunk]));
+    const candidates = [];
+    const seen = new Set();
+    output.candidates.forEach((item) => {
+      const sourceLabel = String(item?.sourceLabel || "").replace(/\s+/g, " ").trim();
+      const targetLabel = String(item?.targetLabel || "").replace(/\s+/g, " ").trim();
+      const relationType = String(item?.relationType || "").toLowerCase().trim();
+      const quote = String(item?.evidence?.quote || "").trim();
+      const chunkId = String(item?.evidence?.chunkId || "").trim();
+      const chunk = chunksById.get(chunkId) || chunks[0];
+      // Structural adapter only: a Python producer may emit an unfamiliar
+      // relation type or imperfect evidence span. Keep it for transparent
+      // quality review instead of applying a second semantic admission gate.
+      if (!sourceLabel || !targetLabel || !relationType || !chunk) return;
+      const key = [normalizeEntityToken(sourceLabel), relationType, normalizeEntityToken(targetLabel), normalizeKnowledgeText(quote)].join("::");
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({
+        sourceLabel,
+        targetLabel,
+        relationType,
+        confidence: Math.max(0, Math.min(1, Number(item?.confidence || 0.72))),
+        evidence: { chunkId: chunk.id || chunkId, quote },
+        language: String(chunk?.language || chunk?.metadata?.language || config.language || "en").trim().toLowerCase(),
+        explanation: "Candidate proposed by local GLiNER2 relation extraction; awaiting local NLI verification.",
+        originalRelationType: "gliner2-candidate",
+      });
+    });
+    knowledgeLlmDebug("graph-builder:python-relations", {
+      stepType: "python",
+      label: "GLiNER2 relation candidates",
+      operation: "gliner2_relations",
+      runtime: "managed-python",
+      workerId: "managed-python-graph-relations",
+      status: "complete",
+      proposedRelationCount: Number(output.candidateCount || output.candidates.length),
+      acceptedRelationCount: candidates.length,
+      model: output.model || "",
+      revision: output.revision || "",
+      algorithm: output.algorithm || "",
+    }, config.__knowledgeRuntimeDebug || null);
+    return { candidates, model: String(output.model || ""), revision: String(output.revision || ""), algorithm: String(output.algorithm || "") };
+  };
+
+  const verifyGraphRelationsWithPython = async ({ candidates = [], config = {} } = {}) => {
+    if (!candidates.length) return { accepted: [], ambiguous: [], rejected: [], model: "", revision: "", algorithm: "" };
+    const response = await runKnowledgePythonOperation({
+      executionId: uniqueId("python_nli_relation_verify"),
+      operation: "nli_verify_relations",
+      inputs: { candidates },
+      context: { capability: "knowledge.graph.relation_verify" },
+      timeoutMs: Math.max(1000, Number(config.pythonTimeoutMs || 180000)),
+      label: "Local NLI relation verification",
+      debugContext: config.__knowledgeRuntimeDebug || null,
+    }).catch((error) => {
+      throw Object.assign(new Error(`Verificatore NLI Python non installato o non disponibile: ${error?.message || "unknown error"}`), {
+        code: error?.code || "PYTHON_NLI_VERIFIER_UNAVAILABLE",
+      });
+    });
+    const output = response?.outputs || {};
+    if (!Array.isArray(output.verified)) throw Object.assign(new Error("Il verificatore NLI Python ha restituito dati non validi."), { code: "PYTHON_NLI_VERIFIER_INVALID" });
+    const acceptThreshold = Math.max(0, Math.min(1, Number(config.nliAcceptThreshold ?? 0.72)));
+    const rejectThreshold = Math.max(0, Math.min(1, Number(config.nliRejectThreshold ?? 0.12)));
+    const accepted = [];
+    const ambiguous = [];
+    const rejected = [];
+    output.verified.forEach((item) => {
+      const entailment = Math.max(0, Math.min(1, Number(item?.nli?.entailment || 0)));
+      const contradiction = Math.max(0, Math.min(1, Number(item?.nli?.contradiction || 0)));
+      const candidate = {
+        sourceLabel: String(item?.sourceLabel || "").trim(),
+        targetLabel: String(item?.targetLabel || "").trim(),
+        relationType: String(item?.relationType || "").trim().toLowerCase(),
+        confidence: entailment,
+        evidence: item?.evidence || {},
+        explanation: `Local multilingual NLI verification: entailment ${entailment.toFixed(3)}, contradiction ${contradiction.toFixed(3)}.`,
+        originalRelationType: "gliner2+nli",
+        nli: item?.nli || {},
+      };
+      if (!candidate.sourceLabel || !candidate.targetLabel || !candidate.relationType || !String(candidate.evidence?.quote || "").trim()) return;
+      if (candidate.nli?.templateSupported === false) ambiguous.push(candidate);
+      else if (entailment >= acceptThreshold && contradiction < entailment) accepted.push(candidate);
+      else if (entailment <= rejectThreshold || contradiction >= entailment) rejected.push(candidate);
+      else ambiguous.push(candidate);
+    });
+    knowledgeLlmDebug("graph-builder:nli-verification", {
+      stepType: "python",
+      label: "Local NLI relation verification",
+      operation: "nli_verify_relations",
+      runtime: "managed-python",
+      workerId: "managed-python-graph-relations",
+      status: "complete",
+      candidateCount: output.verified.length,
+      acceptedRelationCount: accepted.length,
+      ambiguousRelationCount: ambiguous.length,
+      rejectedRelationCount: rejected.length,
+      model: output.model || "",
+      revision: output.revision || "",
+      algorithm: output.algorithm || "",
+    }, config.__knowledgeRuntimeDebug || null);
+    return { accepted, ambiguous, rejected, model: String(output.model || ""), revision: String(output.revision || ""), algorithm: String(output.algorithm || "") };
   };
 
   const buildKnowledgeGraphWithAi = async ({ workspaceId, node, payload = {}, event, config = {} } = {}) => {
@@ -8972,39 +9208,136 @@ window.TrackerLensKnowledgeRuntime = (() => {
     ).slice(0, maxChunks);
     if (!selectedChunks.length) throw new Error("Chunk Knowledge non trovati per Knowledge Graph Builder Agent");
     const selectedDocumentId = documentId || selectedChunks[0]?.documentId || "";
+    // Replacing a document must not erase its current graph before the new run
+    // has used it as context.  Otherwise each Play is a cold start and an LLM
+    // can lose already verified connections.  Keep a snapshot of the prior
+    // Builder records now; reconcile stale records only after a successful run.
     const replaceExistingBuilder = config.replaceExisting !== false && String(config.replaceExisting || "true").toLowerCase() !== "false";
-    if (replaceExistingBuilder) {
-      const staleBuilderRelations = byWorkspace(relationsAll, workspaceId)
-        .filter((relation) => relation.metadata?.graphBuilder)
-        .filter((relation) => !selectedDocumentId || relation.documentId === selectedDocumentId);
-      const staleBuilderEntities = byWorkspace(entitiesAll, workspaceId)
-        .filter((entity) => entity.metadata?.graphBuilder)
-        .filter((entity) => !selectedDocumentId || entity.documentId === selectedDocumentId);
-      await Promise.all([
-        deleteRecords(STORES.relations, staleBuilderRelations.map((relation) => relation.id)),
-        deleteRecords(STORES.entities, staleBuilderEntities.map((entity) => entity.id)),
-      ]);
-    }
-    const staleBuilderEntityIds = new Set(byWorkspace(entitiesAll, workspaceId)
+    const priorBuilderRelations = byWorkspace(relationsAll, workspaceId)
+      .filter((relation) => relation.metadata?.graphBuilder)
+      .filter((relation) => !selectedDocumentId || relation.documentId === selectedDocumentId);
+    const priorBuilderEntities = byWorkspace(entitiesAll, workspaceId)
       .filter((entity) => entity.metadata?.graphBuilder)
       .filter((entity) => !selectedDocumentId || entity.documentId === selectedDocumentId)
-      .map((entity) => entity.id));
     const workspaceEntities = byWorkspace(entitiesAll, workspaceId)
-      .filter((entity) => !staleBuilderEntityIds.has(entity.id))
       .filter((entity) => !collectionId || entity.metadata?.collectionId === collectionId)
       .filter((entity) => !selectedDocumentId || entity.documentId === selectedDocumentId);
     const workspaceRelations = byWorkspace(relationsAll, workspaceId)
-      .filter((relation) => !relation.metadata?.graphBuilder)
       .filter((relation) => !collectionId || relation.metadata?.collectionId === collectionId)
       .filter((relation) => !selectedDocumentId || relation.documentId === selectedDocumentId);
-    const aiResult = await callGraphBuilderAi({ chunks: selectedChunks, entities: workspaceEntities, relations: workspaceRelations, config });
+    const dictionarySeedEntries = await dictionarySeedsForDocument({
+      workspaceId,
+      documentId: selectedDocumentId,
+      collectionId,
+      payload,
+      config,
+    });
+    const dictionaryRegistryEntries = await dictionaryRegistryEntriesForDocument({
+      workspaceId,
+      documentId: selectedDocumentId,
+      collectionId,
+      payload,
+      seeds: dictionarySeedEntries,
+    });
+    const entityRegistry = graphBuilderEntityRegistry({
+      dictionaryEntries: dictionaryRegistryEntries,
+      entities: workspaceEntities,
+    });
+    // Event context crosses the Node boundary only through an explicit Event
+    // Builder connection.  Do not opportunistically read workspace events here:
+    // the canvas link remains the visible, auditable blood vessel of this flow.
+    const eventContext = ["knowledge.events.updated", "knowledge.event.context"].includes(String(event?.channel || ""))
+      ? (Array.isArray(payload?.events) ? payload.events.filter(Boolean) : [])
+      : [];
+    const relationExtractionMode = graphBuilderRelationExtractionMode(config);
+    const pythonRelations = relationExtractionMode === "hybrid"
+      ? await extractGraphRelationsWithPython({ chunks: selectedChunks, config })
+      : { candidates: [], model: "", revision: "", algorithm: "" };
+    // The registry is a useful type/alias hint for the LLM, never an endpoint
+    // admission gate.  A producer may discover a legitimate new label before
+    // Dictionary Builder has seen it.
+    const verifiedPythonCandidates = pythonRelations.candidates
+      .filter((relation) => String(relation?.evidence?.quote || "").trim());
+    const nliVerification = relationExtractionMode === "hybrid"
+      ? await verifyGraphRelationsWithPython({ candidates: verifiedPythonCandidates, config })
+      : { accepted: [], ambiguous: [], rejected: [], model: "", revision: "", algorithm: "" };
+    // Hybrid means Python supplies local proposals and the configured LLM
+    // constructs/verifies the complete evidence-backed graph once. It must
+    // not be reduced to the small set of NLI-ambiguous candidates.
+    const shouldAskGraphLlm = ["hybrid", "llm"].includes(relationExtractionMode);
+    const aiResult = shouldAskGraphLlm
+      ? await callGraphBuilderAi({
+        chunks: selectedChunks,
+        entities: workspaceEntities,
+        relations: workspaceRelations,
+        events: eventContext,
+        relationCandidates: nliVerification.ambiguous,
+        dictionaryEntries: dictionaryRegistryEntries,
+        config,
+      })
+      : { proposal: { entities: [], relations: [], rejectedCandidates: [] }, provider: "", model: "", usage: {}, error: "", promptMode: "local-nli" };
+    if (["hybrid", "llm"].includes(relationExtractionMode) && aiResult.error) {
+      throw Object.assign(new Error(`Knowledge Graph Builder: LLM non disponibile per costruire il grafo verificato: ${aiResult.error}`), {
+        code: "GRAPH_RELATION_VERIFIER_UNAVAILABLE",
+      });
+    }
     if (aiResult.usage?.totalTokens) {
       await persistKnowledgeNodeTokenUsage({ node, usage: aiResult.usage, provider: aiResult.provider, model: aiResult.model });
     }
     const proposal = aiResult.proposal && typeof aiResult.proposal === "object" ? aiResult.proposal : {};
     const normalizedProposal = normalizeGraphBuilderProposal({ proposal, selectedChunks, config });
-    const proposalEntities = normalizedProposal.entities;
-    const proposalRelations = normalizedProposal.relations;
+    const nliRelations = [
+      ...nliVerification.accepted.map((relation) => ({ ...relation, nliStatus: "accepted" })),
+      ...nliVerification.ambiguous.map((relation) => ({ ...relation, nliStatus: "ambiguous" })),
+      ...nliVerification.rejected.map((relation) => ({ ...relation, nliStatus: "rejected" })),
+    ];
+    const nliVerifiedKeys = new Set(nliRelations.map((relation) => [
+      normalizeEntityToken(relation.sourceLabel || ""),
+      String(relation.relationType || "").toLowerCase(),
+      normalizeEntityToken(relation.targetLabel || ""),
+      normalizeKnowledgeText(relation.evidence?.quote || ""),
+    ].join("::")));
+    const nliNotRunRelations = pythonRelations.candidates
+      .filter((relation) => !nliVerifiedKeys.has([
+        normalizeEntityToken(relation.sourceLabel || ""),
+        String(relation.relationType || "").toLowerCase(),
+        normalizeEntityToken(relation.targetLabel || ""),
+        normalizeKnowledgeText(relation.evidence?.quote || ""),
+      ].join("::")))
+      .map((relation) => ({ ...relation, nliStatus: "not-run" }));
+    const nliEntityProposals = nliRelations.flatMap((relation) => {
+      const quote = String(relation?.evidence?.quote || "").trim();
+      return [
+        { label: relation.sourceLabel, entityType: relation.sourceEntityType || "term", confidence: relation.confidence, evidence: { ...(relation.evidence || {}), quote } },
+        { label: relation.targetLabel, entityType: relation.targetEntityType || "term", confidence: relation.confidence, evidence: { ...(relation.evidence || {}), quote } },
+      ];
+    });
+    const relationEndpointProposals = [...nliRelations, ...nliNotRunRelations, ...normalizedProposal.relations].flatMap((relation) => [
+      {
+        label: relation.sourceLabel,
+        entityType: relation.sourceEntityType || "term",
+        confidence: relation.confidence,
+        evidence: relation.evidence || {},
+        provenance: relation.originalRelationType || "ai-graph-builder-relation-endpoint",
+      },
+      {
+        label: relation.targetLabel,
+        entityType: relation.targetEntityType || "term",
+        confidence: relation.confidence,
+        evidence: relation.evidence || {},
+        provenance: relation.originalRelationType || "ai-graph-builder-relation-endpoint",
+      },
+    ]);
+    const proposalEntities = [...normalizedProposal.entities, ...nliEntityProposals, ...relationEndpointProposals].filter((item, index, items) => {
+      const key = normalizeEntityToken(item?.label || "");
+      return Boolean(key) && items.findIndex((candidate) => normalizeEntityToken(candidate?.label || "") === key) === index;
+    });
+    const rejectedCandidates = [...normalizedProposal.rejectedCandidates];
+    const proposalRelations = [
+      ...nliRelations,
+      ...nliNotRunRelations,
+      ...normalizedProposal.relations.map((relation) => ({ ...relation, nliStatus: "not-run" })),
+    ];
     const allowedRelationTypes = builderAllowedRelationTypes(config);
     const threshold = Math.max(0, Math.min(1, Number(config.confidenceThreshold ?? 0.65)));
     const maxEntities = Number.isFinite(Number(config.maxEntities)) && Number(config.maxEntities) > 0
@@ -9017,26 +9350,30 @@ window.TrackerLensKnowledgeRuntime = (() => {
     const fallbackChunk = selectedChunks[0];
     const entityByLabel = new Map(workspaceEntities.map((entity) => [normalizeEntityToken(entity.label || entity.normalized || ""), entity]));
     const acceptedEntities = [];
-    const rejectedCandidates = [...normalizedProposal.rejectedCandidates];
+    const attentionEntities = [];
+    const acceptedEntityIds = new Set();
+    const retainEntity = (entity) => {
+      if (!entity?.id || acceptedEntityIds.has(entity.id)) return entity;
+      acceptedEntityIds.add(entity.id);
+      acceptedEntities.push(entity);
+      return entity;
+    };
     const now = nowIso();
     for (const item of proposalEntities.slice(0, maxEntities)) {
       const label = String(item?.label || "").replace(/\s+/g, " ").trim();
-      if (!label || label.length > 96) continue;
+      // An empty label cannot be represented as a graph endpoint. Everything
+      // else remains a producer-owned candidate and is persisted with its
+      // quality label rather than being silently filtered by TL.
+      if (!label) continue;
       const quote = String(item?.evidence?.quote || "").trim();
       const chunk = chunkById.get(item?.evidence?.chunkId || "") || fallbackChunk;
-      if (!evidenceQuoteInChunk(chunk, quote)) {
-        rejectedCandidates.push({ label, reason: "missing-entity-evidence" });
-        continue;
-      }
       const key = normalizeEntityToken(label);
       const entityType = graphBuilderEntityType(item.entityType);
-      if (!key || graphBuilderWeakEntityCandidate({ label, entityType, quote, chunk })) {
-        rejectedCandidates.push({ label, reason: "weak-builder-entity" });
-        continue;
-      }
+      if (!key) continue;
+      const quality = graphBuilderEntityQuality({ label, entityType, quote, chunk, confidence: item.confidence, threshold });
       const existing = entityByLabel.get(key);
       if (existing) {
-        acceptedEntities.push(existing);
+        retainEntity(existing);
         continue;
       }
       const entityId = `kentity_${safeId(workspaceId)}_${safeId(chunk.documentId || selectedDocumentId || "doc")}_${safeId(key)}`;
@@ -9059,6 +9396,10 @@ window.TrackerLensKnowledgeRuntime = (() => {
           language: chunk.metadata?.language || detectLanguage(chunk.text || "", config.language || ""),
           collectionId: chunk.metadata?.collectionId || collectionId,
           evidence: { quote, chunkId: chunk.id || "" },
+          quality: {
+            ...quality,
+            provenance: String(item.provenance || item.originalRelationType || "ai-graph-builder"),
+          },
           extraction: { method: "ai-graph-builder", providerId: aiResult.provider || "", model: aiResult.model || "", promptMode: aiResult.promptMode || "", promptVersion: "knowledge-graph-builder-v1" },
           aliases: [],
         },
@@ -9067,62 +9408,56 @@ window.TrackerLensKnowledgeRuntime = (() => {
       };
       const saved = await putRecord(STORES.entities, record);
       entityByLabel.set(key, saved);
-      acceptedEntities.push(saved);
+      retainEntity(saved);
+      if (quality.status === "attention") attentionEntities.push(saved);
     }
-    proposalRelations.push(...supplementGraphBuilderNarrativeRelations({ chunks: selectedChunks, entityByLabel, relations: proposalRelations }));
-    const existingSemanticKeys = new Set(byWorkspace(relationsAll, workspaceId)
+    const existingSemanticRelations = new Map(byWorkspace(relationsAll, workspaceId)
       .filter((relation) => relation.metadata?.semantic || relation.metadata?.graphBuilder)
-      .filter((relation) =>
-        !(
-          replaceExistingBuilder &&
-          relation.metadata?.graphBuilder &&
-          (!selectedDocumentId || relation.documentId === selectedDocumentId)
-        )
-      )
       .map((relation) => {
         const type = String(relation.relationType || "").toLowerCase();
         const pair = graphBuilderSymmetricRelationTypes.has(type)
           ? [relation.sourceEntityId || "", relation.targetEntityId || ""].sort()
           : [relation.sourceEntityId || "", relation.targetEntityId || ""];
-        return [
+        const key = [
           relation.documentId || "",
           type,
           pair[0],
           pair[1],
           graphBuilderSymmetricRelationTypes.has(type) ? "symmetric" : normalizeKnowledgeText(relation.evidence?.quote || ""),
         ].join("::");
+        return [key, relation];
       }));
+    const existingSemanticKeys = new Set(existingSemanticRelations.keys());
     const acceptedRelations = [];
+    const attentionRelations = [];
+    const acceptedRelationIds = new Set();
+    const retainRelation = (relation) => {
+      if (!relation?.id || acceptedRelationIds.has(relation.id)) return relation;
+      acceptedRelationIds.add(relation.id);
+      acceptedRelations.push(relation);
+      return relation;
+    };
     for (const item of proposalRelations.slice(0, maxRelations)) {
-      const relationType = String(item?.relationType || "").toLowerCase().trim();
-      if (!allowedRelationTypes.has(relationType)) {
-        rejectedCandidates.push({ label: `${item?.sourceLabel || ""} -> ${item?.targetLabel || ""}`, reason: "relation-type-not-allowed" });
-        continue;
-      }
-      const confidence = Math.min(0.98, Number(item.confidence || 0));
-      if (confidence < threshold) continue;
+      // Empty endpoint labels are the only non-representable relation shape.
+      // Unknown relation types, weak evidence and low confidence remain in the
+      // graph with an explicit attention label.
+      const relationType = String(item?.relationType || "related_to").toLowerCase().trim() || "related_to";
+      const confidence = Math.max(0, Math.min(1, Number(item.confidence || 0)));
       const source = entityByLabel.get(normalizeEntityToken(item.sourceLabel || ""));
       const target = entityByLabel.get(normalizeEntityToken(item.targetLabel || ""));
-      if (!source?.id || !target?.id || source.id === target.id) {
+      if (!source?.id || !target?.id) {
         rejectedCandidates.push({ label: `${item?.sourceLabel || ""} -> ${item?.targetLabel || ""}`, reason: "missing-accepted-entity" });
         continue;
       }
       const quote = String(item?.evidence?.quote || "").trim();
       const chunk = chunkById.get(item?.evidence?.chunkId || "") || fallbackChunk;
-      if (!evidenceQuoteInChunk(chunk, quote)) {
-        rejectedCandidates.push({ label: `${source.label} -> ${target.label}`, reason: "missing-relation-evidence" });
-        continue;
-      }
-      if (!graphBuilderRelationCompatible({ relationType, source, target, chunk, quote })) {
-        rejectedCandidates.push({ label: `${source.label} -> ${target.label}`, reason: "incompatible-narrative-relation" });
-        continue;
-      }
+      const quality = graphBuilderRelationQuality({ item, relationType, source, target, chunk, quote, allowedRelationTypes, threshold });
       const finalPair = relationType === "healed_by"
         ? orientSemanticRelation({ relationType, source, target, text: chunk?.text || quote || "" })
         : { source, target };
       const finalSource = finalPair.source || source;
       const finalTarget = finalPair.target || target;
-      if (!finalSource?.id || !finalTarget?.id || finalSource.id === finalTarget.id) {
+      if (!finalSource?.id || !finalTarget?.id) {
         rejectedCandidates.push({ label: `${source.label} -> ${target.label}`, reason: "invalid-oriented-relation" });
         continue;
       }
@@ -9132,7 +9467,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
         ...(graphBuilderSymmetricRelationTypes.has(relationType) ? [finalSource.id, finalTarget.id].sort() : [finalSource.id, finalTarget.id]),
         graphBuilderSymmetricRelationTypes.has(relationType) ? "symmetric" : normalizeKnowledgeText(quote),
       ].join("::");
-      if (existingSemanticKeys.has(semanticKey)) continue;
+      if (existingSemanticKeys.has(semanticKey)) {
+        const existingRelation = existingSemanticRelations.get(semanticKey);
+        if (existingRelation?.metadata?.graphBuilder) {
+          retainEntity(finalSource);
+          retainEntity(finalTarget);
+          retainRelation(existingRelation);
+        }
+        continue;
+      }
       existingSemanticKeys.add(semanticKey);
       const relationId = `ksemantic_${safeId(chunk.documentId || selectedDocumentId || workspaceId)}_${safeId(relationType)}_${safeId(finalSource.normalized || finalSource.label)}_${safeId(finalTarget.normalized || finalTarget.label)}_${safeId(quote).slice(0, 28)}`;
       const record = {
@@ -9153,9 +9496,9 @@ window.TrackerLensKnowledgeRuntime = (() => {
           endOffset: null,
         },
         extraction: {
-          method: "ai-graph-builder",
-          providerId: aiResult.provider || "",
-          model: aiResult.model || "",
+          method: String(item.originalRelationType || "") === "gliner2+nli" ? "gliner2+nli" : "ai-graph-builder",
+          providerId: String(item.originalRelationType || "") === "gliner2+nli" ? "managed-python" : (aiResult.provider || ""),
+          model: String(item.originalRelationType || "") === "gliner2+nli" ? (nliVerification.model || "") : (aiResult.model || ""),
           promptMode: aiResult.promptMode || "",
           promptVersion: "knowledge-graph-builder-v1",
         },
@@ -9174,20 +9517,44 @@ window.TrackerLensKnowledgeRuntime = (() => {
             !normalization.sourceLabel ||
             normalizeEntityToken(normalization.sourceLabel) === normalizeEntityToken(item.sourceLabel || "")
           ),
+          quality: {
+            ...quality,
+            provenance: String(item.originalRelationType || "ai-graph-builder"),
+          },
         },
         createdAt: now,
         updatedAt: now,
       };
-      acceptedRelations.push(await putRecord(STORES.relations, record));
+      retainEntity(finalSource);
+      retainEntity(finalTarget);
+      const saved = await putRecord(STORES.relations, record);
+      retainRelation(saved);
+      if (quality.status === "attention") attentionRelations.push(saved);
+    }
+    if (replaceExistingBuilder) {
+      const retainedBuilderRelationIds = new Set(acceptedRelations
+        .filter((relation) => relation.metadata?.graphBuilder)
+        .map((relation) => relation.id));
+      const retainedBuilderEntityIds = new Set(acceptedEntities
+        .filter((entity) => entity.metadata?.graphBuilder)
+        .map((entity) => entity.id));
+      await Promise.all([
+        deleteRecords(STORES.relations, priorBuilderRelations
+          .filter((relation) => !retainedBuilderRelationIds.has(relation.id))
+          .map((relation) => relation.id)),
+        deleteRecords(STORES.entities, priorBuilderEntities
+          .filter((entity) => !retainedBuilderEntityIds.has(entity.id))
+          .map((entity) => entity.id)),
+      ]);
     }
     const context = acceptedRelations.length
       ? [
-        "AI Knowledge Graph Builder accepted relations:",
+        "Knowledge Graph Builder organized relations:",
         ...acceptedRelations.map((relation, index) =>
           `[GB${index + 1}] ${relation.sourceLabel} -${relation.relationType}-> ${relation.targetLabel} confidence=${Number(relation.confidence || 0).toFixed(2)} evidence="${String(relation.evidence?.quote || "")}"`
         ),
       ].join("\n")
-      : "AI Knowledge Graph Builder accepted relations: none";
+      : "Knowledge Graph Builder organized relations: none";
     return {
       id: uniqueId("kgraph_builder"),
       workspaceId,
@@ -9202,9 +9569,42 @@ window.TrackerLensKnowledgeRuntime = (() => {
         relationCount: proposalRelations.length,
         rawEntityCount: Array.isArray(proposal.entities) ? proposal.entities.length : 0,
         rawRelationCount: Array.isArray(proposal.relations) ? proposal.relations.length : 0,
+        pythonRelationCandidateCount: pythonRelations.candidates.length,
+        verifiedPythonRelationCandidateCount: verifiedPythonCandidates.length,
+        attentionEntityCount: attentionEntities.length,
+        attentionRelationCount: attentionRelations.length,
+        nliAcceptedRelationCount: nliVerification.accepted.length,
+        nliAmbiguousRelationCount: nliVerification.ambiguous.length,
+        nliRejectedRelationCount: nliVerification.rejected.length,
         promptMode: aiResult.promptMode || "",
         normalizations: normalizedProposal.normalizations,
         rejectedCandidates,
+      },
+      dictionary: {
+        seedCount: dictionarySeedEntries.length,
+        seedIds: dictionarySeedEntries.map((entry) => entry.id).filter(Boolean),
+        registryEntryCount: dictionaryRegistryEntries.length,
+      },
+      eventContext: {
+        eventCount: eventContext.length,
+        eventIds: eventContext.map((entry) => entry.id).filter(Boolean),
+        inputChannel: ["knowledge.events.updated", "knowledge.event.context"].includes(String(event?.channel || "")) ? String(event.channel) : "",
+      },
+      pythonRelations: {
+        mode: relationExtractionMode,
+        candidateCount: pythonRelations.candidates.length,
+        verifiedCandidateCount: verifiedPythonCandidates.length,
+        model: pythonRelations.model,
+        revision: pythonRelations.revision,
+        algorithm: pythonRelations.algorithm,
+        nli: {
+          acceptedCount: nliVerification.accepted.length,
+          ambiguousCount: nliVerification.ambiguous.length,
+          rejectedCount: nliVerification.rejected.length,
+          model: nliVerification.model,
+          revision: nliVerification.revision,
+          algorithm: nliVerification.algorithm,
+        },
       },
       entities: acceptedEntities,
       relations: acceptedRelations,
@@ -11489,6 +11889,26 @@ window.TrackerLensKnowledgeRuntime = (() => {
       return this;
     }
 
+    async deliverToConnectedKnowledgeNodes(event = {}) {
+      const channel = String(event?.channel || "");
+      const sourceNodeId = String(event?.sourceNodeId || "");
+      if (!channel || !sourceNodeId) return;
+      const targets = (this.runtime.nodes || []).filter((candidate) =>
+        isKnowledgeNode(candidate) &&
+        (this.runtime.dependencies || []).some((dependency) =>
+          dependency.sourceNodeId === sourceNodeId &&
+          dependency.targetNodeId === candidate.id &&
+          dependencyAcceptsChannel(dependency, channel)
+        )
+      );
+      // EventBus delivery remains the normal path. This is a same-event fallback
+      // for a target whose subscription map is briefly stale during a worker refresh.
+      // handleEvent's execution key makes parallel normal/fallback delivery idempotent.
+      await Promise.all(targets.map((target) =>
+        this.handleEvent({ node: target, payload: event.payload, event })
+      ));
+    }
+
     async handleEvent({ node, payload, event }) {
       if (event?.meta?.runtimeActivityVisual) return;
       if (!node?.id || event?.sourceNodeId === node.id || event?.meta?.knowledgeRuntime === node.id) return;
@@ -11605,6 +12025,7 @@ window.TrackerLensKnowledgeRuntime = (() => {
           durationMs: 12000,
         });
         let outputChannel = nodeOutput(node, config, "knowledge.output");
+        let outputAlreadyEmitted = false;
         let result = null;
         if (subtype === "document-store" || subtype === "text-knowledge" || subtype === "workspace-memory" || subtype === "conversation-memory") {
           const document = await createDocument({ workspaceId: this.workspaceId, node, payload, event, config });
@@ -11891,13 +12312,15 @@ window.TrackerLensKnowledgeRuntime = (() => {
             label: "Emitting graph proposal",
             durationMs: 30000,
           });
-          await this.bus.emit("knowledge.graph.proposed", {
+          const graphProposalEvent = await this.bus.emit("knowledge.graph.proposed", {
             documentId: result.documentId,
             collectionId: result.collectionId,
             proposed: result.proposed,
             entityCount: result.entityCount,
             relationCount: result.relationCount,
             semanticRelationCount: result.semanticRelationCount,
+            eventContext: result.eventContext,
+            pythonRelations: result.pythonRelations,
             provider: result.provider,
             model: result.model,
             error: result.error,
@@ -11914,6 +12337,8 @@ window.TrackerLensKnowledgeRuntime = (() => {
               visualUntil: runtimeVisualUntil(),
             },
           });
+          await this.deliverToConnectedKnowledgeNodes(graphProposalEvent);
+          outputAlreadyEmitted = true;
           if (result.semanticRelations?.length) {
             await this.bus.emit("knowledge.graph.enriched", {
               documentId: result.documentId,
@@ -12079,20 +12504,23 @@ window.TrackerLensKnowledgeRuntime = (() => {
           result = { payload: clonePayload(payload), passthrough: true };
         }
         const latencyMs = Math.round(performance.now() - startedAt);
-        await this.bus.emit(outputChannel, result, {
-          workspaceId: this.workspaceId,
-          eventType: "knowledge_emit",
-          sourceNodeId: node.id,
-          latencyMs,
-          meta: {
-            knowledgeRuntime: node.id,
-            inputEventId: event?.id || "",
-            inputChannel: event?.channel || "",
-            runId,
-            subtype,
-            visualUntil: runtimeVisualUntil(),
-          },
-        });
+        if (!outputAlreadyEmitted) {
+          const outputEvent = await this.bus.emit(outputChannel, result, {
+            workspaceId: this.workspaceId,
+            eventType: "knowledge_emit",
+            sourceNodeId: node.id,
+            latencyMs,
+            meta: {
+              knowledgeRuntime: node.id,
+              inputEventId: event?.id || "",
+              inputChannel: event?.channel || "",
+              runId,
+              subtype,
+              visualUntil: runtimeVisualUntil(),
+            },
+          });
+          await this.deliverToConnectedKnowledgeNodes(outputEvent);
+        }
         const resultSummary = knowledgeRuntimeResultSummary(result);
         const finalStatus = resultSummary.error
           ? "warning"

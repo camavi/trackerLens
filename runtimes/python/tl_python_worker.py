@@ -50,6 +50,12 @@ NLP_MODEL_REVISION = os.environ.get("TL_NLP_MODEL_REVISION", "").strip()
 RAG_RERANK_MODEL_DIR = os.environ.get("TL_RAG_RERANK_MODEL_DIR", "").strip()
 RAG_RERANK_MODEL_ID = os.environ.get("TL_RAG_RERANK_MODEL_ID", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1").strip()
 RAG_RERANK_MODEL_REVISION = os.environ.get("TL_RAG_RERANK_MODEL_REVISION", "").strip()
+GRAPH_RELATIONS_MODEL_DIR = os.environ.get("TL_GRAPH_RELATIONS_MODEL_DIR", "").strip()
+GRAPH_RELATIONS_MODEL_ID = os.environ.get("TL_GRAPH_RELATIONS_MODEL_ID", "fastino/gliner2.5-multi-v1").strip()
+GRAPH_RELATIONS_MODEL_REVISION = os.environ.get("TL_GRAPH_RELATIONS_MODEL_REVISION", "").strip()
+GRAPH_NLI_MODEL_DIR = os.environ.get("TL_GRAPH_NLI_MODEL_DIR", "").strip()
+GRAPH_NLI_MODEL_ID = os.environ.get("TL_GRAPH_NLI_MODEL_ID", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli").strip()
+GRAPH_NLI_MODEL_REVISION = os.environ.get("TL_GRAPH_NLI_MODEL_REVISION", "").strip()
 try:
     ANNOTATION_MODELS = json.loads(os.environ.get("TL_NLP_ANNOTATION_MODELS", "[]"))
 except json.JSONDecodeError:
@@ -63,6 +69,9 @@ annotation_models = {
 }
 nlp_model = None
 rag_rerank_model = None
+graph_relations_model = None
+graph_nli_model = None
+graph_nli_tokenizer = None
 annotation_pipelines = {}
 
 if NLP_MODEL_DIR:
@@ -186,6 +195,245 @@ if RAG_RERANK_MODEL_DIR and os.path.isdir(RAG_RERANK_MODEL_DIR):
             "revision": RAG_RERANK_MODEL_REVISION,
         }
 
+if GRAPH_RELATIONS_MODEL_DIR and os.path.isdir(GRAPH_RELATIONS_MODEL_DIR):
+    @node("graph.gliner2_relations", capabilities=["knowledge.graph.relation_extract"])
+    def gliner2_relations(ctx, inputs):
+        """Extract schema-bound relation candidates from TL-authorized chunks only.
+
+        This intentionally returns candidates with exact source sentences. Trackers
+        Lens, and optionally its configured LLM verifier, decide what is accepted
+        and persisted; GLiNER2 never accesses a graph store or external service.
+        """
+        global graph_relations_model
+        import re
+
+        chunks = inputs.get("chunks")
+        relation_types = [str(item).strip() for item in inputs.get("relationTypes", []) if str(item).strip()]
+        if not isinstance(chunks, list):
+            raise ValueError("inputs.chunks must be an array")
+        if not relation_types:
+            raise ValueError("inputs.relationTypes must be a non-empty array")
+        if graph_relations_model is None:
+            from gliner2 import AutoExtractor
+            graph_relations_model = AutoExtractor.from_pretrained(GRAPH_RELATIONS_MODEL_DIR)
+
+        def sentence_with_pair(text, source, target):
+            source_pattern = re.escape(str(source).strip())
+            target_pattern = re.escape(str(target).strip())
+            for sentence in re.split(r"(?<=[.!?])\s+|\n+", str(text)):
+                if re.search(r"(?<!\w)" + source_pattern + r"(?!\w)", sentence, flags=re.IGNORECASE) and re.search(r"(?<!\w)" + target_pattern + r"(?!\w)", sentence, flags=re.IGNORECASE):
+                    return sentence.strip()
+            return ""
+
+        def pairs(value):
+            if isinstance(value, dict):
+                head = value.get("head") or value.get("source") or value.get("subject")
+                tail = value.get("tail") or value.get("target") or value.get("object")
+                return [(head, tail)] if head and tail else []
+            if isinstance(value, (list, tuple)) and len(value) >= 2 and not isinstance(value[0], (list, tuple, dict)):
+                return [(value[0], value[1])]
+            if isinstance(value, list):
+                result = []
+                for item in value:
+                    result.extend(pairs(item))
+                return result
+            return []
+
+        candidates = []
+        seen = set()
+
+        def add_candidates(extracted, chunk_id, full_text):
+            if not isinstance(extracted, dict):
+                return
+            for relation_type, values in extracted.items():
+                if relation_type not in relation_types:
+                    continue
+                for source, target in pairs(values):
+                    source_label = str(source or "").strip()
+                    target_label = str(target or "").strip()
+                    quote = sentence_with_pair(full_text, source_label, target_label)
+                    if not source_label or not target_label or not quote:
+                        continue
+                    key = (
+                        source_label.casefold(),
+                        relation_type,
+                        target_label.casefold(),
+                        re.sub(r"\s+", " ", quote).casefold(),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append({
+                        "sourceLabel": source_label,
+                        "targetLabel": target_label,
+                        "relationType": relation_type,
+                        "confidence": 0.72,
+                        "evidence": {"chunkId": chunk_id, "quote": quote},
+                    })
+
+        total = len(chunks)
+        for index, chunk in enumerate(chunks):
+            if ctx.cancelled:
+                return {"cancelled": True}
+            if not isinstance(chunk, dict):
+                raise ValueError("Each inputs.chunks item must be an object")
+            chunk_id = str(chunk.get("id", "")).strip()
+            text = chunk.get("text")
+            if not chunk_id or not isinstance(text, str):
+                raise ValueError("Each chunk requires a string id and text")
+            # Whole chunks retain cross-sentence context. A second sentence pass
+            # improves recall for compact factual statements that a long chunk can
+            # dilute. Both paths keep the exact original sentence as evidence and
+            # are deduplicated before leaving the managed Python boundary.
+            passages = [text]
+            passages.extend(sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+|\n+", text) if sentence.strip())
+            for passage in passages:
+                result = graph_relations_model.extract_relations(passage, relation_types)
+                extracted = result.get("relation_extraction", {}) if isinstance(result, dict) else {}
+                add_candidates(extracted, chunk_id, text)
+            if total:
+                ctx.progress(((index + 1) / total) * 100, processed=index + 1, total=total)
+        return {
+            "candidates": candidates,
+            "candidateCount": len(candidates),
+            "model": GRAPH_RELATIONS_MODEL_ID,
+            "revision": GRAPH_RELATIONS_MODEL_REVISION,
+            "algorithm": "gliner2-schema-relation-extraction",
+        }
+
+if GRAPH_NLI_MODEL_DIR and os.path.isdir(GRAPH_NLI_MODEL_DIR):
+    @node("graph.nli_verify_relations", capabilities=["knowledge.graph.relation_verify"])
+    def nli_verify_relations(ctx, inputs):
+        """Score only TL-approved relation candidates against their exact evidence quote.
+
+        The local NLI model returns entailment/neutral/contradiction probabilities.
+        It does not write graph data and never sees storage, a network, or arbitrary text.
+        """
+        global graph_nli_model, graph_nli_tokenizer
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        candidates = inputs.get("candidates")
+        if not isinstance(candidates, list):
+            raise ValueError("inputs.candidates must be an array")
+        if graph_nli_model is None or graph_nli_tokenizer is None:
+            graph_nli_tokenizer = AutoTokenizer.from_pretrained(GRAPH_NLI_MODEL_DIR, local_files_only=True)
+            graph_nli_model = AutoModelForSequenceClassification.from_pretrained(GRAPH_NLI_MODEL_DIR, local_files_only=True)
+            graph_nli_model.eval()
+
+        templates = {
+            "en": {
+                "friend_of": "{source} is friends with {target}.", "helps": "{source} helps {target}.",
+                "tries_to_help": "{source} tries to help {target}.", "healed_by": "{source} is healed by {target}.",
+                "cannot_speak": "{source} cannot speak.", "lives_in": "{source} lives in {target}.",
+                "seeks": "{source} seeks {target}.", "protects": "{source} protects {target}.",
+                "opposes": "{source} opposes {target}.", "reveals": "{source} reveals {target}.",
+                "uses": "{source} uses {target}.", "has_property": "{source} has the property {target}.",
+                "transforms": "{source} transforms into {target}.", "is_part_of": "{source} is part of {target}.",
+                "causes": "{source} causes {target}.", "leads_to": "{source} leads to {target}.",
+                "teaches": "{source} teaches {target}.", "discovers": "{source} discovers {target}.",
+                "asks_for": "{source} asks for {target}.", "receives_from": "{source} receives {target}.",
+                "gives_to": "{source} gives something to {target}.", "works_for": "{source} works for {target}.",
+                "implements": "{source} implements {target}.", "explains": "{source} explains {target}.",
+                "stores_in": "{source} stores something in {target}.", "retrieves_from": "{source} retrieves something from {target}.",
+                "powered_by": "{source} is powered by {target}.", "depends_on": "{source} depends on {target}.",
+                "interfaces_with": "{source} interfaces with {target}.", "connects_to": "{source} connects to {target}.",
+                "configures": "{source} configures {target}.", "loads": "{source} loads {target}.",
+                "splits": "{source} splits {target}.", "splits_into": "{source} splits into {target}.",
+                "processes": "{source} processes {target}.", "compares_with": "{source} compares with {target}.",
+                "contains": "{source} contains {target}.", "mentions": "{source} mentions {target}.",
+                "references": "{source} references {target}.", "represents": "{source} represents {target}.",
+                "encounters": "{source} encounters {target}.",
+            },
+            "de": {
+                "friend_of": "{source} ist mit {target} befreundet.", "helps": "{source} hilft {target}.",
+                "tries_to_help": "{source} versucht, {target} zu helfen.", "healed_by": "{source} wird von {target} geheilt.",
+                "cannot_speak": "{source} kann nicht sprechen.", "lives_in": "{source} lebt in {target}.",
+                "seeks": "{source} sucht {target}.", "protects": "{source} beschützt {target}.",
+                "opposes": "{source} stellt sich gegen {target}.", "reveals": "{source} enthüllt {target}.",
+                "uses": "{source} benutzt {target}.", "has_property": "{source} hat die Eigenschaft {target}.",
+                "transforms": "{source} verwandelt sich in {target}.", "is_part_of": "{source} ist Teil von {target}.",
+            },
+            "it": {
+                "friend_of": "{source} è amico di {target}.", "helps": "{source} aiuta {target}.",
+                "tries_to_help": "{source} cerca di aiutare {target}.", "healed_by": "{source} viene guarito da {target}.",
+                "cannot_speak": "{source} non può parlare.", "lives_in": "{source} vive in {target}.",
+                "seeks": "{source} cerca {target}.", "protects": "{source} protegge {target}.",
+                "opposes": "{source} si oppone a {target}.", "reveals": "{source} rivela {target}.",
+                "uses": "{source} usa {target}.", "has_property": "{source} ha la proprietà {target}.",
+                "transforms": "{source} si trasforma in {target}.", "is_part_of": "{source} fa parte di {target}.",
+            },
+            "fr": {
+                "friend_of": "{source} est ami avec {target}.", "helps": "{source} aide {target}.",
+                "tries_to_help": "{source} essaie d'aider {target}.", "healed_by": "{source} est guéri par {target}.",
+                "cannot_speak": "{source} ne peut pas parler.", "lives_in": "{source} vit dans {target}.",
+                "seeks": "{source} cherche {target}.", "protects": "{source} protège {target}.",
+                "opposes": "{source} s'oppose à {target}.", "reveals": "{source} révèle {target}.",
+                "uses": "{source} utilise {target}.", "has_property": "{source} a la propriété {target}.",
+                "transforms": "{source} se transforme en {target}.", "is_part_of": "{source} fait partie de {target}.",
+            },
+            "es": {
+                "friend_of": "{source} es amigo de {target}.", "helps": "{source} ayuda a {target}.",
+                "tries_to_help": "{source} intenta ayudar a {target}.", "healed_by": "{source} es curado por {target}.",
+                "cannot_speak": "{source} no puede hablar.", "lives_in": "{source} vive en {target}.",
+                "seeks": "{source} busca {target}.", "protects": "{source} protege a {target}.",
+                "opposes": "{source} se opone a {target}.", "reveals": "{source} revela {target}.",
+                "uses": "{source} usa {target}.", "has_property": "{source} tiene la propiedad {target}.",
+                "transforms": "{source} se transforma en {target}.", "is_part_of": "{source} forma parte de {target}.",
+            },
+        }
+        normalized = []
+        verified = []
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("sourceLabel", "")).strip()
+            target = str(item.get("targetLabel", "")).strip()
+            relation_type = str(item.get("relationType", "")).strip().lower()
+            quote = str((item.get("evidence") or {}).get("quote", "")).strip()
+            language = str(item.get("language", "en")).strip().lower().split("-", 1)[0]
+            if not source or not target or not relation_type or not quote or source.casefold() == target.casefold():
+                continue
+            template = templates.get(language, {}).get(relation_type) or templates["en"].get(relation_type)
+            if not template:
+                verified.append({
+                    **item,
+                    "nli": {"entailment": 0.0, "neutral": 1.0, "contradiction": 0.0, "templateSupported": False},
+                })
+                continue
+            normalized.append({"candidate": item, "premise": quote, "hypothesis": template.format(source=source, target=target)})
+        if not normalized:
+            return {"verified": verified, "candidateCount": len(verified), "model": GRAPH_NLI_MODEL_ID, "revision": GRAPH_NLI_MODEL_REVISION, "algorithm": "multilingual-nli-entailment"}
+
+        labels = {str(key).lower(): str(value).lower() for key, value in (graph_nli_model.config.id2label or {}).items()}
+        entailment_index = next((int(key) for key, value in labels.items() if "entail" in value), None)
+        neutral_index = next((int(key) for key, value in labels.items() if "neutral" in value), None)
+        contradiction_index = next((int(key) for key, value in labels.items() if "contrad" in value), None)
+        if entailment_index is None:
+            raise ValueError("The managed NLI model does not expose an entailment label")
+        batch_size = 8
+        total = len(normalized)
+        for start in range(0, total, batch_size):
+            if ctx.cancelled:
+                return {"cancelled": True}
+            batch = normalized[start:start + batch_size]
+            encoded = graph_nli_tokenizer([item["premise"] for item in batch], [item["hypothesis"] for item in batch], padding=True, truncation=True, return_tensors="pt")
+            with torch.no_grad():
+                scores = torch.softmax(graph_nli_model(**encoded).logits, dim=-1).tolist()
+            for item, probabilities in zip(batch, scores):
+                verified.append({
+                    **item["candidate"],
+                    "hypothesis": item["hypothesis"],
+                    "nli": {
+                        "entailment": float(probabilities[entailment_index]),
+                        "neutral": float(probabilities[neutral_index]) if neutral_index is not None else 0.0,
+                        "contradiction": float(probabilities[contradiction_index]) if contradiction_index is not None else 0.0,
+                        "templateSupported": True,
+                    },
+                })
+            ctx.progress((min(total, start + len(batch)) / total) * 100, processed=min(total, start + len(batch)), total=total)
+        return {"verified": verified, "candidateCount": len(verified), "model": GRAPH_NLI_MODEL_ID, "revision": GRAPH_NLI_MODEL_REVISION, "algorithm": "multilingual-nli-entailment"}
+
 if annotation_models:
     @node("nlp.annotations", capabilities=["nlp.annotations"])
     def annotations(ctx, inputs):
@@ -259,6 +507,8 @@ OPERATION_IDS = {
     "hybrid_search": "rag.hybrid_search",
     "cross_encoder_rerank": "rag.cross_encoder_rerank",
     "annotations": "nlp.annotations",
+    "gliner2_relations": "graph.gliner2_relations",
+    "nli_verify_relations": "graph.nli_verify_relations",
 }
 
 def execute(message):
