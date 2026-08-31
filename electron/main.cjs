@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, session } = require("electron");
+const { app, BrowserWindow, ipcMain, nativeImage, shell, session } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -16,6 +16,7 @@ const graphRelationsPackManifest = require("../runtimes/python/packs/graph-relat
 const projectRoot = path.resolve(__dirname, "..");
 const preloadPath = path.join(__dirname, "preload.cjs");
 const entryPoint = path.join(projectRoot, "flowMap.html");
+const websiteLogoIconPath = path.join(projectRoot, "icons", "logo128.png");
 const isDevelopment = process.env.NODE_ENV !== "production";
 const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";
 const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
@@ -238,6 +239,7 @@ const createWindow = () => {
     minHeight: 720,
     show: false,
     title: "Trackers Lens",
+    icon: websiteLogoIconPath,
     webPreferences: {
       preload: preloadPath,
       additionalArguments: [
@@ -275,6 +277,7 @@ ipcMain.handle("trackers-core:request", (_event, command, payload) =>
 );
 
 app.whenReady().then(() => {
+  if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(websiteLogoIconPath));
   tlCore = createTlCore({
     appVersion: app.getVersion(),
     platform: process.platform,
