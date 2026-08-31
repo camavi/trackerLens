@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeImage, shell, session } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, session } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -6,6 +6,7 @@ const { createTlCore } = require("../core/desktop/tl-core.cjs");
 const { ManagedPythonRuntime } = require("../core/desktop/managed-python-runtime.cjs");
 const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
 const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
+const { CustomNodePackageManager } = require("../core/desktop/custom-node-package-manager.cjs");
 const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs");
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
@@ -57,6 +58,7 @@ let pythonPoc = null;
 let pythonNlp = null;
 let pythonGraphRelations = null;
 let persistence = null;
+let customNodePackageManager = null;
 const createPythonNlpRuntime = () => {
   if (!fs.existsSync(pythonNlpPythonPath)) return null;
   if (!pythonNlp) pythonNlp = new ManagedPythonRuntime({
@@ -277,6 +279,31 @@ ipcMain.handle("trackers-core:request", (_event, command, payload) =>
 );
 
 app.whenReady().then(() => {
+  persistence = new DesktopPersistence({ databasePath: path.join(app.getPath("userData"), "trackers-lens.sqlite") });
+  customNodePackageManager = new CustomNodePackageManager({
+    packagesDirectory: path.join(app.getPath("userData"), "custom-node-packages"),
+    persistence
+  });
+  const selectCustomNodeArchive = async () => {
+    const result = await dialog.showOpenDialog({
+      title: "Importa Custom Node",
+      properties: ["openFile"],
+      filters: [{ name: "Trackers Lens Custom Node", extensions: ["zip"] }]
+    });
+    const archivePath = result.canceled ? "" : String(result.filePaths?.[0] || "");
+    return archivePath;
+  };
+  const customNodePackages = {
+    inspect: async () => {
+      const archivePath = await selectCustomNodeArchive();
+      return archivePath ? customNodePackageManager.inspectFile(archivePath) : { cancelled: true };
+    },
+    install: async () => {
+      const archivePath = await selectCustomNodeArchive();
+      return archivePath ? customNodePackageManager.installFile(archivePath) : { cancelled: true };
+    },
+    list: () => customNodePackageManager.listInstalled()
+  };
   if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(websiteLogoIconPath));
   tlCore = createTlCore({
     appVersion: app.getVersion(),
@@ -290,7 +317,8 @@ app.whenReady().then(() => {
       pythonPacks,
       pythonRuntimeCatalog,
       pythonPackInstaller,
-      persistence: (persistence = new DesktopPersistence({ databasePath: path.join(app.getPath("userData"), "trackers-lens.sqlite") }))
+      customNodePackages,
+      persistence
     }
   });
   persistence.initialize();

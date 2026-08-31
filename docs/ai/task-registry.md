@@ -56,14 +56,15 @@ Current sub-steps:
 
 ### TASK-029: Custom Node Packages
 
-Status: Approved next architecture task; not started.
+Status: Started. Phase 1 defines `.tl-node.zip` as the portable artifact and implements the Core-owned manifest-only import contract; package runtime execution remains blocked.
 Priority: High.
 Risk: High because external JavaScript cannot be fully controlled; TL must distinguish verified marketplace packages from unverified local/external installs.
 
 Current sub-steps:
 
-- Package contract: planned. Define `.tl-node.zip` / folder packages with `node.json`, `runtime.js`, `ui.json`, `assets/`, `schemas/`, `examples/` and `README.md`.
-- Manifest-only import: planned. First implementation should load metadata, palette registration, assets and UI schema without executing package JS.
+- Package contract: in progress. `.tl-node.zip` contains `node.json`, optional `runtime.js`, `ui.json`, `assets/`, `schemas/`, `examples/` and `README.md`; Core records archive hash/provenance in `tl_packages`, while Flow Maps retain only package references/configuration.
+- Manifest-only import: in progress. Core validates and copies the archive into app data, catalogs metadata/assets/UI schema and registers a disabled palette entry without executing package JS or revealing filesystem paths to the renderer.
+- Manifest-only backend: implemented. `CustomNodePackageManager` parses `.tl-node.zip` centrally (including traversal/encryption/compression checks), validates root `node.json`, copies the exact archive by SHA-256 into Core-owned app data and writes an opaque `tl_packages` record with `installState=manifest-only` and `runtimeExecution=blocked`. The validated preload bridge exposes inspect/install/list only; palette UI registration and the explicit install-review dialog are the next Phase 1 work.
 - Permission model: planned. Packages must declare network, filesystem, AI provider, memory and runtime graph permissions; TL must show requested permissions before install.
 - Trust levels: planned. Nodes should be visibly marked as `verified`, `community`, `local-dev` or `blocked`.
 - Official marketplace: planned. Verified packages require signature checks, manifest validation, static analysis, AI-assisted code review, smoke tests and a verified badge.

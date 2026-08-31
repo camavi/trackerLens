@@ -26,6 +26,7 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
   const pythonPacks = adapters.pythonPacks || null;
   const pythonRuntimeCatalog = adapters.pythonRuntimeCatalog || null;
   const pythonPackInstaller = adapters.pythonPackInstaller || null;
+  const customNodePackages = adapters.customNodePackages || null;
   const persistence = adapters.persistence || null;
   const flags = { ...DEFAULT_FEATURE_FLAGS, ...featureFlags };
 
@@ -88,6 +89,15 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
       case "desktop.persistence.setDevelopmentRuntimeActive":
         if (!persistence?.setDevelopmentRuntimeActive) throw errorWithCode("Desktop persistence is unavailable", "PERSISTENCE_UNAVAILABLE");
         return persistence.setDevelopmentRuntimeActive({ active: Boolean(payload?.active) });
+      case "desktop.customNodePackages.inspect":
+        if (!customNodePackages?.inspect) throw errorWithCode("Custom Node package import is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
+        return customNodePackages.inspect();
+      case "desktop.customNodePackages.install":
+        if (!customNodePackages?.install) throw errorWithCode("Custom Node package import is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
+        return customNodePackages.install();
+      case "desktop.customNodePackages.list":
+        if (!customNodePackages?.list) throw errorWithCode("Custom Node package catalog is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
+        return customNodePackages.list();
       case "runtime.pythonPoc.status":
         if (!flags.pythonRuntime || !pythonPoc?.status) throw errorWithCode("Python POC is disabled", "PYTHON_POC_DISABLED");
         return pythonPoc.status();

@@ -701,7 +701,9 @@ Knowledge Runtime document upload/import UX, Knowledge Graph quality/analytics a
 
 Knowledge Dictionary Runtime is complete for the document-scoped product path. User verification covers Italian, Spanish, English, French and German; the Dictionary has evidence-grounded terms, scope/cleanup, ranking, Debug/View/export and consumer integration.
 
-Next: Custom Node Packages, starting with the manifest-only package contract and import flow. Explicit cross-document/collection Dictionary promotion remains an optional, separately scoped future capability.
+Current active work: Custom Node Packages. Phase 1 uses an importable `.tl-node.zip` artifact; Electron Main/TL Core validates and copies it into app data, SQLite catalogs its hash/provenance/permissions/trust, and runtime JavaScript stays blocked. Explicit cross-document/collection Dictionary promotion remains an optional, separately scoped future capability.
+
+- Custom Node Package manifest-only backend is implemented: Core parses and validates `.tl-node.zip` archives, rejects unsafe paths/encryption/unsupported compression, stores the exact SHA-256 artifact in app data and writes opaque `tl_packages` metadata. The renderer can only invoke the narrow inspect/install/list bridge and never sees a filesystem path; `runtime.js` is not loaded. Next within Phase 1: CMSwift import/review UI and disabled palette registration.
 
 ## Required Updates When Work Changes
 

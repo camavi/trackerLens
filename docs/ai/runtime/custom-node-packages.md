@@ -3,17 +3,35 @@
 Purpose: define the planned package, trust and marketplace model for developer-built Flow Map nodes.
 Read when: implementing Custom Node upload/install/runtime, marketplace verification, package security or developer SDK.
 Do not read when: working on built-in nodes unrelated to external packages.
-Last updated: 2026-07-30.
+Last updated: 2026-08-31.
 
 ## Direction
 
-Trackers Lens should support developer-built custom nodes through a package format, not loose ad-hoc scripts. A custom node may contain runtime code, UI schema, JSON schemas, images, files, examples and documentation.
+Trackers Lens supports developer-built custom nodes through an importable `.tl-node.zip` bundle, never loose ad-hoc scripts. A custom node may contain runtime code, UI schema, JSON schemas, images, files, examples and documentation.
 
 JavaScript custom runtime cannot be made 100% safe. TL must reduce risk with manifests, permissions, sandboxing, signing and marketplace verification, but must not claim perfect control over arbitrary external code.
 
+## Artifact and Persistence Rule
+
+The `.tl-node.zip` file is the portable package artifact. Electron Main/TL Core
+alone may read it, validate it and copy the exact archive into the Core-owned
+app-data package directory. The renderer, workers and package runtime never
+receive an archive path or filesystem handle.
+
+SQLite remains the authority for the installed-package catalog (`tl_packages`):
+package id/version, archive SHA-256, manifest summary, trust level, declared
+permissions, source/provenance and install state. Flow Maps persist only a
+package reference/version plus node configuration; they do not embed package
+files. This gives imports, upgrades, removal, audit and later dependency locks
+one Core-owned lifecycle without replacing the portable-file format.
+
+Manifest-only import stores and catalogs the archive but never loads, imports
+or executes `runtime.js`. Runtime execution is blocked until the later
+sandboxed-runtime phase.
+
 ## Package Shape
 
-Proposed folder/zip shape:
+Required `.tl-node.zip` root shape:
 
 ```text
 my-custom-node/
@@ -142,7 +160,7 @@ Sandboxing is defense-in-depth, not a full guarantee.
 
 ## Implementation Phases
 
-1. Manifest-only package import: load metadata, assets, UI schema and palette registration without executing external code.
+1. Manifest-only package import: validate and Core-copy a `.tl-node.zip`, catalog manifest/assets/UI schema and register a disabled palette entry without executing external code.
 2. Package asset support: icons, previews, JSON schemas, examples and sample flow import.
 3. Permission dialog: show requested permissions, trust level and verification status before install.
 4. Sandboxed runtime: execute `runtime.js` with restricted `{ input, config, tools, emit, log }` API.

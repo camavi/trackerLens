@@ -19,6 +19,11 @@ const trackers = Object.freeze({
       writeDevelopmentRecords: ({ storeName, records = [] } = {}) => request("desktop.persistence.writeDevelopmentRecords", { storeName: String(storeName || ""), records }),
       deleteDevelopmentRecords: ({ storeName, ids = [] } = {}) => request("desktop.persistence.deleteDevelopmentRecords", { storeName: String(storeName || ""), ids }),
       setDevelopmentRuntimeActive: (active) => request("desktop.persistence.setDevelopmentRuntimeActive", { active: Boolean(active) })
+    }),
+    customNodePackages: Object.freeze({
+      inspect: () => request("desktop.customNodePackages.inspect"),
+      install: () => request("desktop.customNodePackages.install"),
+      list: () => request("desktop.customNodePackages.list")
     })
   }),
   runtime: Object.freeze({

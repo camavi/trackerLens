@@ -41,6 +41,7 @@ Use `core/runtime/runtime-contract.js` for shared runtime contract/schema normal
 - Runtime Manager owns runtime registration, routing and health metadata. The Phase 4 JavaScript executor delegates to the existing node-controller path; Python registration, process lifecycle and transport are later work.
 - The Phase 5 Python POC runs only in Electron Main through a restricted TL Core adapter. Renderer code never receives a child-process handle, Python stays feature-flagged and it has no direct persistence access. Its single Flow Map `Python Test` processor uses the existing Event Bus and emits separate output, error and status channels.
 - Desktop SQLite is the only desktop persistence mode. It never exposes raw database handles/SQL to renderer, workers, Python or packages.
+- Custom Nodes are portable `.tl-node.zip` artifacts imported only by Electron Main/TL Core. Core stores the immutable archive in app data and records its package catalog/provenance in SQLite; Flow Maps retain package references/configuration only. Renderer, workers and packages never receive archive paths or filesystem handles, and imported runtime code remains blocked until the sandboxed-runtime phase.
 
 ## Safety
 

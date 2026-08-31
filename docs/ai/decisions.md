@@ -45,7 +45,7 @@ Last updated: 2026-08-25.
 - Apply must revalidate each step against current runtime state.
 - Time Travel snapshots should be captured before runtime writes.
 - High-impact deletes require explicit confirmation.
-- Custom Node packages may include JavaScript, assets, files and schemas, but TL must not claim arbitrary JS is 100% safe. Official Marketplace nodes require verification/signing and may be marked `verified`; local/external installs must be visibly marked unverified/local-dev with explicit warnings and permission gates.
+- Custom Node packages are portable `.tl-node.zip` artifacts. Electron Main/TL Core exclusively selects, validates and copies an archive into the app-data package directory; SQLite (`tl_packages`) holds the authoritative installed-package catalog, hashes, provenance, permissions, trust and lifecycle state. Flow Maps save only package references/configuration. Renderer, workers and package code never receive filesystem paths or handles. Manifest-only imports never execute package JavaScript; arbitrary JS remains blocked until a permissioned sandbox is shipped. Official Marketplace nodes require verification/signing and may be marked `verified`; local/external installs must be visibly marked unverified/local-dev with explicit warnings and permission gates.
 
 ## Endpoint Research
 
