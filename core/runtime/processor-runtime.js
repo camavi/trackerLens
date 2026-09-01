@@ -4,6 +4,7 @@ window.TrackerLensProcessorRuntime = (() => {
   const nowIso = () => new Date().toISOString();
   const pythonPocRuns = new Map();
   const pythonPocBridge = () => window.trackers?.runtime?.pythonPoc || null;
+  const customNodeSandboxBridge = () => window.trackers?.runtime?.customNodeSandbox || null;
   const executionId = (nodeId = "") => `${nodeId || "python"}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
   const announcePythonPoc = (detail = {}) => {
@@ -51,7 +52,7 @@ window.TrackerLensProcessorRuntime = (() => {
     String(node.runtime?.status || node.metadata?.runtimeStatus || node.status || "idle").toLowerCase();
 
   const isRunnableProcessor = (node = {}) =>
-    node.type === "processor" &&
+    (node.type === "processor" || (node.type === "custom" && node.metadata?.customPackage?.runtimeExecution === "sandboxed")) &&
     !node.metadata?.library &&
     !["paused", "disabled", "error", "disconnected"].includes(nodeStatus(node)) &&
     (nodeSubtype(node) !== "python-test" || Boolean(pythonPocBridge()?.run));
@@ -323,6 +324,9 @@ window.TrackerLensProcessorRuntime = (() => {
         if (nodeSubtype(node) === "python-test") {
           return this.performPythonTest({ node, payload, event, startedAt });
         }
+        if (node.metadata?.customPackage?.runtimeExecution === "sandboxed") {
+          return this.performCustomPackageSandbox({ node, payload, event, startedAt });
+        }
         const result = processPayload({ node, payload, event });
         const latencyMs = Math.round(performance.now() - startedAt);
         if (!result.emitted) {
@@ -450,6 +454,52 @@ window.TrackerLensProcessorRuntime = (() => {
         pythonPocRuns.delete(node.id);
         announcePythonPoc({ nodeId: node.id, status: "idle" });
       }
+    }
+
+    async performCustomPackageSandbox({ node, payload, event, startedAt }) {
+      const bridge = customNodeSandboxBridge();
+      const pkg = node.metadata?.customPackage || {};
+      if (!bridge?.run) {
+        const error = new Error("Custom Node sandbox is available only in Electron when explicitly enabled.");
+        error.code = "CUSTOM_NODE_SANDBOX_DISABLED";
+        throw error;
+      }
+      const result = await bridge.run({
+        packageId: pkg.packageId,
+        version: pkg.version,
+        archiveSha256: pkg.archive?.sha256,
+        nodeId: node.id,
+        inputs: { input: clonePayload(payload), [String(event?.channel || "input")]: clonePayload(payload) },
+        config: clonePayload(nodeConfig(node)),
+        context: {
+          workspaceId: this.workspaceId,
+          flowId: event?.flowId || "",
+          sourceNodeId: event?.sourceNodeId || "",
+          runId: event?.meta?.runId || payload?.runId || ""
+        },
+        timeoutMs: Number(nodeConfig(node).timeoutMs || 30000)
+      });
+      if (result.status !== "success") {
+        const error = new Error(result.diagnostics?.[0]?.message || "Custom Node sandbox failed.");
+        error.code = result.diagnostics?.[0]?.code || "CUSTOM_NODE_SANDBOX_FAILED";
+        throw error;
+      }
+      const latencyMs = Math.round(performance.now() - startedAt);
+      for (const sandboxEvent of result.events || []) {
+        if (sandboxEvent.kind === "emit") {
+          await this.bus.emit(sandboxEvent.port, sandboxEvent.data, {
+            workspaceId: this.workspaceId,
+            eventType: "custom_node_emit",
+            sourceNodeId: node.id,
+            latencyMs,
+            meta: { processorRuntime: node.id, customNodeSandbox: true, executionId: result.executionId, inputEventId: event?.id || "" }
+          });
+        } else if (sandboxEvent.kind === "log") {
+          await this.log({ node, message: sandboxEvent.message, context: { customNodeSandbox: true, executionId: result.executionId, data: sandboxEvent.data || {} } });
+        }
+      }
+      await this.log({ node, message: `Custom Node sandbox completed: ${node.label || node.id}`, context: { executionId: result.executionId, latencyMs } });
+      return result;
     }
   }
 

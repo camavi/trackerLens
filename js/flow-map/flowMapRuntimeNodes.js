@@ -4883,7 +4883,8 @@ const renderCustomRuntimeNodeInlineForm = (node = {}) => {
       { class: "tl-flow-node-builder-live-form tl-flow-custom-node-live-form", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
       _.strong("Runtime blocked"),
       _.span(`${pkg.packageId || node.label} · ${pkg.version || "local package"}`),
-      _.small(`Trust: ${pkg.trustLevel || "local-dev"} · Manifest-only import`)
+      _.small(`Trust: ${pkg.trustLevel || "local-dev"} · ${pkg.installState === "sandbox-ready" ? "Sandbox requires the desktop feature flag" : "Manifest-only import"}`),
+      btn({ class: "st-btn-sm", onclick: () => window.TrackerLensCustomNodePackages?.openDialog?.() }, icon("extension", "sm"), "Gestisci package")
     );
   }
   const layout = customNodeFormLayout(node);

@@ -5,7 +5,8 @@ const DEFAULT_FEATURE_FLAGS = Object.freeze({
   multiRuntime: false,
   pythonRuntime: false,
   pythonNlpDev: false,
-  pythonNodes: false
+  pythonNodes: false,
+  customNodeSandbox: false
 });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -27,6 +28,7 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
   const pythonRuntimeCatalog = adapters.pythonRuntimeCatalog || null;
   const pythonPackInstaller = adapters.pythonPackInstaller || null;
   const customNodePackages = adapters.customNodePackages || null;
+  const customNodeSandbox = adapters.customNodeSandbox || null;
   const persistence = adapters.persistence || null;
   const flags = { ...DEFAULT_FEATURE_FLAGS, ...featureFlags };
 
@@ -98,6 +100,23 @@ const createTlCore = ({ appVersion = "0.0.0", platform = "unknown", mode = "prod
       case "desktop.customNodePackages.list":
         if (!customNodePackages?.list) throw errorWithCode("Custom Node package catalog is unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
         return customNodePackages.list();
+      case "desktop.customNodePackages.grantPermissions":
+        if (!customNodePackages?.grantPermissions) throw errorWithCode("Custom Node package permissions are unavailable", "CUSTOM_NODE_PACKAGES_UNAVAILABLE");
+        if (!payload?.confirmed) throw errorWithCode("Custom Node permission grant requires confirmation", "CUSTOM_NODE_PERMISSION_CONFIRMATION_REQUIRED");
+        return customNodePackages.grantPermissions({
+          packageId: String(payload?.packageId || ""),
+          version: String(payload?.version || ""),
+          archiveSha256: String(payload?.archiveSha256 || ""),
+          permissions: payload?.permissions && typeof payload.permissions === "object" ? payload.permissions : {},
+          confirmed: true
+        });
+      case "desktop.customNodePackages.activateSandboxRuntime":
+        if (!flags.customNodeSandbox || !customNodePackages?.activateSandboxRuntime) throw errorWithCode("Custom Node sandbox is disabled", "CUSTOM_NODE_SANDBOX_DISABLED");
+        if (!payload?.confirmed) throw errorWithCode("Custom Node sandbox activation requires confirmation", "CUSTOM_NODE_SANDBOX_ACTIVATION_CONFIRMATION_REQUIRED");
+        return customNodePackages.activateSandboxRuntime({ packageId: String(payload?.packageId || ""), version: String(payload?.version || ""), archiveSha256: String(payload?.archiveSha256 || ""), confirmed: true });
+      case "runtime.customNodeSandbox.run":
+        if (!flags.customNodeSandbox || !customNodeSandbox?.run) throw errorWithCode("Custom Node sandbox is disabled", "CUSTOM_NODE_SANDBOX_DISABLED");
+        return customNodeSandbox.run(payload && typeof payload === "object" ? payload : {});
       case "runtime.pythonPoc.status":
         if (!flags.pythonRuntime || !pythonPoc?.status) throw errorWithCode("Python POC is disabled", "PYTHON_POC_DISABLED");
         return pythonPoc.status();

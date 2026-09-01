@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
+const { intersectPermissions, normalizePermissions: normalizeSandboxPermissions } = require("./custom-node-sandbox-contract.cjs");
 
 const PACKAGE_FORMAT = "tl-node-package/v1";
 const ZIP_EXTENSION = ".tl-node.zip";
@@ -9,6 +10,7 @@ const STORE_NAME = "tl_packages";
 const ZIP_EOCD_SIGNATURE = 0x06054b50;
 const ZIP_CENTRAL_SIGNATURE = 0x02014b50;
 const ZIP_LOCAL_SIGNATURE = 0x04034b50;
+const MAX_RUNTIME_SOURCE_BYTES = 2 * 1024 * 1024;
 
 const errorWithCode = (message, code) => Object.assign(new Error(message), { code });
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -143,6 +145,34 @@ const normalizeManifest = (rawManifest = {}, entries = []) => {
   });
 };
 
+// An import-time review aid, not a security sandbox or a safety verdict.
+// Runtime source is never evaluated here; the future sandbox must enforce
+// permissions independently of these transparent findings.
+const analyzeRuntimeSource = ({ archive, entries, manifest }) => {
+  const entryName = text(manifest?.runtime?.entry);
+  if (!entryName) return Object.freeze({ status: "not-applicable", entry: "", findings: [] });
+  const entry = entries.find((item) => item.name === entryName);
+  if (!entry) return Object.freeze({ status: "unavailable", entry: entryName, findings: [] });
+  const source = readZipEntry(archive, entry).toString("utf8");
+  const declared = manifest.permissions || {};
+  const rules = [
+    { code: "DYNAMIC_CODE", severity: "high", pattern: /\beval\s*\(|\bnew\s+Function\s*\(/, message: "Codice dinamico (eval/Function) rilevato." },
+    { code: "NODE_PROCESS", severity: "high", pattern: /\bprocess\b|\bchild_process\b|\bnode:child_process\b/, message: "Accesso al processo o a child_process rilevato." },
+    { code: "NODE_MODULE_LOAD", severity: "high", pattern: /\brequire\s*\(|\bimport\s*\(/, message: "Caricamento di moduli dinamico rilevato." },
+    { code: "NETWORK", severity: "medium", pattern: /\bfetch\s*\(|\bWebSocket\b|\bXMLHttpRequest\b/, permission: "network", message: "Uso diretto della rete rilevato." },
+    { code: "FILESYSTEM", severity: "medium", pattern: /\bnode:fs\b|\brequire\s*\(\s*["']fs["']|\bfs\./, permission: "filesystem", message: "Uso diretto del filesystem rilevato." },
+    { code: "BROWSER_STORAGE", severity: "medium", pattern: /\blocalStorage\b|\bsessionStorage\b|\bindexedDB\b/, permission: "memory", message: "Storage del browser rilevato." }
+  ];
+  const findings = rules.filter((rule) => rule.pattern.test(source)).map((rule) => Object.freeze({
+    code: rule.code,
+    severity: rule.severity,
+    message: rule.message,
+    permission: rule.permission || "",
+    permissionDeclared: rule.permission ? Boolean(declared[rule.permission]) : null
+  }));
+  return Object.freeze({ status: "reviewed", entry: entryName, findings });
+};
+
 const inspectArchive = (archive) => {
   const entries = listZipEntries(archive);
   const manifestEntry = entries.find((entry) => entry.name === "node.json");
@@ -155,11 +185,13 @@ const inspectArchive = (archive) => {
     throw errorWithCode("node.json non contiene JSON valido.", "CUSTOM_NODE_MANIFEST_INVALID");
   }
   const manifest = normalizeManifest(rawManifest, entries);
+  const staticAnalysis = analyzeRuntimeSource({ archive, entries, manifest });
   return Object.freeze({
     packageFormat: PACKAGE_FORMAT,
     archiveSha256: sha256(archive),
     manifest,
     files: entries.map((entry) => Object.freeze({ name: entry.name, compressedSize: entry.compressedSize, size: entry.uncompressedSize })),
+    staticAnalysis,
     runtimeExecution: "blocked"
   });
 };
@@ -202,8 +234,11 @@ class CustomNodePackageManager {
       manifest: clone(inspection.manifest),
       archive: { id: artifactId, format: ZIP_EXTENSION, sha256: inspection.archiveSha256, fileCount: inspection.files.length },
       files: inspection.files.map(clone),
+      staticAnalysis: clone(inspection.staticAnalysis),
       trustLevel: "local-dev",
       permissions: clone(inspection.manifest.permissions),
+      grantedPermissions: normalizeSandboxPermissions(),
+      permissionConsent: { status: "not-granted", grantedAt: "" },
       installState: "manifest-only",
       runtimeExecution: "blocked",
       installedAt: now(),
@@ -220,6 +255,103 @@ class CustomNodePackageManager {
     return records.filter((record) => record?.packageKind === "custom-node").map((record) => this.publicRecord(record));
   }
 
+  async grantPermissions({ packageId = "", version = "", archiveSha256 = "", permissions = {}, confirmed = false } = {}) {
+    if (!confirmed) throw errorWithCode("La concessione dei permessi richiede una conferma esplicita.", "CUSTOM_NODE_PERMISSION_CONFIRMATION_REQUIRED");
+    if (!this.persistence?.readDevelopmentRecords || !this.persistence?.writeDevelopmentRecords) {
+      throw errorWithCode("Catalogo SQLite dei pacchetti non disponibile.", "CUSTOM_NODE_PACKAGE_CATALOG_UNAVAILABLE");
+    }
+    const records = await this.persistence.readDevelopmentRecords({ storeName: STORE_NAME });
+    const matches = records.filter((record) => record?.packageKind === "custom-node"
+      && text(record.packageId) === text(packageId)
+      && text(record.version) === text(version)
+      && text(record.archive?.sha256) === text(archiveSha256));
+    if (matches.length !== 1) throw errorWithCode("Riferimento pacchetto non valido o non univoco.", "CUSTOM_NODE_PACKAGE_REFERENCE_INVALID");
+    const record = matches[0];
+    const nextRecord = {
+      ...record,
+      grantedPermissions: intersectPermissions(record.permissions || record.manifest?.permissions, permissions),
+      permissionConsent: { status: "granted", grantedAt: now() },
+      updatedAt: now()
+    };
+    await this.persistence.writeDevelopmentRecords({ storeName: STORE_NAME, records: [nextRecord] });
+    return Object.freeze(this.publicRecord(nextRecord));
+  }
+
+  async activateSandboxRuntime({ packageId = "", version = "", archiveSha256 = "", confirmed = false } = {}) {
+    if (!confirmed) throw errorWithCode("L'attivazione sandbox richiede una conferma esplicita.", "CUSTOM_NODE_SANDBOX_ACTIVATION_CONFIRMATION_REQUIRED");
+    if (!this.persistence?.readDevelopmentRecords || !this.persistence?.writeDevelopmentRecords) throw errorWithCode("Catalogo SQLite dei pacchetti non disponibile.", "CUSTOM_NODE_PACKAGE_CATALOG_UNAVAILABLE");
+    const records = await this.persistence.readDevelopmentRecords({ storeName: STORE_NAME });
+    const matches = records.filter((record) => record?.packageKind === "custom-node"
+      && text(record.packageId) === text(packageId)
+      && text(record.version) === text(version)
+      && text(record.archive?.sha256) === text(archiveSha256));
+    if (matches.length !== 1) throw errorWithCode("Riferimento pacchetto non valido o non univoco.", "CUSTOM_NODE_PACKAGE_REFERENCE_INVALID");
+    const record = matches[0];
+    if (record.permissionConsent?.status !== "granted") throw errorWithCode("Registra prima il consenso ai permessi dichiarati.", "CUSTOM_NODE_PERMISSION_CONSENT_REQUIRED");
+    if (text(record.manifest?.runtime?.mode) !== "sandboxed") throw errorWithCode("Il manifest non dichiara un runtime sandboxed.", "CUSTOM_NODE_RUNTIME_MODE_UNSUPPORTED");
+    const nextRecord = { ...record, installState: "sandbox-ready", runtimeExecution: "sandboxed", activatedAt: now(), updatedAt: now() };
+    await this.persistence.writeDevelopmentRecords({ storeName: STORE_NAME, records: [nextRecord] });
+    return Object.freeze(this.publicRecord(nextRecord));
+  }
+
+  async loadRuntimeSource({ packageId = "", version = "", archiveSha256 = "" } = {}) {
+    if (!this.persistence?.readDevelopmentRecords) throw errorWithCode("Catalogo SQLite dei pacchetti non disponibile.", "CUSTOM_NODE_PACKAGE_CATALOG_UNAVAILABLE");
+    const records = await this.persistence.readDevelopmentRecords({ storeName: STORE_NAME });
+    const record = records.find((item) => item?.packageKind === "custom-node"
+      && text(item.packageId) === text(packageId)
+      && text(item.version) === text(version)
+      && text(item.archive?.sha256) === text(archiveSha256));
+    if (!record) throw errorWithCode("Riferimento pacchetto non valido.", "CUSTOM_NODE_PACKAGE_REFERENCE_INVALID");
+    const archivePath = path.join(this.packagesDirectory, safePackageSegment(record.packageId), safePackageSegment(record.version), `${text(record.archive?.id)}${ZIP_EXTENSION}`);
+    const archive = await fs.promises.readFile(archivePath);
+    if (sha256(archive) !== text(record.archive?.sha256)) throw errorWithCode("Hash archivio non coerente.", "CUSTOM_NODE_ARCHIVE_HASH_MISMATCH");
+    const inspected = inspectArchive(archive);
+    const entry = listZipEntries(archive).find((item) => item.name === inspected.manifest.runtime.entry);
+    if (!entry) throw errorWithCode("Entry runtime non disponibile.", "CUSTOM_NODE_RUNTIME_ENTRY_MISSING");
+    return { record: this.publicRecord(record), source: readZipEntry(archive, entry).toString("utf8") };
+  }
+
+  // This method is intentionally Core-only: it returns the verified source to
+  // the Main-owned sandbox coordinator, never through the renderer bridge.
+  async loadSandboxRuntime({ packageId = "", version = "", archiveSha256 = "" } = {}) {
+    if (!this.persistence?.readDevelopmentRecords) throw errorWithCode("Catalogo SQLite dei pacchetti non disponibile.", "CUSTOM_NODE_PACKAGE_CATALOG_UNAVAILABLE");
+    const records = await this.persistence.readDevelopmentRecords({ storeName: STORE_NAME });
+    const matches = records.filter((item) => item?.packageKind === "custom-node"
+      && text(item.packageId) === text(packageId)
+      && text(item.version) === text(version)
+      && text(item.archive?.sha256) === text(archiveSha256));
+    if (matches.length !== 1) throw errorWithCode("Riferimento pacchetto non valido o non univoco.", "CUSTOM_NODE_PACKAGE_REFERENCE_INVALID");
+    const record = matches[0];
+    if (text(record.runtimeExecution, "blocked") !== "sandboxed") {
+      throw errorWithCode("Il runtime del pacchetto non è abilitato per la sandbox.", "CUSTOM_NODE_RUNTIME_BLOCKED");
+    }
+    const archivePath = path.join(this.packagesDirectory, safePackageSegment(record.packageId), safePackageSegment(record.version), `${text(record.archive?.id)}${ZIP_EXTENSION}`);
+    const archive = await fs.promises.readFile(archivePath);
+    if (sha256(archive) !== text(record.archive?.sha256)) throw errorWithCode("Hash archivio non coerente.", "CUSTOM_NODE_ARCHIVE_HASH_MISMATCH");
+    const inspected = inspectArchive(archive);
+    if (inspected.archiveSha256 !== text(record.archive?.sha256)
+      || inspected.manifest.id !== text(record.packageId)
+      || inspected.manifest.version !== text(record.version)
+      || inspected.manifest.runtime.mode !== "sandboxed") {
+      throw errorWithCode("Manifest del pacchetto non coerente con il catalogo sandbox.", "CUSTOM_NODE_RUNTIME_MANIFEST_MISMATCH");
+    }
+    const entry = listZipEntries(archive).find((item) => item.name === inspected.manifest.runtime.entry);
+    if (!entry) throw errorWithCode("Entry runtime non disponibile.", "CUSTOM_NODE_RUNTIME_ENTRY_MISSING");
+    if (entry.uncompressedSize > MAX_RUNTIME_SOURCE_BYTES) throw errorWithCode("runtime.js supera la dimensione massima consentita.", "CUSTOM_NODE_RUNTIME_SOURCE_TOO_LARGE");
+    const source = readZipEntry(archive, entry);
+    if (source.length > MAX_RUNTIME_SOURCE_BYTES) throw errorWithCode("runtime.js supera la dimensione massima consentita.", "CUSTOM_NODE_RUNTIME_SOURCE_TOO_LARGE");
+    return Object.freeze({
+      packageRecord: {
+        ...record,
+        manifest: clone(inspected.manifest),
+        permissions: clone(record.permissions || inspected.manifest.permissions),
+        grantedPermissions: normalizeSandboxPermissions(record.grantedPermissions),
+        archive: clone(record.archive)
+      },
+      source: source.toString("utf8")
+    });
+  }
+
   publicRecord(record = {}) {
     return {
       id: text(record.id),
@@ -234,14 +366,17 @@ class CustomNodePackageManager {
       manifest: clone(record.manifest || {}),
       archive: clone(record.archive || {}),
       files: Array.isArray(record.files) ? record.files.map(clone) : [],
+      staticAnalysis: clone(record.staticAnalysis || { status: "not-reviewed", entry: "", findings: [] }),
       trustLevel: text(record.trustLevel, "local-dev"),
       permissions: clone(record.permissions || {}),
+      grantedPermissions: normalizeSandboxPermissions(record.grantedPermissions),
+      permissionConsent: clone(record.permissionConsent || { status: "not-granted", grantedAt: "" }),
       installState: text(record.installState, "manifest-only"),
-      runtimeExecution: "blocked",
+      runtimeExecution: text(record.runtimeExecution, "blocked") === "sandboxed" ? "sandboxed" : "blocked",
       installedAt: text(record.installedAt),
       updatedAt: text(record.updatedAt)
     };
   }
 }
 
-module.exports = { PACKAGE_FORMAT, ZIP_EXTENSION, STORE_NAME, CustomNodePackageManager, inspectArchive, listZipEntries, normalizeManifest };
+module.exports = { PACKAGE_FORMAT, ZIP_EXTENSION, STORE_NAME, MAX_RUNTIME_SOURCE_BYTES, CustomNodePackageManager, analyzeRuntimeSource, inspectArchive, listZipEntries, normalizeManifest };

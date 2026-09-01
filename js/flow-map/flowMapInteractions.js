@@ -124,7 +124,7 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
       runtimeMetadata: item.runtime || item.manifest?.runtime || {},
       customPackage: item.customPackage ? {
         ...item.customPackage,
-        runtimeExecution: "blocked",
+        runtimeExecution: item.customPackage.runtimeExecution === "sandboxed" ? "sandboxed" : "blocked",
       } : null,
       runtimeBlocked: Boolean(item.runtimeBlocked || item.customPackage?.runtimeExecution === "blocked"),
       runtimeStatus: item.runtimeBlocked || item.customPackage?.runtimeExecution === "blocked" ? "disabled" : "",
@@ -147,6 +147,47 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
   await promptMissingManagedPythonPack(node, item);
   return node || null;
 };
+
+// Package activation is catalog-owned, while placed Flow Map nodes keep a
+// snapshot of that catalog reference. Reconcile existing nodes on catalog
+// refresh so a node inserted during manifest-only import does not remain
+// permanently disabled after the exact package is explicitly activated.
+window.addEventListener("trackers-custom-node-packages-updated", async (event) => {
+  const packages = Array.isArray(event.detail?.packages) ? event.detail.packages : [];
+  if (!packages.length || !state?.runtime?.nodes?.length) return;
+  const byReference = new Map(packages.map((pkg) => [`${pkg.packageId}|${pkg.version}|${pkg.archive?.sha256 || ""}`, pkg]));
+  const updates = state.runtime.nodes
+    .filter((node) => node.metadata?.customPackage?.packageId)
+    .map((node) => {
+      const current = node.metadata.customPackage;
+      const pkg = byReference.get(`${current.packageId}|${current.version}|${current.archive?.sha256 || ""}`);
+      if (!pkg) return null;
+      const sandboxed = pkg.runtimeExecution === "sandboxed";
+      if ((current.runtimeExecution === "sandboxed") === sandboxed && Boolean(node.metadata.runtimeBlocked) === !sandboxed) return null;
+      return {
+        ...node,
+        runtime: { ...(node.runtime || {}), ...(sandboxed ? { status: node.runtime?.status === "disabled" ? "idle" : node.runtime?.status || "idle" } : { status: "disabled" }) },
+        metadata: {
+          ...(node.metadata || {}),
+          customPackage: { ...current, installState: pkg.installState || current.installState, runtimeExecution: sandboxed ? "sandboxed" : "blocked" },
+          runtimeBlocked: !sandboxed,
+          runtimeStatus: sandboxed ? "" : "disabled"
+        }
+      };
+    })
+    .filter(Boolean);
+  if (!updates.length) return;
+  await Promise.all(updates.map(async (node) => {
+    await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node });
+    await window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode?.({ node });
+  }));
+  await loadRuntime({ force: true, silent: true });
+});
+
+// The first catalog refresh happens before this interaction module is loaded.
+// Request one more read after installing the listener to reconcile persisted
+// Flow Map nodes when the page is reopened.
+void window.TrackerLensCustomNodePackages?.refreshInstalled?.();
 
 const flowPythonInstallProgressText = (progress = {}) => {
   const downloaded = Number(progress.downloadedBytes || 0);

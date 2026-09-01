@@ -29,6 +29,51 @@ Manifest-only import stores and catalogs the archive but never loads, imports
 or executes `runtime.js`. Runtime execution is blocked until the later
 sandboxed-runtime phase.
 
+### Import-time static audit
+
+Before an archive is copied, TL Core reads its declared runtime entry as plain
+text and records a transparent, non-executing static audit. It reports obvious
+dynamic-code, process/module-loading, network, filesystem and browser-storage
+patterns, including when a detected API has no corresponding declared
+permission. This audit is a review signal only: it neither proves a package is
+safe nor grants a capability, and runtime remains blocked. The eventual
+sandbox must enforce permissions independently of this audit.
+
+Declared permissions and granted permissions are separate catalog fields. Every
+new local package begins with no granted capability. A later activation surface
+must obtain explicit user confirmation against the exact package id, version
+and archive SHA-256; Core intersects that consent with the manifest, so a
+grant can never expand the package's declared authority. Recording consent does
+not enable a manifest-only runtime.
+
+### Sandboxed runner protocol (foundation)
+
+`core/desktop/custom-node-sandbox-contract.cjs` defines
+`tl-custom-node-sandbox/v1`, the only protocol a future runner may use. Core
+creates a request with an opaque package id/version/archive hash, node inputs,
+configuration and the intersection of declared and explicitly granted
+permissions. It never passes a package path, filesystem handle, Node/Electron
+API or unrestricted IPC handle.
+
+The runner may send only `ready`, `emit`, `log`, `tool.call` and `result`
+messages. `emit` is limited to manifest-declared output ports. `tool.call` is
+validated at the Core broker against the granted capability: `ai.complete`,
+memory read/write, runtime-graph read, or runtime-graph mutation preflight.
+No direct network, filesystem, database or graph mutation API is part of the
+protocol. A manifest-only record cannot produce a valid sandbox request.
+
+The runner implementation is deliberately still pending. It must be an
+ephemeral Electron sandboxed renderer with Node integration disabled, no
+privileged preload API, no package path, deny-by-default network policy and a
+single Core-brokered message channel. `vm` and a Node child/utility process are
+not acceptable isolation boundaries for untrusted package JavaScript.
+
+`CustomNodeSandboxBroker` is the Core-owned stateful counterpart to that
+protocol. It opens only catalog-validated requests, validates every runner
+message again, records an inspectable per-run trace and rejects messages after
+completion. The Electron window is not connected yet; this lets the security
+boundary be tested independently before code execution is introduced.
+
 ## Package Shape
 
 Required `.tl-node.zip` root shape:

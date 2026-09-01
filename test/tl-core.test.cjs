@@ -297,6 +297,15 @@ test("TL Core keeps the development NLP pack behind a separate narrow bridge", a
   assert.deepEqual(calls, [{ executionId: "nlp_1", operation: "text_embedding" }, { cancelled: "nlp_1" }]);
 });
 
+test("TL Core exposes Custom Node sandbox runs only when explicitly feature-gated", async () => {
+  const blocked = createTlCore();
+  await assert.rejects(blocked.request("runtime.customNodeSandbox.run", {}), { code: "CUSTOM_NODE_SANDBOX_DISABLED" });
+  const core = createTlCore({ featureFlags: { customNodeSandbox: true }, adapters: { customNodeSandbox: { run: async (payload) => ({ status: "success", payload }) } } });
+  const result = await core.request("runtime.customNodeSandbox.run", { nodeId: "custom_1" });
+  assert.equal(result.status, "success");
+  assert.equal(result.payload.nodeId, "custom_1");
+});
+
 test("Python package resolution is declarative and exposes no installer", async () => {
   const resolver = new PythonPackResolver({
     packs: [{

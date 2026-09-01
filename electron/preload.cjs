@@ -23,11 +23,29 @@ const trackers = Object.freeze({
     customNodePackages: Object.freeze({
       inspect: () => request("desktop.customNodePackages.inspect"),
       install: ({ importId } = {}) => request("desktop.customNodePackages.install", { importId: String(importId || "") }),
-      list: () => request("desktop.customNodePackages.list")
+      list: () => request("desktop.customNodePackages.list"),
+      grantPermissions: ({ packageId, version, archiveSha256, permissions = {}, confirmed = false } = {}) => request("desktop.customNodePackages.grantPermissions", {
+        packageId: String(packageId || ""), version: String(version || ""), archiveSha256: String(archiveSha256 || ""), permissions, confirmed: Boolean(confirmed)
+      }),
+      activateSandboxRuntime: ({ packageId, version, archiveSha256, confirmed = false } = {}) => request("desktop.customNodePackages.activateSandboxRuntime", {
+        packageId: String(packageId || ""), version: String(version || ""), archiveSha256: String(archiveSha256 || ""), confirmed: Boolean(confirmed)
+      })
     })
   }),
   runtime: Object.freeze({
     getStatus: () => request("runtime.getStatus"),
+    customNodeSandbox: Object.freeze({
+      run: ({ packageId, version, archiveSha256, nodeId, inputs = {}, config = {}, context = {}, timeoutMs } = {}) => request("runtime.customNodeSandbox.run", {
+        packageId: String(packageId || ""),
+        version: String(version || ""),
+        archiveSha256: String(archiveSha256 || ""),
+        nodeId: String(nodeId || ""),
+        inputs: inputs && typeof inputs === "object" ? inputs : {},
+        config: config && typeof config === "object" ? config : {},
+        context: context && typeof context === "object" ? context : {},
+        timeoutMs: Number(timeoutMs || 0)
+      })
+    }),
     pythonRuntime: Object.freeze({
       getCatalog: () => request("runtime.pythonRuntime.getCatalog"),
       getInstallPlan: ({ packId } = {}) => request("runtime.pythonRuntime.getInstallPlan", { packId: String(packId || "") }),

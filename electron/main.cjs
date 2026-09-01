@@ -8,6 +8,9 @@ const { ManagedPythonRuntime } = require("../core/desktop/managed-python-runtime
 const { PythonRuntimeCatalog } = require("../core/desktop/python-runtime-catalog.cjs");
 const { ManagedPythonPackInstaller } = require("../core/desktop/managed-python-pack-installer.cjs");
 const { CustomNodePackageManager } = require("../core/desktop/custom-node-package-manager.cjs");
+const { CustomNodeSandboxBroker } = require("../core/desktop/custom-node-sandbox-broker.cjs");
+const { CustomNodeElectronRunner } = require("../core/desktop/custom-node-electron-runner.cjs");
+const { CustomNodeToolDispatcher } = require("../core/desktop/custom-node-tool-dispatcher.cjs");
 const { DesktopPersistence } = require("../core/desktop/desktop-persistence.cjs");
 const { PythonPackResolver } = require("../core/runtime/python-pack-resolver.cjs");
 const nlpPackManifest = require("../runtimes/python/packs/nlp/pack.json");
@@ -22,6 +25,7 @@ const websiteLogoIconPath = path.join(projectRoot, "icons", "logo128.png");
 const isDevelopment = process.env.NODE_ENV !== "production";
 const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";
 const pythonPocEnabled = process.env.TL_ENABLE_PYTHON_POC === "1";
+const customNodeSandboxEnabled = process.env.TL_ENABLE_CUSTOM_NODE_SANDBOX === "1";
 const pythonNlpPythonPath = path.join(projectRoot, "runtimes/python/envs/nlp/bin/python");
 const pythonNlpModelPath = path.join(projectRoot, "runtimes/python/models/paraphrase-multilingual-MiniLM-L12-v2");
 const pythonRagRerankModelPath = path.join(projectRoot, "runtimes/python/models/mmarco-mMiniLMv2-L12-H384-v1");
@@ -60,6 +64,7 @@ let pythonNlp = null;
 let pythonGraphRelations = null;
 let persistence = null;
 let customNodePackageManager = null;
+let customNodeSandboxRunner = null;
 const pendingCustomNodeImports = new Map();
 const createPythonNlpRuntime = () => {
   if (!fs.existsSync(pythonNlpPythonPath)) return null;
@@ -200,6 +205,19 @@ const contentSecurityPolicy = [
   "form-action 'self'"
 ].join("; ");
 
+const customNodeSandboxContentSecurityPolicy = [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "script-src 'self' blob:",
+  "style-src 'self'",
+  "img-src data: blob:",
+  "connect-src 'none'",
+  "worker-src 'none'",
+  "frame-src 'none'",
+  "form-action 'none'"
+].join("; ");
+
 const isSafeExternalUrl = (value) => {
   try {
     const url = new URL(String(value || ""));
@@ -233,6 +251,22 @@ const configureSessionSecurity = () => {
       }
     });
   });
+};
+
+// Each untrusted package receives a disposable, dedicated Electron partition.
+// The trusted runner page needs only its local scripts and Blob module source;
+// every network protocol and every browser permission is denied at the session.
+const configureCustomNodeSandboxSession = (partition = "") => {
+  const sandboxSession = session.fromPartition(String(partition));
+  sandboxSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  sandboxSession.setPermissionCheckHandler(() => false);
+  sandboxSession.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] }, (_details, callback) => callback({ cancel: true }));
+  sandboxSession.webRequest.onHeadersReceived((details, callback) => callback({
+    responseHeaders: {
+      ...details.responseHeaders,
+      "Content-Security-Policy": [customNodeSandboxContentSecurityPolicy]
+    }
+  }));
 };
 
 const createWindow = () => {
@@ -280,12 +314,86 @@ ipcMain.handle("trackers-core:request", (_event, command, payload) =>
   tlCore.request(String(command || ""), payload && typeof payload === "object" ? payload : {})
 );
 
+ipcMain.handle("trackers-custom-node-sandbox:message", (event, message) => {
+  if (!customNodeSandboxRunner) {
+    throw Object.assign(new Error("Il runner sandbox dei Custom Node non è abilitato."), { code: "CUSTOM_NODE_SANDBOX_DISABLED" });
+  }
+  return customNodeSandboxRunner.receive({
+    senderId: event.sender.id,
+    message: message && typeof message === "object" ? message : {}
+  });
+});
+
+ipcMain.handle("trackers-custom-node-sandbox:tool", (event, message) => {
+  if (!customNodeSandboxRunner) throw Object.assign(new Error("Il runner sandbox dei Custom Node non è abilitato."), { code: "CUSTOM_NODE_SANDBOX_DISABLED" });
+  return customNodeSandboxRunner.callTool({ senderId: event.sender.id, message: message && typeof message === "object" ? message : {} });
+});
+
 app.whenReady().then(() => {
   persistence = new DesktopPersistence({ databasePath: path.join(app.getPath("userData"), "trackers-lens.sqlite") });
   customNodePackageManager = new CustomNodePackageManager({
     packagesDirectory: path.join(app.getPath("userData"), "custom-node-packages"),
     persistence
   });
+  if (customNodeSandboxEnabled) {
+    const toolDispatcher = new CustomNodeToolDispatcher({ persistence });
+    const broker = new CustomNodeSandboxBroker({ onToolCall: (call) => toolDispatcher.dispatch(call) });
+    customNodeSandboxRunner = new CustomNodeElectronRunner({
+      BrowserWindow,
+      broker,
+      runnerPage: path.join(__dirname, "custom-node-sandbox-runner.html"),
+      runnerPreload: path.join(__dirname, "custom-node-sandbox-preload.cjs"),
+      configureSession: configureCustomNodeSandboxSession
+    });
+  }
+  // Deliberately Main-only for now. Flow Map/Runtime Manager wiring will call
+  // this coordinator only after it can provide an authorized node execution.
+  // No renderer command returns archive source or starts arbitrary packages.
+  const launchCustomNodeSandbox = async ({ packageId = "", version = "", archiveSha256 = "", nodeId = "", inputs = {}, config = {}, context = {}, timeoutMs: requestedTimeoutMs = 30000 } = {}) => {
+    if (!customNodeSandboxRunner) throw Object.assign(new Error("Il runner sandbox dei Custom Node non è abilitato."), { code: "CUSTOM_NODE_SANDBOX_DISABLED" });
+    const runtime = await customNodePackageManager.loadSandboxRuntime({ packageId, version, archiveSha256 });
+    const request = customNodeSandboxRunner.broker.open({
+      nodeId,
+      packageRecord: runtime.packageRecord,
+      inputs,
+      config,
+      context,
+      grantedPermissions: runtime.packageRecord.grantedPermissions
+    });
+    try {
+      const launched = await customNodeSandboxRunner.launch({ request, source: runtime.source });
+      const timeoutMs = Math.max(1000, Math.min(600000, Number(requestedTimeoutMs || 30000)));
+      const timeout = setTimeout(() => {
+        customNodeSandboxRunner.broker.fail({
+          executionId: request.executionId,
+          code: "CUSTOM_NODE_SANDBOX_TIMEOUT",
+          message: `Custom Node sandbox timeout dopo ${timeoutMs}ms.`
+        });
+        customNodeSandboxRunner.close(request.executionId);
+      }, timeoutMs);
+      try {
+        const terminal = await customNodeSandboxRunner.broker.wait(request.executionId);
+        const trace = customNodeSandboxRunner.broker.get(request.executionId);
+        return {
+          executionId: launched.executionId,
+          status: terminal.status,
+          outputs: terminal.outputs && typeof terminal.outputs === "object" ? terminal.outputs : {},
+          diagnostics: Array.isArray(terminal.diagnostics) ? terminal.diagnostics : [],
+          events: (trace?.events || []).filter((event) => ["emit", "log"].includes(event.kind))
+        };
+      } finally {
+        clearTimeout(timeout);
+        customNodeSandboxRunner.close(request.executionId);
+      }
+    } catch (error) {
+      customNodeSandboxRunner.broker.fail({
+        executionId: request.executionId,
+        code: "CUSTOM_NODE_SANDBOX_LAUNCH_FAILED",
+        message: error?.message || String(error)
+      });
+      throw error;
+    }
+  };
   const selectCustomNodeArchive = async () => {
     const result = await dialog.showOpenDialog({
       title: "Importa Custom Node",
@@ -310,14 +418,17 @@ app.whenReady().then(() => {
       pendingCustomNodeImports.delete(String(importId));
       return customNodePackageManager.installFile(archivePath);
     },
-    list: () => customNodePackageManager.listInstalled()
+    list: () => customNodePackageManager.listInstalled(),
+    grantPermissions: (payload = {}) => customNodePackageManager.grantPermissions(payload),
+    activateSandboxRuntime: (payload = {}) => customNodePackageManager.activateSandboxRuntime(payload),
+    runSandbox: (payload = {}) => launchCustomNodeSandbox(payload)
   };
   if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(websiteLogoIconPath));
   tlCore = createTlCore({
     appVersion: app.getVersion(),
     platform: process.platform,
     mode: isDevelopment ? "development" : "production",
-    featureFlags: { multiRuntime: pythonPocEnabled || pythonNlpEnabled(), pythonRuntime: pythonPocEnabled, pythonNlpDev: true },
+    featureFlags: { multiRuntime: pythonPocEnabled || pythonNlpEnabled(), pythonRuntime: pythonPocEnabled, pythonNlpDev: true, customNodeSandbox: customNodeSandboxEnabled },
     adapters: {
       openExternal: (url) => shell.openExternal(url),
       pythonPoc: pythonPocEnabled ? (pythonPoc = new ManagedPythonRuntime()) : null,
@@ -326,6 +437,7 @@ app.whenReady().then(() => {
       pythonRuntimeCatalog,
       pythonPackInstaller,
       customNodePackages,
+      customNodeSandbox: customNodePackages,
       persistence
     }
   });
