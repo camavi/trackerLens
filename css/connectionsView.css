@@ -1088,6 +1088,11 @@ body {
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0.1));
 }
 
+.tl-link-shell.is-embedded { width: 100%; }
+.tl-link-shell.is-embedded .tl-link-topbar { grid-template-columns: minmax(0, 1fr) auto; padding-left: var(--tl-shell-topbar-inset); }
+.tl-link-shell.is-embedded .tl-link-brand { display: none !important; }
+.tl-link-shell.is-embedded .tl-link-body { grid-template-columns: minmax(0, 1fr); }
+
 .tl-link-activity-svg {
   position: absolute;
   inset: 8px 8px 30px;

@@ -3,7 +3,7 @@
 Purpose: active work and immediate next step.
 Read when: always after `AI.md`.
 Do not read when: never during development sessions.
-Last updated: 2026-08-31.
+Last updated: 2026-09-02.
 
 ## Active Area
 
@@ -11,10 +11,11 @@ Managed Python graph relations: GLiNER2/NLI and the configured LLM are graph pro
 
 ## Next Task
 
-The direct RAG Search cutover is complete and verified. `nlp.annotations` is now the Knowledge Dictionary foundation: spaCy provides local managed linguistic proposals only (tokens, lemmas, POS, dependencies and NER spans); TL keeps evidence validation, scope, ranking, events and SQLite. Dictionary Builder’s direct-cutover default is `hybrid`: the configured LLM sees only spaCy/TL proposals and source evidence, can accept/reject them but cannot add a term, and an unavailable/invalid verification fails explicitly. The current graph vertical slice is complete and user-verified: `Knowledge Graph Builder Agent` uses managed GLiNER2/NLI and the configured LLM to produce the graph. TL organizes scope, persistence, de-duplication, provenance and quality labels; it does not discard semantically weak, unregistered, low-confidence or NLI-ambiguous/rejected facts. Only technically unrepresentable records (such as blank endpoints) are blocked. GLiNER2 and NLI use an isolated `graph` environment because its `transformers <5` dependency must not alter the existing `nlp` environment used by embeddings/RAG. Graph Query reuse remains a separate decision. Custom Node Packages follow this focused runtime capability work. See `docs/ai/runtime/custom-node-packages.md`.
+Desktop shell navigation is now the immediate work. The current sidebar uses document navigation between separate HTML entry points, so every section destroys and recreates the renderer state as if it were a web site. Trackers Lens will move to one persistent Electron renderer shell with internal History API navigation and explicit view lifecycles. The shell, sidebar and desktop bridge remain mounted; each view owns `mount`/`dispose` so listeners, timers and workers are not leaked. Existing `.html` entry points remain temporary compatibility routes while views migrate one at a time. Flow Map and Workspace must be migrated only after their page-owned runtime/worker lifecycle is made explicit; no hidden runtime restart or data loss is acceptable during a tab switch.
 
 ## Current Work
 
+- Persistent desktop navigation (TASK-031): `app.html` is now Electron's default shell. Library, Library Flow Map, Workspace, Settings, AI, Runtime Python, Statistics, Connections, DevTools, Profile and Database Explorer are embedded views with a persistent sidebar/outlet and explicit cleanup. Flow Map now has an explicit bootstrap lifecycle and is registered in the shell, but its stop/start behavior still requires interactive QA for Live Test, worker ownership and canvas recovery before this migration is considered verified.
 - Python runtime direction is being clarified in `docs/ai/python_migration_guide.md`: TL will integrate established Python modules through thin capability adapters rather than recreate specialist algorithms. Future Python node manifests must declare managed module/pack requirements, pinned versions or lockfile and install policy; Runtime Manager resolves them only through approved environments with explicit install consent when needed.
 - Python node audit is complete for the 88-node Flow Map palette in `docs/ai/runtime/python-node-audit.md`. No control-plane node is a Python migration target; `text.embedding` for Embedding Generator/Vector Memory is implemented, and `text.rerank` is now implemented for RAG Search only. Graph Query remains a later separate decision.
 - `tl-node-execution/v1` now normalizes declarative `dependencies.python` requirements (`environment`, modules/version constraints, lockfile and install policy) without triggering installation. The `text.embedding` managed-resolver/pack path is the next implementation slice; the existing provider/local-hash embedding path remains unchanged.

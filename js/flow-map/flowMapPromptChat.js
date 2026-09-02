@@ -6463,7 +6463,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       const rejected = item.kind === "flow-chat-rejected-pattern";
       return _.div(
         { class: `tl-flow-prompt-pattern-row${rejected ? " is-rejected" : ""}` },
-        _.span({ class: "tl-flow-prompt-pattern-icon" }, icon(rejected ? "block" : meta.messageKind === "plan" ? "account_tree" : "memory", "sm")),
+        _.span({ class: "tl-flow-prompt-pattern-icon" }, flowMapIcon(rejected ? "block" : meta.messageKind === "plan" ? "account_tree" : "memory", "sm")),
         _.div(
           { class: "tl-flow-prompt-pattern-main" },
           _.strong(item.name || "Pattern Flow Chat"),
@@ -6479,7 +6479,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
         ),
         _.div(
           { class: "tl-flow-prompt-pattern-actions" },
-          rejected ? null : btn({
+          rejected ? null : flowMapBtn({
             class: "is-ghost is-icon-only",
             "aria-label": "Usa pattern",
             title: "Carica questo pattern nel prompt",
@@ -6488,8 +6488,8 @@ const openFlowPromptChatDialog = async (options = {}) => {
               dialog?.close?.();
               focusPromptDraft();
             },
-          }, icon("input", "sm")),
-          rejected ? null : btn({
+          }, flowMapIcon("input", "sm")),
+          rejected ? null : flowMapBtn({
             class: "is-ghost is-icon-only",
             "aria-label": "Crea flow da pattern",
             title: "Prepara un flow da questo pattern",
@@ -6497,8 +6497,8 @@ const openFlowPromptChatDialog = async (options = {}) => {
               dialog?.close?.();
               analyze(`crea un flow professionale da questo pattern salvato:\n${item.text || item.summary || prompt}`);
             },
-          }, icon("add_link", "sm")),
-          btn({
+          }, flowMapIcon("add_link", "sm")),
+          flowMapBtn({
             class: "is-ghost is-danger is-icon-only",
             "aria-label": "Elimina pattern",
             title: rejected ? "Elimina questa memoria negativa" : "Elimina questo pattern dalla memoria",
@@ -6509,7 +6509,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
               refreshDialog();
               refresh();
             },
-          }, icon("delete", "sm"))
+          }, flowMapIcon("delete", "sm"))
         )
       );
     };
@@ -6517,7 +6517,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       { class: "tl-flow-prompt-pattern-dialog-body" },
       _.label(
         { class: "tl-flow-prompt-pattern-search" },
-        icon("search", "sm"),
+        flowMapIcon("search", "sm"),
         _.input({
           type: "search",
           value: query,
@@ -6553,13 +6553,13 @@ const openFlowPromptChatDialog = async (options = {}) => {
       content: () => _.div({ "data-flow-prompt-pattern-dialog": "true" }, renderBody()),
       actions: ({ close }) => _.Toolbar(
         { align: "end", gap: 8 },
-        btn({
+        flowMapBtn({
           onclick: async () => {
             patterns = await listPatternMemories(query);
             refreshDialog();
           },
-        }, icon("refresh", "sm"), "Aggiorna"),
-        btn({ onclick: close }, "Chiudi")
+        }, flowMapIcon("refresh", "sm"), "Aggiorna"),
+        flowMapBtn({ onclick: close }, "Chiudi")
       ),
     });
     dialog.open();
@@ -7441,25 +7441,25 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const renderPreflight = () => !preflight ? null : _.details(
       { class: `tl-flow-prompt-preflight is-${preflight.status || "ready"}`, ...(preflightExpanded ? { open: true } : {}) },
       _.summary(
-        icon(preflight.ok ? "verified" : "warning", "sm"),
+        flowMapIcon(preflight.ok ? "verified" : "warning", "sm"),
         _.span(
           _.strong(preflight.ok ? "Applica con controllo" : "Controllo bloccato"),
           _.em(preflight.summary || "Validazione piano")
         ),
-        icon("expand_more", "sm")
+        flowMapIcon("expand_more", "sm")
       ),
       _.div(
         { class: "tl-flow-prompt-preflight-body" },
         preflight.whatWillHappen?.length ? _.section(
           _.h4("Cosa fara"),
-          ...preflight.whatWillHappen.map((item) => _.span(icon("check_circle", "sm"), item))
+          ...preflight.whatWillHappen.map((item) => _.span(flowMapIcon("check_circle", "sm"), item))
         ) : null,
         preflight.checks?.length ? _.section(
           _.h4("Validazioni"),
           ...preflight.checks.map((item) =>
             _.span(
               { class: `is-${item.status || "ok"}` },
-              icon(item.status === "blocked" ? "error" : item.status === "warn" ? "warning" : "check_circle", "sm"),
+              flowMapIcon(item.status === "blocked" ? "error" : item.status === "warn" ? "warning" : "check_circle", "sm"),
               _.strong(item.label),
               _.em(item.detail || "")
             )
@@ -7467,30 +7467,30 @@ const openFlowPromptChatDialog = async (options = {}) => {
         ) : null,
         preflight.blockers?.length ? _.section(
           _.h4("Blocchi"),
-          ...preflight.blockers.map((item) => _.span({ class: "is-blocked" }, icon("error", "sm"), item))
+          ...preflight.blockers.map((item) => _.span({ class: "is-blocked" }, flowMapIcon("error", "sm"), item))
         ) : null,
         preflight.warnings?.length ? _.section(
           _.h4("Rischi / conflitti"),
-          ...preflight.warnings.map((item) => _.span({ class: "is-warn" }, icon("warning", "sm"), item))
+          ...preflight.warnings.map((item) => _.span({ class: "is-warn" }, flowMapIcon("warning", "sm"), item))
         ) : null
       )
     );
     const renderSelfRepair = () => !selfRepair?.attempts ? null : _.details(
       { class: "tl-flow-prompt-self-repair" },
       _.summary(
-        icon(selfRepair.repaired ? "auto_fix_high" : "fact_check", "sm"),
+        flowMapIcon(selfRepair.repaired ? "auto_fix_high" : "fact_check", "sm"),
         _.span(
           _.strong(selfRepair.repaired ? "Self repair" : "Validazione AI"),
           _.em(`${selfRepair.attempts} tentativ${selfRepair.attempts === 1 ? "o" : "i"}${selfRepair.repaired ? " · corretto" : ""}`)
         ),
-        icon("expand_more", "sm")
+        flowMapIcon("expand_more", "sm")
       ),
       _.div(
         { class: "tl-flow-prompt-self-repair-list" },
         ...(selfRepair.log || []).map((item) =>
           _.span(
             { class: item.ok ? "is-ok" : "is-warn" },
-            icon(item.ok ? "check_circle" : item.json ? "sync_problem" : "data_object", "sm"),
+            flowMapIcon(item.ok ? "check_circle" : item.json ? "sync_problem" : "data_object", "sm"),
             _.strong(`Tentativo ${item.attempt}`),
             _.em(item.ok
               ? "JSON e preflight validi"
@@ -7521,9 +7521,9 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const renderSimilarPatterns = () => !similarPatterns.length ? null : _.details(
       { class: "tl-flow-prompt-pattern-hints" },
       _.summary(
-        icon("memory", "sm"),
+        flowMapIcon("memory", "sm"),
         _.span(_.strong("Pattern simili"), _.em(`${similarPatterns.length} dalla memoria`)),
-        icon("expand_more", "sm")
+        flowMapIcon("expand_more", "sm")
       ),
       _.div(
         { class: "tl-flow-prompt-pattern-hint-list" },
@@ -7531,7 +7531,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           _.div(
             { class: "tl-flow-prompt-pattern-hint" },
             _.span(
-              icon("auto_awesome_motion", "sm"),
+              flowMapIcon("auto_awesome_motion", "sm"),
               _.strong(pattern.name || "Pattern salvato"),
               _.em([
                 pattern.nodes?.length ? `${pattern.nodes.length} nodi` : "",
@@ -7539,13 +7539,13 @@ const openFlowPromptChatDialog = async (options = {}) => {
                 pattern.quality?.label ? `qualita ${pattern.quality.label}` : "",
               ].filter(Boolean).join(" · ") || "pattern")
             ),
-            btn({
+            flowMapBtn({
               class: "is-ghost is-icon-only",
               "aria-label": "Usa pattern simile",
               disabled: draft.busy,
               title: "Rigenera usando questo pattern approvato",
               onclick: () => analyze(similarPatternPrompt(pattern)),
-            }, icon("input", "sm"))
+            }, flowMapIcon("input", "sm"))
           )
         )
       )
@@ -7554,17 +7554,17 @@ const openFlowPromptChatDialog = async (options = {}) => {
       { class: "tl-flow-prompt-message-plan" },
       _.div(
         { class: `tl-flow-prompt-planner-badge is-${plan.planner?.mode || "local"}` },
-        icon(["ai", "ai-brain"].includes(plan.planner?.mode) ? "psychology" : "rule", "sm"),
+        flowMapIcon(["ai", "ai-brain"].includes(plan.planner?.mode) ? "psychology" : "rule", "sm"),
         _.span(flowPromptPlannerLabel(plan.planner))
       ),
       plan.notice ? _.div(
         { class: "tl-flow-prompt-endpoint-source-warning" },
-        icon("warning", "sm"),
+        flowMapIcon("warning", "sm"),
         _.span(plan.notice)
       ) : null,
       memoryGuard ? _.div(
         { class: "tl-flow-prompt-endpoint-source-warning is-memory-guard" },
-        icon("block", "sm"),
+        flowMapIcon("block", "sm"),
         _.span([
           memoryGuard.excludedByRejection ? `${memoryGuard.excludedByRejection} pattern esclusi dalla memoria negativa` : "",
           memoryGuard.rejectedPatterns ? `${memoryGuard.rejectedPatterns} rifiuti considerati` : "",
@@ -7572,7 +7572,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       ) : null,
       conversationLabel ? _.div(
         { class: "tl-flow-prompt-endpoint-source-warning is-conversation-context" },
-        icon("forum", "sm"),
+        flowMapIcon("forum", "sm"),
         _.span(conversationLabel)
       ) : null,
       renderSelfRepair(),
@@ -7580,10 +7580,10 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: "tl-flow-prompt-worklead" },
         _.summary(
           { class: "tl-flow-prompt-worklead-head" },
-          icon("assignment_turned_in", "sm"),
+          flowMapIcon("assignment_turned_in", "sm"),
           _.span(_.strong("Capo lavoro"), _.em(workLead.next)),
           _.code(workLead.plan),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.div(
           { class: "tl-flow-prompt-worklead-rows" },
@@ -7599,7 +7599,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           _.h4("Nodi"),
           ...(plan.nodes || []).map((node) =>
             _.span({ class: `tl-flow-prompt-mini-row is-${node.action || "create"}` },
-              icon(node.icon || "extension", "sm"),
+              flowMapIcon(node.icon || "extension", "sm"),
               _.strong(node.label || "Node"),
               _.em(node.action === "reuse" ? "reuse" : "create")
             )
@@ -7609,7 +7609,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           _.h4("Links"),
           ...(plan.edges || []).map((edge) =>
             _.span({ class: `tl-flow-prompt-mini-row${edge.duplicate ? " is-reuse" : ""}` },
-              icon(edge.duplicate ? "link" : "add_link", "sm"),
+              flowMapIcon(edge.duplicate ? "link" : "add_link", "sm"),
               _.strong(`${edge.sourceLabel} -> ${edge.targetLabel}`),
               _.em(edge.duplicate ? "reuse" : `${edge.sourcePort} -> ${edge.targetPort}`)
             )
@@ -7621,29 +7621,29 @@ const openFlowPromptChatDialog = async (options = {}) => {
       refinementActions.length ? _.details(
         { class: "tl-flow-prompt-plan-options" },
         _.summary(
-          icon("tune", "sm"),
+          flowMapIcon("tune", "sm"),
           _.span(_.strong("Opzioni"), _.em(`${refinementActions.length} alternative`)),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.div(
           { class: "tl-flow-prompt-choice-buttons" },
           ...refinementActions.map((action) =>
-            btn({
+            flowMapBtn({
               class: "is-ghost",
               disabled: draft.busy,
               onclick: () => analyze(action.prompt),
               title: action.prompt,
-            }, icon(action.iconName || "tune", "sm"), action.label)
+            }, flowMapIcon(action.iconName || "tune", "sm"), action.label)
           )
         )
       ) : null,
       (plan.nodes || []).length ? _.div(
         { class: "tl-flow-prompt-plan-actions" },
-        btn({
+        flowMapBtn({
           class: "st-btn-primary",
           disabled: draft.busy || preflight?.ok === false,
           onclick: () => createPlanSnapshot(plan),
-        }, icon("add_link", "sm"), "Crea flow")
+        }, flowMapIcon("add_link", "sm"), "Crea flow")
       ) : null
     );
   };
@@ -7659,7 +7659,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             ? inventory.nodes.map((node) =>
               _.div(
                 { class: "tl-flow-prompt-inventory-row" },
-                icon(node.icon || "extension", "sm"),
+                flowMapIcon(node.icon || "extension", "sm"),
                 _.span(_.strong(node.label || node.id), _.em(`${node.type} · ${node.subtype} · ${node.status}`)),
                 _.code(`${node.inputs.length} IN · ${node.outputs.length} OUT`)
               )
@@ -7672,7 +7672,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             ? inventory.edges.map((edge) =>
               _.div(
                 { class: "tl-flow-prompt-inventory-row" },
-                icon("link", "sm"),
+                flowMapIcon("link", "sm"),
                 _.span(_.strong(`${edge.sourceLabel} -> ${edge.targetLabel}`), _.em(edge.channel || "runtime")),
                 _.code(`${edge.sourcePort || "out"} -> ${edge.targetPort || "in"}`)
               )
@@ -7721,18 +7721,18 @@ const openFlowPromptChatDialog = async (options = {}) => {
       return _.details(
         { class: "tl-flow-prompt-brain-details" },
         _.summary(
-          icon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
+          flowMapIcon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
           _.span(
             _.strong(flowPromptUiText("brainDetails", uiLang)),
             _.em(`${intent} · ${language} · ${Math.round((brain?.confidence || 0) * 100)}%`)
           ),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.div(
           { class: "tl-flow-prompt-brain-body" },
           _.span(
             { class: "tl-flow-prompt-query-card-head" },
-            icon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
+            flowMapIcon(brain?.planner?.mode === "llm-json" ? "psychology" : "rule", "sm"),
             _.strong(brain?.planner?.mode === "llm-json" ? "LLM + RAG" : "Fallback locale"),
             _.code(brain?.planner?.model || brain?.planner?.error || "local")
           ),
@@ -7755,13 +7755,13 @@ const openFlowPromptChatDialog = async (options = {}) => {
             { class: "tl-flow-prompt-brain-list" },
             _.em(flowPromptUiText("providerHealth", uiLang)),
             _.span(
-              icon(providerHealth.ready ? "check_circle" : "warning", "sm"),
+              flowMapIcon(providerHealth.ready ? "check_circle" : "warning", "sm"),
               _.strong(providerHealth.summary || "Provider health"),
               _.code(providerHealth.primary?.model || providerHealth.primary?.issue || "provider")
             ),
             ...((providerHealth.providers || []).slice(0, 4).map((provider) =>
               _.span(
-                icon(provider.ready ? "radio_button_checked" : "error", "sm"),
+                flowMapIcon(provider.ready ? "radio_button_checked" : "error", "sm"),
                 _.strong(provider.name || provider.id),
                 _.code([provider.provider, provider.model || provider.issue || "model"].filter(Boolean).join(" · "))
               )
@@ -7771,18 +7771,18 @@ const openFlowPromptChatDialog = async (options = {}) => {
             { class: "tl-flow-prompt-brain-list" },
             _.em(flowPromptUiText("agentRuntime", uiLang)),
             _.span(
-              icon("smart_toy", "sm"),
+              flowMapIcon("smart_toy", "sm"),
               _.strong(`${agentRuntime.summary?.nodes || 0} nodes · ${agentRuntime.summary?.dependencies || 0} links`),
               _.code(agentRuntime.version || "agent-runtime")
             ),
             agentRuntime.trace ? _.span(
-              icon(agentRuntime.trace.status === "blocked" ? "warning" : "timeline", "sm"),
+              flowMapIcon(agentRuntime.trace.status === "blocked" ? "warning" : "timeline", "sm"),
               _.strong(`${agentRuntime.trace.mode || "trace"} · ${agentRuntime.trace.steps || 0} steps`),
               _.code(agentRuntime.trace.status || "trace")
             ) : null,
             ...((agentRuntime.fixes || []).slice(0, 4).map((fix) =>
               _.span(
-                icon(fix.safe ? "build" : "manage_search", "sm"),
+                flowMapIcon(fix.safe ? "build" : "manage_search", "sm"),
                 _.strong(fix.problem || fix.type || "Runtime fix"),
                 _.code(fix.safe ? "safe" : "manual")
               )
@@ -7793,7 +7793,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.em(flowPromptUiText("ragSources", uiLang)),
             ...ragItems.map((item) =>
               _.span(
-                icon(item.source === "docs" ? "article" : "hub", "sm"),
+                flowMapIcon(item.source === "docs" ? "article" : "hub", "sm"),
                 _.strong(item.title || item.id),
                 _.code(item.id)
               )
@@ -7804,7 +7804,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.em(flowPromptUiText("memoryRank", uiLang)),
             ...memoryItems.map((item) =>
               _.span(
-                icon("memory", "sm"),
+                flowMapIcon("memory", "sm"),
                 _.strong(item.name || item.kind || "Memory"),
                 _.code(item.kind || item.scope || "workspace")
               )
@@ -7815,7 +7815,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.em("Nodi palette validati"),
             ...brain.recommendedNodes.slice(0, 6).map((item) =>
               _.span(
-                icon("check_circle", "sm"),
+                flowMapIcon("check_circle", "sm"),
                 _.strong(item.label),
                 _.code("palette"),
                 item.role ? _.small(item.role) : null
@@ -7828,12 +7828,12 @@ const openFlowPromptChatDialog = async (options = {}) => {
             _.div(
               { class: "tl-flow-prompt-choice-buttons" },
               ...actions.map((action) =>
-                btn({
+                flowMapBtn({
                   class: "is-ghost",
                   disabled: draft.busy,
                   onclick: () => analyze(action.prompt),
                   title: action.prompt,
-                }, icon(action.iconName || "ads_click", "sm"), action.label)
+                }, flowMapIcon(action.iconName || "ads_click", "sm"), action.label)
               )
             )
           ) : null
@@ -7848,7 +7848,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           { class: "tl-flow-prompt-query-card" },
           _.span(
             { class: "tl-flow-prompt-query-card-head" },
-            icon(item.alreadyInWorkspace ? "check_circle" : "add_circle", "sm"),
+            flowMapIcon(item.alreadyInWorkspace ? "check_circle" : "add_circle", "sm"),
             _.strong(item.label || "Nodo"),
             _.code(item.alreadyInWorkspace ? "gia presente" : "da inserire")
           ),
@@ -7873,12 +7873,12 @@ const openFlowPromptChatDialog = async (options = {}) => {
         _.div(
           { class: "tl-flow-prompt-choice-buttons" },
           ...choices.slice(0, 3).map((choice) =>
-            btn({
+            flowMapBtn({
               class: "is-ghost",
               disabled: draft.busy,
               onclick: () => analyze(choice.prompt),
               title: choice.detail || "",
-            }, icon("ads_click", "sm"), choice.label)
+            }, flowMapIcon("ads_click", "sm"), choice.label)
           )
         )
       ) : null;
@@ -7906,7 +7906,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: "tl-flow-prompt-endpoint-candidates" },
         usesAiFallback ? _.div(
           { class: "tl-flow-prompt-endpoint-source-warning" },
-          icon("warning", "sm"),
+          flowMapIcon("warning", "sm"),
           _.span("Fallback AI usata: verifica la documentazione prima di usare questi endpoint.")
         ) : null,
         ...candidates.map((candidate) => {
@@ -7939,12 +7939,12 @@ const openFlowPromptChatDialog = async (options = {}) => {
               candidate.verification?.reason ? _.small(`check: ${candidate.verification.reason}`) : null,
               candidate.reason ? _.small(candidate.reason) : null
             ),
-            candidate.usable ? btn({
+            candidate.usable ? flowMapBtn({
               class: "st-btn-primary",
               disabled: draft.busy,
               onclick: () => analyze(prompt),
               title: "Prepara Apply con questo URL esplicito",
-            }, icon("check", "sm"), "Use") : _.code(candidate.validation?.reason || "non valido")
+            }, flowMapIcon("check", "sm"), "Use") : _.code(candidate.validation?.reason || "non valido")
           );
         })
       );
@@ -7956,7 +7956,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       return _.div(
         { class: `tl-flow-prompt-impact is-${severity}` },
         _.span(
-          icon(severity === "high" ? "report" : severity === "medium" ? "warning" : "info", "sm"),
+          flowMapIcon(severity === "high" ? "report" : severity === "medium" ? "warning" : "info", "sm"),
           _.strong(impact.title || "Impatto runtime"),
           _.code(severity)
         ),
@@ -8005,7 +8005,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           _.span({ class: "tl-flow-prompt-step-index" }, String(step.order || "")),
           _.span(
             _.strong(
-              icon(itemIcon, "sm"),
+              flowMapIcon(itemIcon, "sm"),
               _.span(step.title || action.type || "Step"),
               _.code({ class: `tl-flow-prompt-step-status is-${itemStatus}` }, statusLabel)
             ),
@@ -8030,12 +8030,12 @@ const openFlowPromptChatDialog = async (options = {}) => {
       return _.details(
         { class: "tl-flow-prompt-debug-panel" },
         _.summary(
-          icon("bug_report", "sm"),
+          flowMapIcon("bug_report", "sm"),
           _.span(
             _.strong("Dev inspector"),
             _.em(`${debug.intent || "intent"} · ${debug.selectedPlan || "no plan"}`)
           ),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.pre(JSON.stringify({
           intent: debug.intent,
@@ -8081,10 +8081,10 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: `tl-flow-prompt-runtime-record ${isError ? "is-error" : "is-info"}` },
         _.summary(
           { title: "Apri dettagli runtime" },
-          icon(isError ? "error" : "bolt", "sm"),
+          flowMapIcon(isError ? "error" : "bolt", "sm"),
           _.span(_.strong(title), _.em(subtitle || "runtime record")),
           _.code(status),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.div(
           { class: "tl-flow-prompt-runtime-detail" },
@@ -8092,7 +8092,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             { class: "tl-flow-prompt-runtime-diagnosis" },
             _.span(
               { class: "tl-flow-prompt-runtime-diagnosis-head" },
-              icon("medical_information", "sm"),
+              flowMapIcon("medical_information", "sm"),
               _.strong("Diagnosi runtime"),
               runtimeInsight.kind ? _.code(runtimeInsight.kind) : null
             ),
@@ -8100,31 +8100,31 @@ const openFlowPromptChatDialog = async (options = {}) => {
             runtimeInsight.suggestion ? _.small(runtimeInsight.suggestion) : null,
             _.div(
               { class: "tl-flow-prompt-runtime-actions" },
-              runtimeInsight.nodeId ? btn({
+              runtimeInsight.nodeId ? flowMapBtn({
                 class: "is-ghost",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
                   focusRuntimeNodeOnCanvas(runtimeInsight.nodeId, { inspector: false });
                 },
-              }, icon("center_focus_strong", "sm"), "Focus") : null,
-              runtimeInsight.canInspect ? btn({
+              }, flowMapIcon("center_focus_strong", "sm"), "Focus") : null,
+              runtimeInsight.canInspect ? flowMapBtn({
                 class: "is-ghost",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
                   focusRuntimeNodeOnCanvas(runtimeInsight.nodeId, { inspector: true });
                 },
-              }, icon("right_panel_open", "sm"), "Inspector") : null,
-              runtimeInsight.canRetry ? btn({
+              }, flowMapIcon("right_panel_open", "sm"), "Inspector") : null,
+              runtimeInsight.canRetry ? flowMapBtn({
                 class: "is-ghost",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
                   retryRuntimeNodeTest(runtimeInsight.nodeId);
                 },
-              }, icon("play_arrow", "sm"), "Retry") : null,
-              runtimeInsight.nodeId ? btn({
+              }, flowMapIcon("play_arrow", "sm"), "Retry") : null,
+              runtimeInsight.nodeId ? flowMapBtn({
                 class: "is-ghost",
                 disabled: draft.busy,
                 onclick: (event) => {
@@ -8133,15 +8133,15 @@ const openFlowPromptChatDialog = async (options = {}) => {
                   const nodePart = runtimeInsight.nodeLabel || runtimeInsight.nodeId;
                   analyze(`prepara fix errore runtime${recordPart} per nodo "${nodePart}"`);
                 },
-              }, icon("build_circle", "sm"), "Prepare Fix") : null,
-              runtimeInsight.canPrepareEndpointConfig ? btn({
+              }, flowMapIcon("build_circle", "sm"), "Prepare Fix") : null,
+              runtimeInsight.canPrepareEndpointConfig ? flowMapBtn({
                 class: "st-btn-primary",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
                   analyze(`configura endpoint di ${runtimeInsight.nodeLabel || runtimeInsight.nodeId}`);
                 },
-              }, icon("edit", "sm"), "Configura URL") : null
+              }, flowMapIcon("edit", "sm"), "Configura URL") : null
             )
           ) : null,
           details.length ? _.div(
@@ -8168,7 +8168,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
               { class: "tl-flow-prompt-query-card" },
               _.span(
                 { class: "tl-flow-prompt-query-card-head" },
-                icon(node.icon || "extension", "sm"),
+                flowMapIcon(node.icon || "extension", "sm"),
                 _.strong(node.label || node.id || "Node"),
                 _.code(node.status || "idle")
               ),
@@ -8193,7 +8193,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
               { class: "tl-flow-prompt-query-card" },
               _.span(
                 { class: "tl-flow-prompt-query-card-head" },
-                icon("hub", "sm"),
+                flowMapIcon("hub", "sm"),
                 _.strong(item.name || "channel"),
                 _.code(item.channel?.status || item.channel?.health || "active")
               ),
@@ -8217,7 +8217,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           _.h4("Settings e AI Runtime"),
           _.div(
             { class: "tl-flow-prompt-query-card" },
-            _.span({ class: "tl-flow-prompt-query-card-head" }, icon("tune", "sm"), _.strong("AI Provider"), _.code(ai.provider || "not set")),
+            _.span({ class: "tl-flow-prompt-query-card-head" }, flowMapIcon("tune", "sm"), _.strong("AI Provider"), _.code(ai.provider || "not set")),
             _.div(
               { class: "tl-flow-prompt-query-card-grid" },
               _.span(_.strong(ai.model || "-"), _.em("model")),
@@ -8229,7 +8229,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ...(queryModel.aiRuntime?.providers || []).slice(0, 5).map((provider) =>
             _.div(
               { class: "tl-flow-prompt-inventory-row" },
-              icon("psychology", "sm"),
+              flowMapIcon("psychology", "sm"),
               _.span(_.strong(provider.name || provider.id), _.em(provider.provider || "provider")),
               _.code(provider.model || provider.status || "configured")
             )
@@ -8242,7 +8242,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ...(queryModel.memory?.length ? queryModel.memory.slice(0, 8).map((item) =>
             _.div(
               { class: "tl-flow-prompt-query-card" },
-              _.span({ class: "tl-flow-prompt-query-card-head" }, icon("memory", "sm"), _.strong(item.name || item.kind || "Memory"), _.code(item.scope || "workspace")),
+              _.span({ class: "tl-flow-prompt-query-card-head" }, flowMapIcon("memory", "sm"), _.strong(item.name || item.kind || "Memory"), _.code(item.scope || "workspace")),
               _.small(item.text || item.summary || item.content || "")
             )
           ) : [_.p({ class: "tl-flow-prompt-inventory-empty" }, "Nessuna memoria workspace rilevante.")])
@@ -8264,43 +8264,43 @@ const openFlowPromptChatDialog = async (options = {}) => {
       return _.details(
         { class: "tl-flow-prompt-diagnostics-panel" },
         _.summary(
-          icon(errors ? "error" : "warning", "sm"),
+          flowMapIcon(errors ? "error" : "warning", "sm"),
           _.span(
             _.strong("Diagnostica"),
             _.em(diagnostics.length
               ? `${errors} errori · ${warnings} warning`
               : "Nessun problema strutturale evidente")
           ),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         diagnostics.length ? _.div(
           { class: "tl-flow-prompt-diagnostics-list" },
           canFixAll ? _.div(
             { class: "tl-flow-prompt-diagnostics-actions" },
-            btn({
+            flowMapBtn({
               class: "st-btn-primary",
               disabled: draft.busy,
               onclick: (event) => {
                 event.preventDefault();
                 applyAgentAction(flowPromptBatchPlan(fixActions, `Rimuovo ${fixActions.length} collegamenti rotti.`));
               },
-            }, icon("auto_fix_high", "sm"), "Fix all")
+            }, flowMapIcon("auto_fix_high", "sm"), "Fix all")
           ) : null,
           ...diagnostics.map((issue) => {
             const title = issue.title || issue.message || issue.summary || "Problema Flow Map";
             const detail = issue.detail || issue.description || issue.reason || issue.id || "";
             return _.div(
               { class: `tl-flow-prompt-diagnostic is-${issue.severity || "warning"}` },
-              icon(issue.severity === "error" ? "error" : "warning", "sm"),
+              flowMapIcon(issue.severity === "error" ? "error" : "warning", "sm"),
               _.span(_.strong(title), _.em(detail)),
-              issue.fixAction ? btn({
+              issue.fixAction ? flowMapBtn({
                 class: "is-ghost",
                 disabled: draft.busy,
                 onclick: (event) => {
                   event.preventDefault();
                   applyAgentAction(flowPromptBatchPlan([issue.fixAction], issue.fixAction.summary || title));
                 },
-              }, icon("build", "sm"), "Fix") : null
+              }, flowMapIcon("build", "sm"), "Fix") : null
             );
           })
         ) : null
@@ -8310,26 +8310,26 @@ const openFlowPromptChatDialog = async (options = {}) => {
       { class: `tl-flow-prompt-agent-report${compactNatural ? " is-compact-natural" : ""}` },
       showOverview ? _.div(
         { class: "tl-flow-prompt-agent-kpis" },
-        _.span(icon("account_tree", "sm"), _.strong(String(context.nodes?.length || 0)), _.em("nodi")),
-        _.span(icon("link", "sm"), _.strong(String(context.edges?.length || 0)), _.em("link")),
-        _.span(icon("hub", "sm"), _.strong(String(context.channels?.length || 0)), _.em("canali")),
-        _.span(icon("bolt", "sm"), _.strong(String(context.events?.length || 0)), _.em("eventi")),
-        _.span(icon("subject", "sm"), _.strong(String(context.flowLogs?.length || 0)), _.em("log"))
+        _.span(flowMapIcon("account_tree", "sm"), _.strong(String(context.nodes?.length || 0)), _.em("nodi")),
+        _.span(flowMapIcon("link", "sm"), _.strong(String(context.edges?.length || 0)), _.em("link")),
+        _.span(flowMapIcon("hub", "sm"), _.strong(String(context.channels?.length || 0)), _.em("canali")),
+        _.span(flowMapIcon("bolt", "sm"), _.strong(String(context.events?.length || 0)), _.em("eventi")),
+        _.span(flowMapIcon("subject", "sm"), _.strong(String(context.flowLogs?.length || 0)), _.em("log"))
       ) : null,
       pendingAction ? _.section(
         _.h4("Piano modifica"),
         _.div(
           { class: `tl-flow-prompt-action-plan is-${pendingStatus}` },
-          icon(pendingStatus === "ready" ? "add_link" : pendingStatus === "applied" ? "check_circle" : pendingStatus === "duplicate" ? "link" : "warning", "sm"),
+          flowMapIcon(pendingStatus === "ready" ? "add_link" : pendingStatus === "applied" ? "check_circle" : pendingStatus === "duplicate" ? "link" : "warning", "sm"),
           _.span(
             _.strong(pendingStatus === "ready" ? "Pronto per Apply" : pendingStatus === "applied" ? "Applicato" : pendingStatus === "duplicate" ? "Gia presente" : "Bloccato"),
             _.em(pendingAction.summary || "")
           ),
-          pendingStatus === "ready" ? btn({
+          pendingStatus === "ready" ? flowMapBtn({
             class: "st-btn-primary",
             disabled: draft.busy,
             onclick: () => applyAgentAction(pendingAction),
-          }, icon("check", "sm"), "Apply") : null
+          }, flowMapIcon("check", "sm"), "Apply") : null
         ),
         ...renderAgentPlanSteps()
       ) : null,
@@ -8339,7 +8339,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ? (query.filter ? queryItems : context.nodes || []).slice(0, 10).map((node) =>
             _.div(
               { class: "tl-flow-prompt-inventory-row" },
-              icon(node.icon || "extension", "sm"),
+              flowMapIcon(node.icon || "extension", "sm"),
               _.span(_.strong(node.label || node.id), _.em(`${node.type} · ${node.subtype} · ${node.status}`)),
               _.code(`${node.inputs?.length || 0} IN · ${node.outputs?.length || 0} OUT`)
             )
@@ -8352,7 +8352,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ? (query.filter ? queryItems : context.edges || []).slice(0, 10).map((edge) =>
             _.div(
               { class: "tl-flow-prompt-inventory-row" },
-              icon("link", "sm"),
+              flowMapIcon("link", "sm"),
               _.span(_.strong(`${edge.sourceLabel} -> ${edge.targetLabel}`), _.em(edge.channel || "runtime")),
               _.code(`${edge.sourcePort || "out"} -> ${edge.targetPort || "in"}`)
             )
@@ -8365,7 +8365,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
         ...(query.filter ? queryItems : context.channels).slice(0, 12).map((channel) =>
           _.div(
             { class: "tl-flow-prompt-inventory-row" },
-            icon("hub", "sm"),
+            flowMapIcon("hub", "sm"),
             _.span(_.strong(channel.name || channel.id || "channel"), _.em(channel.lastEmittedAt ? `ultimo emit ${new Date(channel.lastEmittedAt).toLocaleString()}` : channel.workspaceId || "runtime")),
             _.code(channel.status || channel.health || "active")
           )
@@ -8383,7 +8383,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           { class: "tl-flow-prompt-query-card" },
           _.span(
             { class: "tl-flow-prompt-query-card-head" },
-            icon("check_circle", "sm"),
+            flowMapIcon("check_circle", "sm"),
             _.strong("Nessun errore runtime recente"),
             _.code("clean")
           )
@@ -8403,14 +8403,14 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: "tl-flow-prompt-thinking" },
         _.summary(
           { class: "tl-flow-prompt-thinking-main" },
-          _.span(icon("auto_awesome", "sm"), _.strong(activity.title || "AI Flow Agent")),
+          _.span(flowMapIcon("auto_awesome", "sm"), _.strong(activity.title || "AI Flow Agent")),
           _.span(_.strong(activity.label || "Sto lavorando"), _.em(activity.detail || "Analisi in corso")),
           _.time(new Date(activity.updatedAt || Date.now()).toLocaleTimeString()),
           _.span({ class: "tl-flow-prompt-thinking-dots", "aria-hidden": "true" }, _.i(), _.i(), _.i())
         ),
         _.div(
           { class: "tl-flow-prompt-thinking-body" },
-          _.span({ class: "tl-flow-prompt-thinking-orbit" }, icon("hub", "sm")),
+          _.span({ class: "tl-flow-prompt-thinking-orbit" }, flowMapIcon("hub", "sm")),
           _.div(
             { class: "tl-flow-prompt-thinking-detail" },
             _.strong(activity.label || "Sto lavorando"),
@@ -8421,7 +8421,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
             ...activity.steps.map((step, index) =>
               _.span(
                 { class: index === activity.steps.length - 1 ? "is-active" : "is-done" },
-                icon(index === activity.steps.length - 1 ? "sync" : "check", "sm"),
+                flowMapIcon(index === activity.steps.length - 1 ? "sync" : "check", "sm"),
                 _.em(step)
               )
             )
@@ -8534,51 +8534,51 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const hasBrain = Boolean(message.agentReport?.brain || message.agentReport?.brainContext);
     const canCreate = message.kind === "plan" || message.content || message.agentReport;
     const secondaryActions = [
-      btn({
+      flowMapBtn({
         class: "is-ghost",
         disabled: draft.busy,
         title: "Carica questa risposta nel prompt come template",
         onclick: () => useMessageAsTemplate(message),
-      }, icon("input", "sm"), "Usa template"),
-      btn({
+      }, flowMapIcon("input", "sm"), "Usa template"),
+      flowMapBtn({
         class: "is-ghost",
         disabled: draft.busy,
         title: "Trasforma in risposta operativa con nodi, porte e link",
         onclick: () => makeMessageOperational(message),
-      }, icon("construction", "sm"), "Rendi operativo"),
-      hasBrain ? btn({
+      }, flowMapIcon("construction", "sm"), "Rendi operativo"),
+      hasBrain ? flowMapBtn({
         class: "is-ghost",
         disabled: draft.busy,
         title: "Apri Brain details",
         onclick: () => openMessageBrainDetails(message.id),
-      }, icon("psychology", "sm"), "Brain details") : null,
+      }, flowMapIcon("psychology", "sm"), "Brain details") : null,
     ].filter(Boolean);
     return _.div(
       { class: "tl-flow-prompt-post-actions" },
-      canCreate ? btn({
+      canCreate ? flowMapBtn({
         class: "is-ghost",
         disabled: draft.busy,
         title: message.kind === "plan" ? "Crea questo flow" : "Prepara un flow operativo da questa risposta",
         onclick: () => createFlowFromMessage(message),
-      }, icon("add_link", "sm"), message.kind === "plan" ? "Crea flow" : "Crea flow da risposta") : null,
-      canLearnFromMessage(message) ? btn({
+      }, flowMapIcon("add_link", "sm"), message.kind === "plan" ? "Crea flow" : "Crea flow da risposta") : null,
+      canLearnFromMessage(message) ? flowMapBtn({
         class: "is-ghost",
         disabled: draft.busy,
         title: "Salva questa risposta come pattern confermato",
         onclick: () => learnFromMessage(message, "approved"),
-      }, icon("memory", "sm"), "Salva pattern") : null,
-      canLearnFromMessage(message) ? btn({
+      }, flowMapIcon("memory", "sm"), "Salva pattern") : null,
+      canLearnFromMessage(message) ? flowMapBtn({
         class: "is-ghost is-icon-only",
         "aria-label": "Non usare come pattern",
         disabled: draft.busy,
         title: "Non riusare questa risposta come esempio",
         onclick: () => learnFromMessage(message, "rejected"),
-      }, icon("block", "sm")) : null,
+      }, flowMapIcon("block", "sm")) : null,
       secondaryActions.length ? _.details(
         { class: "tl-flow-prompt-more-actions" },
         _.summary(
           { title: "Altre azioni" },
-          icon("more_horiz", "sm"),
+          flowMapIcon("more_horiz", "sm"),
           _.span("Altro")
         ),
         _.div(...secondaryActions)
@@ -8593,7 +8593,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: "tl-flow-prompt-completion" },
         _.div(
           { class: "tl-flow-prompt-completion-head" },
-          icon(result.warnings?.length ? "task_alt" : "verified", "sm"),
+          flowMapIcon(result.warnings?.length ? "task_alt" : "verified", "sm"),
           _.span(
             _.strong(result.completion.status || "Obiettivo raggiunto"),
             _.em(result.completion.goal || "Flow applicato con controllo.")
@@ -8601,43 +8601,43 @@ const openFlowPromptChatDialog = async (options = {}) => {
         ),
         result.completion.details?.length ? _.div(
           { class: "tl-flow-prompt-completion-list" },
-          ...result.completion.details.map((item) => _.span(icon("check_circle", "sm"), item))
+          ...result.completion.details.map((item) => _.span(flowMapIcon("check_circle", "sm"), item))
         ) : null,
         result.completion.links?.length ? _.details(
           { class: "tl-flow-prompt-completion-links" },
-          _.summary(icon("add_link", "sm"), _.strong("Collegamenti"), _.em(`${result.completion.links.length} principali`), icon("expand_more", "sm")),
+          _.summary(flowMapIcon("add_link", "sm"), _.strong("Collegamenti"), _.em(`${result.completion.links.length} principali`), flowMapIcon("expand_more", "sm")),
           _.div(...result.completion.links.map((item) => _.code(item)))
         ) : null,
         result.completion.nextStep ? _.p({ class: "tl-flow-prompt-completion-next" }, result.completion.nextStep) : null
       ) : null,
       _.div(
         { class: "tl-flow-prompt-result is-inline" },
-        icon("check_circle", "sm"),
+        flowMapIcon("check_circle", "sm"),
         _.span(
           result.applied?.length
             ? result.applied.map((item) => item.label).join(" · ")
             : `${result.createdNodes} creati · ${result.reusedNodes} riusati · ${result.createdEdges} link creati · ${result.reusedEdges} link riusati`
         ),
-        result.focusNodeId ? btn({
+        result.focusNodeId ? flowMapBtn({
           class: "is-ghost",
           disabled: draft.busy,
           onclick: () => focusAgentNode(result.focusNodeId),
-        }, icon("right_panel_open", "sm"), "Inspector") : null,
-        result.focusNodeId ? btn({
+        }, flowMapIcon("right_panel_open", "sm"), "Inspector") : null,
+        result.focusNodeId ? flowMapBtn({
           class: "is-ghost",
           disabled: draft.busy,
           onclick: () => retryRuntimeNodeTest(result.focusNodeId),
-        }, icon("play_arrow", "sm"), "Retry") : null,
-        result.snapshotId ? btn({
+        }, flowMapIcon("play_arrow", "sm"), "Retry") : null,
+        result.snapshotId ? flowMapBtn({
           class: "is-ghost",
           disabled: draft.busy,
           title: "Ripristina lo snapshot precedente",
           onclick: () => restoreAgentSnapshot(result.snapshotId),
-        }, icon("undo", "sm"), "Undo") : null
+        }, flowMapIcon("undo", "sm"), "Undo") : null
       ),
       result.warnings?.length ? _.div(
         { class: "tl-flow-prompt-result-warnings" },
-        _.strong(icon("warning", "sm"), "Warning"),
+        _.strong(flowMapIcon("warning", "sm"), "Warning"),
         ...result.warnings.map((item) => _.span(item))
       ) : null,
       result.preflight?.checks?.length ? _.details(
@@ -8646,15 +8646,15 @@ const openFlowPromptChatDialog = async (options = {}) => {
           ...(result.warnings?.length || result.preflight?.blockers?.length ? { open: true } : {}),
         },
         _.summary(
-          icon("fact_check", "sm"),
+          flowMapIcon("fact_check", "sm"),
           _.span(_.strong("Controlli tecnici"), _.em(result.preflight.summary || "Preflight completato")),
-          icon("expand_more", "sm")
+          flowMapIcon("expand_more", "sm")
         ),
         _.div(
           ...result.preflight.checks.map((item) =>
             _.span(
               { class: `is-${item.status || "ok"}` },
-              icon(item.status === "warn" ? "warning" : item.status === "blocked" ? "error" : "check_circle", "sm"),
+              flowMapIcon(item.status === "warn" ? "warning" : item.status === "blocked" ? "error" : "check_circle", "sm"),
               _.strong(item.label),
               _.em(item.detail || "")
             )
@@ -8672,7 +8672,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
       },
       _.div(
         { class: "tl-flow-prompt-message-head" },
-        _.span(icon(message.role === "user" ? "person" : "auto_awesome", "sm"), _.strong(message.role === "user" ? "Tu" : "AI Flow Chat")),
+        _.span(flowMapIcon(message.role === "user" ? "person" : "auto_awesome", "sm"), _.strong(message.role === "user" ? "Tu" : "AI Flow Chat")),
         _.div(
           { class: "tl-flow-prompt-message-meta" },
           message.refinedFrom ? _.span(
@@ -8682,40 +8682,40 @@ const openFlowPromptChatDialog = async (options = {}) => {
                 ? "Risposta migliorata da una risposta precedente"
                 : "Risposta migliorata da una risposta precedente non trovata nello storico corrente",
             },
-            icon("history", "sm"),
+            flowMapIcon("history", "sm"),
             "Revisione"
           ) : null,
           message.refinedFrom ? _.div(
             { class: "tl-flow-prompt-feedback-actions" },
-            btn({
+            flowMapBtn({
               class: "is-ghost is-icon-only",
               "aria-label": "Vai alla risposta originale",
               disabled: draft.busy || !refinedSource,
               title: refinedSource ? "Mostra la risposta originale" : "Risposta originale non disponibile",
               onclick: () => scrollToMessage(message.refinedFrom),
-            }, icon("subdirectory_arrow_left", "sm"))
+            }, flowMapIcon("subdirectory_arrow_left", "sm"))
           ) : null,
-          message.feedback?.rating === "approved" ? _.span({ class: "tl-flow-prompt-feedback-pill is-approved" }, icon("memory", "sm"), "Memorizzato") : null,
-          message.feedback?.rating === "rejected" ? _.span({ class: "tl-flow-prompt-feedback-pill is-rejected" }, icon("block", "sm"), "Non usare") : null,
+          message.feedback?.rating === "approved" ? _.span({ class: "tl-flow-prompt-feedback-pill is-approved" }, flowMapIcon("memory", "sm"), "Memorizzato") : null,
+          message.feedback?.rating === "rejected" ? _.span({ class: "tl-flow-prompt-feedback-pill is-rejected" }, flowMapIcon("block", "sm"), "Non usare") : null,
           message.feedback?.rating === "approved" ? _.div(
             { class: "tl-flow-prompt-feedback-actions" },
-            btn({
+            flowMapBtn({
               class: "is-ghost is-danger is-icon-only",
               "aria-label": "Dimentica memoria",
               disabled: draft.busy,
               title: "Rimuovi questa memoria confermata",
               onclick: () => forgetMessageMemory(message),
-            }, icon("delete", "sm"))
+            }, flowMapIcon("delete", "sm"))
           ) : null,
           canImproveMessage(message) ? _.div(
             { class: "tl-flow-prompt-feedback-actions" },
-            btn({
+            flowMapBtn({
               class: "is-ghost is-icon-only",
               "aria-label": "Migliora risposta",
               disabled: draft.busy,
               title: "Migliora questa risposta con Brain, RAG e memoria",
               onclick: () => improveMessage(message),
-            }, icon("auto_fix_high", "sm"))
+            }, flowMapIcon("auto_fix_high", "sm"))
           ) : null
         )
       ),
@@ -8738,10 +8738,10 @@ const openFlowPromptChatDialog = async (options = {}) => {
       _.div(
         { class: "tl-flow-prompt-history-head" },
         _.strong("Storico"),
-        btn({ "aria-label": "Nuova chat", title: "Nuova chat", onclick: startNewChat }, icon("add", "sm"))
+        flowMapBtn({ "aria-label": "Nuova chat", title: "Nuova chat", onclick: startNewChat }, flowMapIcon("add", "sm"))
       ),
-      draft.loadingHistory ? _.div({ class: "tl-flow-prompt-history-empty" }, icon("hourglass_empty", "sm"), _.span("Caricamento")) : null,
-      !draft.loadingHistory && !draft.chats.length ? _.div({ class: "tl-flow-prompt-history-empty" }, icon("forum", "sm"), _.span("Nessuna chat salvata")) : null,
+      draft.loadingHistory ? _.div({ class: "tl-flow-prompt-history-empty" }, flowMapIcon("hourglass_empty", "sm"), _.span("Caricamento")) : null,
+      !draft.loadingHistory && !draft.chats.length ? _.div({ class: "tl-flow-prompt-history-empty" }, flowMapIcon("forum", "sm"), _.span("Nessuna chat salvata")) : null,
       _.div(
         { class: "tl-flow-prompt-history-list" },
         ...draft.chats.map((chat) =>
@@ -8757,7 +8757,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
                   refresh();
                 },
               },
-              _.span({ class: "tl-flow-prompt-history-icon" }, icon("forum", "sm")),
+              _.span({ class: "tl-flow-prompt-history-icon" }, flowMapIcon("forum", "sm")),
               _.span(
                 { class: "tl-flow-prompt-history-text" },
                 _.strong(chat.title || "Chat"),
@@ -8773,7 +8773,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
                 disabled: draft.busy,
                 onclick: (event) => deleteChat(chat, event),
               },
-              icon("delete", "sm")
+              flowMapIcon("delete", "sm")
             )
           )
         )
@@ -8790,7 +8790,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
         { class: "tl-flow-prompt-conversation" },
         showIntro ? _.div(
           { class: "tl-flow-prompt-intro" },
-          icon("auto_awesome", "md"),
+          flowMapIcon("auto_awesome", "md"),
           _.div(
             _.strong(draft.activeChat?.title || "Prompt to Flow Map"),
             _.span(`Workspace: ${currentWorkspaceName()} · storico persistente SQLite`)
@@ -8803,7 +8803,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
               "aria-label": "Nascondi suggerimento",
               onclick: dismissIntro,
             },
-            icon("close", "sm")
+            flowMapIcon("close", "sm")
           )
         ) : null,
         _.div(
@@ -8812,12 +8812,12 @@ const openFlowPromptChatDialog = async (options = {}) => {
             ? [...activeMessages().map(renderMessage), renderActivity()].filter(Boolean)
             : [draft.activity ? renderActivity() : _.div(
               { class: "tl-flow-prompt-empty" },
-              icon("hub", "md"),
+              flowMapIcon("hub", "md"),
               _.strong("Descrivi il risultato"),
               _.span("La chat mantiene lo storico e genera Task/Source, Orchestrator Agent, AI Agents, Processor, Actions, Storage, Lens o Preview.")
             )])
         ),
-        draft.error ? _.div({ class: "tl-flow-prompt-error" }, icon("error", "sm"), _.span(draft.error)) : null,
+        draft.error ? _.div({ class: "tl-flow-prompt-error" }, flowMapIcon("error", "sm"), _.span(draft.error)) : null,
         _.div(
           { class: "tl-flow-prompt-composer" },
           _.label(
@@ -8873,7 +8873,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
     const activeTitle = draft.activeChat?.title || "Nuova chat";
     return _.header(
       { class: "tl-flow-prompt-aside-head" },
-      isHistory ? _.span({ class: "tl-flow-prompt-aside-icon" }, icon("forum", "sm")) : btn({
+      isHistory ? _.span({ class: "tl-flow-prompt-aside-icon" }, flowMapIcon("forum", "sm")) : flowMapBtn({
         class: "is-ghost tl-flow-prompt-aside-back",
         "aria-label": "Mostra storico chat",
         title: "Storico chat",
@@ -8881,7 +8881,7 @@ const openFlowPromptChatDialog = async (options = {}) => {
           draft.view = "history";
           refresh();
         },
-      }, icon("arrow_back", "sm")),
+      }, flowMapIcon("arrow_back", "sm")),
       _.span(
         { class: "tl-flow-prompt-aside-title" },
         _.strong(isHistory ? "Chat history" : activeTitle),
@@ -8889,20 +8889,20 @@ const openFlowPromptChatDialog = async (options = {}) => {
       ),
       _.div(
         { class: "tl-flow-prompt-aside-actions" },
-        btn({
+        flowMapBtn({
           class: "is-ghost is-icon-only",
           "aria-label": "Pattern salvati",
           title: "Pattern salvati",
           onclick: openSavedPatternsDialog,
-        }, icon("memory", "sm"))
+        }, flowMapIcon("memory", "sm"))
       ),
-      btn({
+      flowMapBtn({
         class: "is-ghost is-icon-only tl-flow-prompt-aside-close",
         dense: true,
         "aria-label": "Chiudi AI Flow Chat",
         title: "Chiudi",
         onclick: closeAside,
-      }, icon("close", "sm"))
+      }, flowMapIcon("close", "sm"))
     );
   }
 
@@ -8941,8 +8941,8 @@ const flowPromptRestoreOpenState = () => {
   });
 };
 
-if (document.readyState === "loading") {
+if (!window.TrackerLensAppRouter && document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", () => window.setTimeout(flowPromptRestoreOpenState, 250), { once: true });
-} else {
+} else if (!window.TrackerLensAppRouter) {
   window.setTimeout(flowPromptRestoreOpenState, 250);
 }

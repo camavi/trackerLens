@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (tone = "online") => _.span({ class: `tl-ai-dot is-${tone}`, "aria-hidden": "true" });
@@ -277,12 +278,14 @@ const applyRuntimeViewModel = (viewModel) => {
   workspaceActivity = viewModel.workspaceActivity;
 };
 
+let aiRoot = null;
+let aiEmbedded = false;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-ai-brand" });
 
 const renderTopbar = () =>
   _.header(
     { class: "tl-ai-topbar" },
-    renderBrand(),
+    aiEmbedded ? null : renderBrand(),
     _.div(
       { class: "tl-ai-search" },
       _.Search({
@@ -305,7 +308,7 @@ const renderTopbar = () =>
     _.Toolbar(
       { class: "tl-ai-actions", align: "center", gap: 16 },
       btn({ class: "st-btn-primary", onclick: () => openProviderEditorDialog() }, icon("add", "sm"), "Provider"),
-      btn({ class: "tl-ai-menu", "aria-label": "Impostazioni AI", onclick: () => window.location.assign("settings.html#ai") }, icon("settings", "sm"))
+      btn({ class: "tl-ai-menu", "aria-label": "Impostazioni AI", onclick: () => window.TrackerLensSidebar?.navigate?.("settings.html#ai") || window.location.assign("settings.html#ai") }, icon("settings", "sm"))
     )
   );
 
@@ -348,7 +351,7 @@ const renderHeader = () =>
       _.Toolbar(
         { class: "tl-ai-head-actions", gap: 14 },
         _.span({ class: "tl-ai-live-pill" }, dot(aiRuntimeMeta.error ? "error" : "online"), aiRuntimeMeta.error ? "AI System Error" : "AI System Online"),
-        btn({ class: "st-btn-primary", onclick: () => window.location.assign("settings.html#ai") }, icon("settings", "sm"), "Impostazioni AI"),
+        btn({ class: "st-btn-primary", onclick: () => window.TrackerLensSidebar?.navigate?.("settings.html#ai") || window.location.assign("settings.html#ai") }, icon("settings", "sm"), "Impostazioni AI"),
         btn({ class: "tl-ai-icon-btn", "aria-label": "Aggiorna runtime AI", onclick: refreshAiRuntime }, icon("refresh", "sm"))
       )
     ),
@@ -458,7 +461,10 @@ const openAgentDeleteDialog = (agent) => {
 const renderAgentActions = (agent) =>
   _.Toolbar(
     { class: "tl-ai-agent-row-actions", gap: 6 },
-    btn({ "aria-label": "Apri Flow Map", title: "Flow Map", disabled: agent.placeholder, onclick: () => window.location.assign(`flowMap.html${agent.workspaceId ? `?workspaceId=${encodeURIComponent(agent.workspaceId)}` : ""}`) }, icon("account_tree", "sm")),
+    btn({ "aria-label": "Apri Flow Map", title: "Flow Map", disabled: agent.placeholder, onclick: () => {
+      const target = `flowMap.html${agent.workspaceId ? `?workspaceId=${encodeURIComponent(agent.workspaceId)}` : ""}`;
+      window.TrackerLensSidebar?.navigate?.(target) || window.location.assign(target);
+    } }, icon("account_tree", "sm")),
     btn({ "aria-label": "Modifica agente", title: "Modifica", disabled: agent.placeholder, onclick: () => openAgentEditorDialog(agent) }, icon("edit", "sm")),
     btn({ "aria-label": "Elimina agente", title: "Elimina", disabled: agent.placeholder, onclick: () => openAgentDeleteDialog(agent) }, icon("delete", "sm"))
   );
@@ -1397,11 +1403,11 @@ const renderFooter = () =>
 
 const renderShell = () =>
   _.div(
-    { class: "tl-ai-shell" },
+    { class: `tl-ai-shell${aiEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-ai-body" },
-      renderSidebar(),
+      aiEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-ai-main" },
         _.div({ class: "tl-ai-grid-bg", "aria-hidden": "true" }),
@@ -1456,7 +1462,7 @@ const probeLocalAiProviders = async () => {
 };
 
 const mountAiRuntime = ({ focusSelector = "", selectionStart = null } = {}) => {
-  const root = document.getElementById("tl-ai-root");
+  const root = aiRoot || document.getElementById("tl-ai-root");
   if (!root) return;
   const active = document.activeElement;
   const nextSelectionStart = selectionStart ?? (active && typeof active.selectionStart === "number" ? active.selectionStart : null);
@@ -1473,5 +1479,24 @@ const mountAiRuntime = ({ focusSelector = "", selectionStart = null } = {}) => {
   }
 };
 
-mountAiRuntime();
-refreshAiRuntime();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.ai = {
+  async mount({ outlet }) {
+    aiRoot = outlet;
+    aiEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("ai");
+    mountAiRuntime();
+    await refreshAiRuntime();
+  },
+  dispose() {
+    aiRoot?.replaceChildren();
+    aiRoot = null;
+    aiEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  mountAiRuntime();
+  void refreshAiRuntime();
+}
+})();

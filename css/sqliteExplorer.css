@@ -22,6 +22,11 @@ body {
     linear-gradient(180deg, #071016 0%, #03080d 100%);
 }
 
+.tl-db-shell.is-embedded { width: 100%; }
+.tl-db-shell.is-embedded .tl-db-topbar { grid-template-columns: minmax(0, 1fr) auto; padding-left: var(--tl-shell-topbar-inset); }
+.tl-db-shell.is-embedded .tl-db-brand { display: none !important; }
+.tl-db-shell.is-embedded .tl-db-body { grid-template-columns: minmax(0, 1fr); }
+
 .tl-db-topbar {
   height: 70px;
   padding: 0 22px 0 0;

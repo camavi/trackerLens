@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (props = {}) => _.span({ ...props, class: `tl-analytics-dot${props.class ? ` ${props.class}` : ""}` });
@@ -432,12 +433,14 @@ const buildAnalyticsData = async () => {
   };
 };
 
+let analyticsRoot = null;
+let analyticsEmbedded = false;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-analytics-brand" });
 
 const renderTopbar = () =>
   _.header(
     { class: "tl-analytics-topbar" },
-    renderBrand(),
+    analyticsEmbedded ? null : renderBrand(),
     _.div(
       { class: "tl-analytics-global-search" },
       _.Search({
@@ -814,11 +817,11 @@ const refreshSmallAnalytics = async () => {
 
 const renderShell = () =>
   _.div(
-    { class: "tl-analytics-shell" },
+    { class: `tl-analytics-shell${analyticsEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-analytics-body" },
-      renderSidebar(),
+      analyticsEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-analytics-main" },
         _.div({ class: "tl-analytics-grid-bg", "aria-hidden": "true" }),
@@ -834,7 +837,7 @@ const renderShell = () =>
   );
 
 const mountAnalytics = async () => {
-  const root = document.getElementById("tl-analytics-root");
+  const root = analyticsRoot || document.getElementById("tl-analytics-root");
   if (!root) return;
   root.replaceChildren(renderShell());
   try {
@@ -865,4 +868,23 @@ const startLiveStreamRefresh = () => {
   }, 5000);
 };
 
-mountAnalytics().then(startLiveStreamRefresh);
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.analytics = {
+  async mount({ outlet }) {
+    analyticsRoot = outlet;
+    analyticsEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("stats");
+    await mountAnalytics();
+    startLiveStreamRefresh();
+  },
+  dispose() {
+    if (smallAnalyticsTimer) window.clearInterval(smallAnalyticsTimer);
+    smallAnalyticsTimer = null;
+    analyticsRoot?.replaceChildren();
+    analyticsRoot = null;
+    analyticsEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) void mountAnalytics().then(startLiveStreamRefresh);
+})();

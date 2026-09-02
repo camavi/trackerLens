@@ -5425,7 +5425,7 @@ const copyRuntimeValue = async (value = {}) => {
 };
 
 const copyRuntimeButton = (value = {}, label = "Copy") =>
-  btn({
+  flowMapBtn({
     class: "tl-flow-copy-btn",
     title: label,
     onPointerDown: stopNodeControlEvent,
@@ -5434,7 +5434,7 @@ const copyRuntimeButton = (value = {}, label = "Copy") =>
       event.stopPropagation();
       copyRuntimeValue(value);
     },
-  }, icon("content_copy", "sm"));
+  }, flowMapIcon("content_copy", "sm"));
 
 const renderRuntimePayloadDetails = ({ title = "Payload", value = {}, meta = {} } = {}) =>
   _.details(
@@ -5502,7 +5502,7 @@ const renderLiveBusPill = () =>
       title: liveBusTitle(),
       "data-live-bus-pill": "true",
     },
-    dot(state.liveBus.connected ? "is-connected" : !state.liveBus.available ? "is-offline" : "is-standby"),
+    flowMapDot(state.liveBus.connected ? "is-connected" : !state.liveBus.available ? "is-offline" : "is-standby"),
     _.span({ "data-live-bus-label": "true" }, liveBusLabel())
   );
 
@@ -5512,7 +5512,7 @@ const renderSelect = (className, value, options, onChange) => {
     class: className,
     ...(model ? { model } : { value, onChange }),
     options,
-    slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+    slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
   });
 };
 
@@ -5702,8 +5702,8 @@ const openWorkspaceSettings = async () => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      btn({ class: "st-btn-primary", onclick: () => saveWorkspaceSettings({ close, nameInput, titleInput, descriptionInput, statusInput }) }, icon("save", "sm"), "Save")
+      flowMapBtn({ onclick: close }, "Cancel"),
+      flowMapBtn({ class: "st-btn-primary", onclick: () => saveWorkspaceSettings({ close, nameInput, titleInput, descriptionInput, statusInput }) }, flowMapIcon("save", "sm"), "Save")
     ),
   });
   dialog.open();
@@ -5712,13 +5712,13 @@ const openWorkspaceSettings = async () => {
 const renderFileMenuItem = ({ iconName, label, meta = "", onclick, disabled = false }) =>
   _.button(
     { type: "button", class: "tl-flow-menu-item", disabled, onclick: disabled ? undefined : onclick },
-    icon(iconName, "sm"),
+    flowMapIcon(iconName, "sm"),
     _.span(_.strong(label), meta ? _.small(meta) : null)
   );
 
 const renderFileMenu = () =>
   bindFlowMenu(
-    btn({ class: "tl-flow-menu-trigger is-file" }, icon("folder_open", "sm"), "File", icon("keyboard_arrow_down", "sm")),
+    flowMapBtn({ class: "tl-flow-menu-trigger is-file" }, flowMapIcon("folder_open", "sm"), "File", flowMapIcon("keyboard_arrow_down", "sm")),
     {},
     _.div(
       { class: "tl-flow-menu-content" },
@@ -5740,7 +5740,7 @@ const renderFileMenu = () =>
 
 const renderSampleTestMenu = () =>
   bindFlowMenu(
-    btn({ class: "tl-flow-menu-trigger", title: "Create ready-made diagnostic sample flows" }, icon("science", "sm"), "Sample Test", icon("keyboard_arrow_down", "sm")),
+    flowMapBtn({ class: "tl-flow-menu-trigger", title: "Create ready-made diagnostic sample flows" }, flowMapIcon("science", "sm"), "Sample Test", flowMapIcon("keyboard_arrow_down", "sm")),
     { width: 320 },
     _.div(
       { class: "tl-flow-menu-content" },
@@ -5809,21 +5809,21 @@ const renderTopbarMenuItem = ({ iconName, label, meta = "", onclick, disabled = 
         onclick?.(event);
       },
     },
-    icon(iconName, "sm"),
+    flowMapIcon(iconName, "sm"),
     _.span(_.strong(label), meta ? _.small(meta) : null)
   );
 
 const renderTopbarMenu = ({ iconName, label, title, items = [], primary = false }) =>
   bindFlowMenu(
-    btn(
+    flowMapBtn(
       {
         class: `tl-flow-top-menu-trigger${primary ? " st-btn-primary" : ""}`,
         title,
         "aria-label": label,
       },
-      icon(iconName, "sm"),
+      flowMapIcon(iconName, "sm"),
       label,
-      icon("keyboard_arrow_down", "sm")
+      flowMapIcon("keyboard_arrow_down", "sm")
     ),
     { width: 296, closeOnSelect: true },
     ({ close } = {}) =>
@@ -5912,7 +5912,7 @@ const openAgentRuntimeDialog = async () => {
       ...(list.length ? list.slice(0, 8).map((item) =>
         _.span(
           { class: "tl-agent-runtime-row" },
-          icon(item.subtype === "orchestrator" ? "route" : item.type === "aiAgent" ? "psychology" : "radio_button_unchecked", "sm"),
+          flowMapIcon(item.subtype === "orchestrator" ? "route" : item.type === "aiAgent" ? "psychology" : "radio_button_unchecked", "sm"),
           _.strong(item.label || item.id),
           _.em([item.type, item.subtype].filter(Boolean).join(" · ") || item.id)
         )
@@ -6123,16 +6123,16 @@ const openAgentRuntimeDialog = async () => {
       { class: "tl-agent-runtime-step-detail" },
       _.div(
         { class: "tl-agent-runtime-step-actions" },
-        btn({
+        flowMapBtn({
           class: "is-ghost",
           disabled: !step.nodeId,
           onclick: () => focusAgentRuntimeNode(step.nodeId),
-        }, icon("center_focus_strong", "sm"), "Focus Node"),
-        btn({
+        }, flowMapIcon("center_focus_strong", "sm"), "Focus Node"),
+        flowMapBtn({
           class: "is-ghost",
           disabled: !step.nodeId,
           onclick: () => inspectAgentRuntimeNode(step.nodeId),
-        }, icon("manage_search", "sm"), "Inspect Node")
+        }, flowMapIcon("manage_search", "sm"), "Inspect Node")
       ),
       _.span(_.strong("Node"), _.em(step.nodeId || "-")),
       _.span(_.strong("Channel"), _.em(step.channel || "-")),
@@ -6148,17 +6148,17 @@ const openAgentRuntimeDialog = async () => {
     const trace = run.trace || [];
     return _.details(
       { class: "tl-agent-runtime-section tl-agent-runtime-trace-section", open: true },
-      _.summary(icon("timeline", "sm"), _.strong("Trace"), _.em(`${trace.length} steps`), icon("expand_more", "sm")),
+      _.summary(flowMapIcon("timeline", "sm"), _.strong("Trace"), _.em(`${trace.length} steps`), flowMapIcon("expand_more", "sm")),
       _.div(
         { class: "tl-agent-runtime-trace" },
         ...trace.map((step) =>
           _.details(
             { class: `is-${step.status || "pending"}` },
             _.summary(
-              icon(step.status === "blocked" ? "error" : step.status === "completed" ? "check_circle" : "radio_button_unchecked", "sm"),
+              flowMapIcon(step.status === "blocked" ? "error" : step.status === "completed" ? "check_circle" : "radio_button_unchecked", "sm"),
               _.strong(`${step.index}. ${step.label}`),
               _.em([step.channel, step.message].filter(Boolean).join(" · ") || step.status),
-              icon("expand_more", "sm")
+              flowMapIcon("expand_more", "sm")
             ),
             renderStepDetail(step)
           )
@@ -6176,14 +6176,14 @@ const openAgentRuntimeDialog = async () => {
         ["simulate", "Simulate", "Trace as simulated runtime"],
         ["execute-controlled", "Execute Controlled", "v1 records trace only"],
       ].map(([value, label, detail]) =>
-        btn({
+        flowMapBtn({
           class: traceMode === value ? "is-primary" : "is-ghost",
           onclick: () => {
             traceMode = value;
             refreshBody();
           },
           title: detail,
-        }, icon(value === "execute-controlled" ? "lock" : value === "simulate" ? "model_training" : "rule", "sm"), label)
+        }, flowMapIcon(value === "execute-controlled" ? "lock" : value === "simulate" ? "model_training" : "rule", "sm"), label)
       )
     )
   );
@@ -6193,10 +6193,10 @@ const openAgentRuntimeDialog = async () => {
     ...fixHistory.map((item) =>
       _.span(
         { class: `tl-agent-runtime-row is-${item.status || "ok"}` },
-        icon(item.status === "error" ? "error" : item.type === "undo-fix" ? "undo" : "build", "sm"),
+        flowMapIcon(item.status === "error" ? "error" : item.type === "undo-fix" ? "undo" : "build", "sm"),
         _.strong(item.type || "fix"),
         _.em([item.message, item.at ? new Date(item.at).toLocaleTimeString() : ""].filter(Boolean).join(" · ")),
-        item.snapshotId ? _.code(item.snapshotId) : icon("chevron_right", "sm")
+        item.snapshotId ? _.code(item.snapshotId) : flowMapIcon("chevron_right", "sm")
       )
     )
   );
@@ -6205,25 +6205,25 @@ const openAgentRuntimeDialog = async () => {
     _.h3("Safe Fix Suggestions"),
     fixes.error ? _.div(
       { class: "tl-agent-runtime-fix-result is-error" },
-      icon("error", "sm"),
+      flowMapIcon("error", "sm"),
       _.span(_.strong("Suggest Fixes"), _.em(fixes.error))
     ) : null,
     fixResult ? _.div(
       { class: `tl-agent-runtime-fix-result is-${fixResult.status || "ok"}` },
-      icon(fixResult.status === "error" ? "error" : fixResult.status === "warning" ? "warning" : "check_circle", "sm"),
+      flowMapIcon(fixResult.status === "error" ? "error" : fixResult.status === "warning" ? "warning" : "check_circle", "sm"),
       _.span(_.strong(fixResult.fixType || "Fix"), _.em(fixResult.message || "")),
-      fixResult.snapshotId ? btn({
+      fixResult.snapshotId ? flowMapBtn({
         class: "is-ghost",
         disabled: applyingFixId === "undo",
         onclick: () => undoLastAgentRuntimeFix(),
         title: "Restore the snapshot captured before the last Agent Runtime fix",
-      }, icon(applyingFixId === "undo" ? "hourglass_top" : "undo", "sm"), applyingFixId === "undo" ? "Undoing" : "Undo Fix") : null
+      }, flowMapIcon(applyingFixId === "undo" ? "hourglass_top" : "undo", "sm"), applyingFixId === "undo" ? "Undoing" : "Undo Fix") : null
     ) : null,
     ...(fixes.fixes?.length ? fixes.fixes.slice(0, 12).map((fix) =>
       _.article(
         { class: `tl-agent-runtime-fix is-${fix.severity || "warning"}${fix.safe ? " is-safe" : " is-manual"}` },
         _.header(
-          icon(fix.severity === "error" ? "error" : fix.safe ? "construction" : "manage_search", "sm"),
+          flowMapIcon(fix.severity === "error" ? "error" : fix.safe ? "construction" : "manage_search", "sm"),
           _.span(
             _.strong(fix.problem || fix.type || "Runtime fix"),
             _.em([fix.type, fix.safe ? "safe apply" : "manual review"].filter(Boolean).join(" · "))
@@ -6238,20 +6238,20 @@ const openAgentRuntimeDialog = async () => {
         ),
         _.div(
           { class: "tl-agent-runtime-fix-actions" },
-          fix.nodeId ? btn({
+          fix.nodeId ? flowMapBtn({
             class: "is-ghost",
             onclick: () => focusAgentRuntimeNode(fix.nodeId),
-          }, icon("center_focus_strong", "sm"), "Focus") : null,
-          fix.nodeId ? btn({
+          }, flowMapIcon("center_focus_strong", "sm"), "Focus") : null,
+          fix.nodeId ? flowMapBtn({
             class: "is-ghost",
             onclick: () => inspectAgentRuntimeNode(fix.nodeId),
-          }, icon("manage_search", "sm"), "Inspect") : null,
-          btn({
+          }, flowMapIcon("manage_search", "sm"), "Inspect") : null,
+          flowMapBtn({
             class: fix.safe ? "is-primary" : "",
             disabled: !fix.safe || applyingFixId === fix.id,
             title: fix.safe ? "Apply this safe fix, then rerun Agent Runtime trace" : "Manual review required",
             onclick: () => applyAgentRuntimeFix(fix),
-          }, icon(applyingFixId === fix.id ? "hourglass_top" : fix.safe ? "build" : "lock", "sm"), applyingFixId === fix.id ? "Applying" : fix.safe ? "Apply Fix" : "Manual")
+          }, flowMapIcon(applyingFixId === fix.id ? "hourglass_top" : fix.safe ? "build" : "lock", "sm"), applyingFixId === fix.id ? "Applying" : fix.safe ? "Apply Fix" : "Manual")
         )
       )
     ) : [_.p({ class: "tl-flow-muted" }, "No fix suggestion")])
@@ -6260,7 +6260,7 @@ const openAgentRuntimeDialog = async () => {
     const summary = inspect.summary || {};
     return _.div(
       { class: "tl-agent-runtime-dialog-body" },
-      inspect.error ? _.div({ class: "tl-flow-error" }, icon("error", "sm"), inspect.error) : null,
+      inspect.error ? _.div({ class: "tl-flow-error" }, flowMapIcon("error", "sm"), inspect.error) : null,
       _.section(
         { class: "tl-agent-runtime-overview" },
         metric("nodes", summary.nodes || 0),
@@ -6297,7 +6297,7 @@ const openAgentRuntimeDialog = async () => {
       renderFixHistory(),
       _.details(
         { class: "tl-agent-runtime-raw" },
-        _.summary(icon("data_object", "sm"), _.strong("Raw inspect"), icon("expand_more", "sm")),
+        _.summary(flowMapIcon("data_object", "sm"), _.strong("Raw inspect"), flowMapIcon("expand_more", "sm")),
         _.pre(prettyRuntimeValue(inspect))
       )
     );
@@ -6315,13 +6315,13 @@ const openAgentRuntimeDialog = async () => {
     content: () => _.div({ "data-agent-runtime-dialog-body": "true" }, renderBody()),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({
+      flowMapBtn({
         onclick: async () => {
           inspect = await window.TrackerLensAgentRuntime.inspectFlow({ workspaceId }).catch((error) => ({ error: error?.message || String(error) }));
           refreshBody();
         },
-      }, icon("sync", "sm"), "Inspect"),
-      btn({
+      }, flowMapIcon("sync", "sm"), "Inspect"),
+      flowMapBtn({
         class: "st-btn-primary",
         onclick: async () => {
           run = await window.TrackerLensAgentRuntime.runFlow({
@@ -6332,14 +6332,14 @@ const openAgentRuntimeDialog = async () => {
           }).catch((error) => ({ status: "error", error: error?.message || String(error), trace: [] }));
           refreshBody();
         },
-      }, icon("play_arrow", "sm"), traceMode === "simulate" ? "Run Simulation" : traceMode === "execute-controlled" ? "Run Controlled" : "Run Trace"),
-      btn({
+      }, flowMapIcon("play_arrow", "sm"), traceMode === "simulate" ? "Run Simulation" : traceMode === "execute-controlled" ? "Run Controlled" : "Run Trace"),
+      flowMapBtn({
         onclick: async () => {
           fixes = await window.TrackerLensAgentRuntime.suggestFixes({ workspaceId }).catch((error) => ({ fixes: [], error: error?.message || String(error) }));
           refreshBody();
         },
-      }, icon("construction", "sm"), "Suggest Fixes"),
-      btn({ onclick: close }, "Close")
+      }, flowMapIcon("construction", "sm"), "Suggest Fixes"),
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -6348,7 +6348,7 @@ const openAgentRuntimeDialog = async () => {
 const renderHeader = () =>
   _.header(
     { class: "tl-flow-topbar" },
-    window.TrackerLensSidebar.renderBrand({ className: "tl-flow-brand" }),
+    flowMapEmbedded ? null : window.TrackerLensSidebar.renderBrand({ className: "tl-flow-brand" }),
     _.div(
       { class: "tl-flow-title" },
       _.h1("Flow Map"),
@@ -6356,24 +6356,24 @@ const renderHeader = () =>
     ),
     _.div(
       { class: "tl-flow-top-actions" },
-      _.span({ class: "tl-flow-live" }, dot(), "Runtime: Active"),
+      _.span({ class: "tl-flow-live" }, flowMapDot(), "Runtime: Active"),
       renderLiveBusPill(),
       state.lastDeletedConnection
-        ? btn({ onclick: restoreLastDeletedConnection }, icon("undo", "sm"), "Undo Link")
+        ? flowMapBtn({ onclick: restoreLastDeletedConnection }, flowMapIcon("undo", "sm"), "Undo Link")
         : null,
       state.lastDeletedNode
-        ? btn({ onclick: restoreLastDeletedNode }, icon("undo", "sm"), "Undo Node")
+        ? flowMapBtn({ onclick: restoreLastDeletedNode }, flowMapIcon("undo", "sm"), "Undo Node")
         : null,
       state.lastChannelAction
-        ? btn({ onclick: restoreLastChannelAction }, icon("undo", "sm"), "Undo Channel")
+        ? flowMapBtn({ onclick: restoreLastChannelAction }, flowMapIcon("undo", "sm"), "Undo Channel")
         : null,
       renderRunMenu(),
       renderSampleTestMenu(),
       state.testRun.running
-        ? btn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, icon("stop", "sm"), "Stop")
+        ? flowMapBtn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, flowMapIcon("stop", "sm"), "Stop")
         : null,
       renderToolsMenu(),
-      btn({ class: "st-btn-primary", onclick: () => window.location.assign("connections.html") }, icon("link", "sm"), "Connections")
+      flowMapBtn({ class: "st-btn-primary", onclick: () => window.TrackerLensSidebar.navigate("connections.html") }, flowMapIcon("link", "sm"), "Connections")
     )
   );
 
@@ -6393,7 +6393,8 @@ const openDevTools = () => {
   }
   if (state.filters.workspaceId) query.set("workspaceId", state.filters.workspaceId);
   if (state.filters.channel !== "all") query.set("channel", state.filters.channel);
-  window.location.assign(`devtools.html?${query.toString()}`);
+  const target = `devtools.html?${query.toString()}`;
+  window.TrackerLensSidebar?.navigate?.(target) || window.location.assign(target);
 };
 
 const openPaletteNode = (item, contextNode = selectedNode()) => {
@@ -6430,7 +6431,8 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
   }
 
   if (item.url) {
-    window.location.assign(`${item.url}${query.toString() ? `?${query.toString()}` : ""}`);
+    const target = `${item.url}${query.toString() ? `?${query.toString()}` : ""}`;
+    window.TrackerLensSidebar?.navigate?.(target) || window.location.assign(target);
     return;
   }
 
@@ -6464,6 +6466,7 @@ const openPaletteNode = (item, contextNode = selectedNode()) => {
 
   if (item.connectionType) {
     query.set("type", item.connectionType);
-    window.location.assign(`connections.html?${query.toString()}`);
+    const target = `connections.html?${query.toString()}`;
+    window.TrackerLensSidebar?.navigate?.(target) || window.location.assign(target);
   }
 };

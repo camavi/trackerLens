@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (props = {}) => _.span({ ...props, class: `tl-db-dot${props.class ? ` ${props.class}` : ""}` });
@@ -175,12 +176,14 @@ const exportSelectedJson = (selected = selectedRecord()) => {
   URL.revokeObjectURL(url);
 };
 
+let sqliteRoot = null;
+let sqliteEmbedded = false;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-db-brand" });
 
 const renderTopbar = () =>
   _.header(
     { class: "tl-db-topbar" },
-    renderBrand(),
+    sqliteEmbedded ? null : renderBrand(),
     _.Search({
       class: "tl-db-global-search-input",
       label: "Cerca dati, chiavi, box, workspace...",
@@ -492,11 +495,11 @@ const renderFooter = () => {
 
 const renderShell = () =>
   _.div(
-    { class: "tl-db-shell" },
+    { class: `tl-db-shell${sqliteEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-db-body" },
-      renderSidebar(),
+      sqliteEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-db-main" },
         _.div({ class: "tl-db-grid-bg", "aria-hidden": "true" }),
@@ -509,10 +512,29 @@ const renderShell = () =>
   );
 
 const mountExplorer = () => {
-  const root = document.getElementById("tl-sqlite-root");
+  const root = sqliteRoot || document.getElementById("tl-sqlite-root");
   if (!root) return;
   root.replaceChildren(renderShell());
 };
 
-mountExplorer();
-loadSqlite();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.database = {
+  async mount({ outlet }) {
+    sqliteRoot = outlet;
+    sqliteEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("database");
+    mountExplorer();
+    await loadSqlite();
+  },
+  dispose() {
+    sqliteRoot?.replaceChildren();
+    sqliteRoot = null;
+    sqliteEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  mountExplorer();
+  void loadSqlite();
+}
+})();

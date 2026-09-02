@@ -13,8 +13,17 @@ window.TrackerLensSidebar = (() => {
   ];
 
   const navigate = (url) => {
-    if (!url) return;
+    if (!url) return false;
+    const router = window.TrackerLensAppRouter;
+    const target = new URL(url, window.location.href);
+    if (router) {
+      if (router.resolve?.(target.pathname)) {
+        void router.navigate(target.toString());
+        return true;
+      }
+    }
     window.location.assign(url);
+    return true;
   };
 
   const renderButton = (item, activeId) =>

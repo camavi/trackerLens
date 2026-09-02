@@ -6,3 +6,23 @@
 @import url("./flow-map/inspector-config.css?v=world-graph-toggle-fit-1");
 @import url("./flow-map/agent-runtime-dialog.css?v=agent-trigger-trace-2");
 @import url("./flow-map/status-responsive.css?v=agent-runtime-v1-2");
+
+.tl-flow-shell.is-embedded {
+  width: 100%;
+  height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tl-flow-shell.is-embedded .tl-flow-topbar {
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: var(--tl-shell-topbar-inset);
+}
+
+.tl-flow-shell.is-embedded .tl-flow-main {
+  grid-column: 1;
+  border-left: 0;
+}
+
+.tl-flow-shell.is-embedded .tl-flow-brand { display: none !important; }
+.tl-flow-shell.is-embedded > .tl-view-sidebar { display: none; }

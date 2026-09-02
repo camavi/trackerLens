@@ -61,16 +61,16 @@ window.TrackerLensCustomNodePackages = (() => {
     const consent = pkg.permissionConsent || {};
     return _.article(
       { class: "tl-flow-package-card" },
-      _.div({ class: "tl-flow-package-card-title" }, icon(manifest.icon || "extension", "sm"), _.strong(pkg.name || manifest.name || pkg.packageId), _.span(`${pkg.version || manifest.version || ""}`)),
+      _.div({ class: "tl-flow-package-card-title" }, flowMapIcon(manifest.icon || "extension", "sm"), _.strong(pkg.name || manifest.name || pkg.packageId), _.span(`${pkg.version || manifest.version || ""}`)),
       _.p(`${pkg.publisher || manifest.publisher || "Local package"} · ${pkg.category || manifest.category || "custom"}`),
       _.p({ class: "tl-flow-package-card-state" }, `Trust: ${pkg.trustLevel || "local-dev"} · Runtime: ${pkg.runtimeExecution === "sandboxed" ? "sandboxed" : "blocked"}`),
       _.p(permissions.length ? `Permessi dichiarati: ${permissions.join(", ")}` : "Nessun permesso dichiarato."),
       _.p(`Consenso runtime: ${consent.status === "granted" ? "registrato" : "non concesso"} · runtime ancora bloccato.`),
       consent.status !== "granted" && typeof onGrantPermissions === "function"
-        ? _.div({ class: "tl-flow-package-actions" }, btn({ onclick: () => onGrantPermissions(pkg) }, "Registra consenso ai permessi dichiarati"))
+        ? _.div({ class: "tl-flow-package-actions" }, flowMapBtn({ onclick: () => onGrantPermissions(pkg) }, "Registra consenso ai permessi dichiarati"))
         : null,
       consent.status === "granted" && pkg.runtimeExecution !== "sandboxed" && typeof onActivateSandbox === "function"
-        ? _.div({ class: "tl-flow-package-actions" }, btn({ class: "st-btn-warning", onclick: () => onActivateSandbox(pkg) }, "Attiva sandbox sperimentale"))
+        ? _.div({ class: "tl-flow-package-actions" }, flowMapBtn({ class: "st-btn-warning", onclick: () => onActivateSandbox(pkg) }, "Attiva sandbox sperimentale"))
         : null,
       analysis.status === "reviewed"
         ? _.p({ class: undeclared.length ? "tl-flow-package-card-state" : "" }, undeclared.length
@@ -90,19 +90,19 @@ window.TrackerLensCustomNodePackages = (() => {
       { class: "tl-flow-package-dialog-body" },
       _.p("Importa un archivio .tl-node.zip. Il manifest e i permessi vengono revisionati prima della copia; runtime.js resta bloccato."),
       review ? _.section({ class: "tl-flow-package-review" }, _.h3("Revisione import"), summary(review), _.div({ class: "tl-flow-package-actions" },
-        btn({ class: "st-btn-primary", disabled: busy, onclick: async () => {
+        flowMapBtn({ class: "st-btn-primary", disabled: busy, onclick: async () => {
           busy = true; refresh();
           try { await bridge().install({ importId: review.importId }); review = null; packages = await refreshInstalled(); CMSwift.notify?.success?.("Custom Node importato: aggiungilo dalla palette, runtime bloccato."); }
           catch (error) { CMSwift.notify?.error?.(error?.message || "Import non riuscito."); }
           finally { busy = false; refresh(); }
-        } }, icon("archive", "sm"), busy ? "Importazione…" : "Importa pacchetto"),
-        btn({ disabled: busy, onclick: () => { review = null; refresh(); } }, "Annulla")
-      )) : _.div({ class: "tl-flow-package-actions" }, btn({ class: "st-btn-primary", disabled: busy, onclick: async () => {
+        } }, flowMapIcon("archive", "sm"), busy ? "Importazione…" : "Importa pacchetto"),
+        flowMapBtn({ disabled: busy, onclick: () => { review = null; refresh(); } }, "Annulla")
+      )) : _.div({ class: "tl-flow-package-actions" }, flowMapBtn({ class: "st-btn-primary", disabled: busy, onclick: async () => {
         busy = true; refresh();
         try { const result = await bridge().inspect(); if (!result?.cancelled) review = result; }
         catch (error) { CMSwift.notify?.error?.(error?.message || "Archivio non valido."); }
         finally { busy = false; refresh(); }
-      } }, icon("upload_file", "sm"), busy ? "Lettura…" : "Scegli .tl-node.zip")),
+      } }, flowMapIcon("upload_file", "sm"), busy ? "Lettura…" : "Scegli .tl-node.zip")),
       _.hr(), _.h3("Pacchetti installati"), packages.length ? _.div({ class: "tl-flow-package-list" }, ...packages.map((pkg) => summary(pkg, {
         onGrantPermissions: async (target) => {
           busy = true; refresh();
@@ -123,7 +123,7 @@ window.TrackerLensCustomNodePackages = (() => {
           const confirmDialog = _.Dialog({
             title: "Attivare runtime sandbox?", subtitle: `${target.name || target.packageId} ${target.version}`,
             content: () => _.div(_.p("Il package locale può ora elaborare i dati che riceve dal Flow Map dentro una sandbox isolata."), _.p("La sandbox non rende affidabile codice non verificato. Verifica manifest, permessi e audit statico prima di continuare.")),
-            footer: () => [btn({ onclick: () => confirmDialog.close() }, "Annulla"), btn({ class: "st-btn-warning", onclick: async () => {
+            footer: () => [flowMapBtn({ onclick: () => confirmDialog.close() }, "Annulla"), flowMapBtn({ class: "st-btn-warning", onclick: async () => {
               busy = true; confirmDialog.close(); refresh();
               try { await bridge().activateSandboxRuntime({ packageId: target.packageId, version: target.version, archiveSha256: target.archive?.sha256, confirmed: true }); packages = await refreshInstalled(); CMSwift.notify?.success?.("Sandbox attivata per questa esatta versione del package."); }
               catch (error) { CMSwift.notify?.error?.(error?.message || "Attivazione sandbox non riuscita."); }
@@ -143,7 +143,7 @@ window.TrackerLensCustomNodePackages = (() => {
       title: "Custom Node Packages",
       subtitle: "Manifest-only import · codice runtime disabilitato",
       content: () => _.div({ "data-custom-node-package-dialog": "true" }, render()),
-      footer: () => btn({ onclick: () => dialog?.close?.() }, "Chiudi")
+      footer: () => flowMapBtn({ onclick: () => dialog?.close?.() }, "Chiudi")
     });
     dialog.open();
   };

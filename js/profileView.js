@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (tone = "online") => _.span({ class: `tl-profile-dot-status is-${tone}`, "aria-hidden": "true" });
@@ -78,6 +79,8 @@ const fallbackSystemRows = [
   ["Node.js", "v24.14.1"],
 ];
 
+let profileRoot = null;
+let profileEmbedded = false;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-profile-brand" });
 
 const numberFormatter = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 1 });
@@ -358,7 +361,7 @@ const loadCurrentUser = async () => {
 const renderTopbar = () =>
   _.header(
     { class: "tl-profile-topbar" },
-    renderBrand(),
+    profileEmbedded ? null : renderBrand(),
     _.div(
       { class: "tl-profile-search" },
       _.Search({
@@ -665,11 +668,11 @@ const renderFooter = () =>
 
 const renderShell = () =>
   _.div(
-    { class: "tl-profile-shell" },
+    { class: `tl-profile-shell${profileEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-profile-body" },
-      renderSidebar(),
+      profileEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-profile-main" },
         _.div({ class: "tl-profile-grid-bg", "aria-hidden": "true" }),
@@ -689,10 +692,29 @@ const renderShell = () =>
   );
 
 const mountProfile = () => {
-  const root = document.getElementById("tl-profile-root");
+  const root = profileRoot || document.getElementById("tl-profile-root");
   if (!root) return;
   root.replaceChildren(renderShell());
 };
 
-mountProfile();
-loadCurrentUser();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.profile = {
+  async mount({ outlet }) {
+    profileRoot = outlet;
+    profileEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("profile");
+    mountProfile();
+    await loadCurrentUser();
+  },
+  dispose() {
+    profileRoot?.replaceChildren();
+    profileRoot = null;
+    profileEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  mountProfile();
+  void loadCurrentUser();
+}
+})();

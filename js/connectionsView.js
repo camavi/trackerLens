@@ -1,6 +1,7 @@
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (props = {}) => _.span({ ...props, class: `tl-link-dot${props.class ? ` ${props.class}` : ""}` });
+(function () {
 const runtimeParams = new URLSearchParams(window.location.search);
 
 if (runtimeParams.get("view") === "graph") {
@@ -660,7 +661,8 @@ const openFlowMap = () => {
   if (connectionState.runtimeFocus.nodeType) params.set("nodeType", connectionState.runtimeFocus.nodeType);
   if (connectionState.runtimeFocus.channel) params.set("channel", connectionState.runtimeFocus.channel);
   if (connectionState.runtimeFocus.connectionId) params.set("connectionId", connectionState.runtimeFocus.connectionId);
-  window.location.assign(`flowMap.html${params.toString() ? `?${params.toString()}` : ""}`);
+  const target = `flowMap.html${params.toString() ? `?${params.toString()}` : ""}`;
+  window.TrackerLensSidebar?.navigate?.(target) || window.location.assign(target);
 };
 
 const setSelected = (id) => {
@@ -669,12 +671,15 @@ const setSelected = (id) => {
   mountConnections();
 };
 
+let connectionsRoot = null;
+let connectionsEmbedded = false;
+let runtimeInspectorTimer = null;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-link-brand" });
 
 const renderTopbar = () =>
   _.header(
     { class: "tl-link-topbar" },
-    renderBrand(),
+    connectionsEmbedded ? null : renderBrand(),
     _.Search({
       class: "tl-link-global-search-input",
       label: "Cerca workspace...",
@@ -1373,11 +1378,11 @@ const renderAnalytics = () =>
 
 const renderShell = () =>
   _.div(
-    { class: "tl-link-shell" },
+    { class: `tl-link-shell${connectionsEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-link-body" },
-      renderSidebar(),
+      connectionsEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-link-main" },
         _.div({ class: "tl-link-grid-bg", "aria-hidden": "true" }),
@@ -1468,7 +1473,7 @@ const refreshRuntimeDom = ({ preserveScroll = true } = {}) => {
 };
 
 const mountConnections = () => {
-  const root = document.getElementById("tl-connections-root");
+  const root = connectionsRoot || document.getElementById("tl-connections-root");
   if (!root) return;
   syncReactiveState();
   root.replaceChildren(renderShell());
@@ -1476,7 +1481,8 @@ const mountConnections = () => {
 };
 
 const startRuntimeInspectorRefresh = () => {
-  window.setInterval(() => {
+  if (runtimeInspectorTimer) window.clearInterval(runtimeInspectorTimer);
+  runtimeInspectorTimer = window.setInterval(() => {
     if (connectionState.runtimeLoading) return;
     loadRuntimeInspectorData().then(() => {
       setLoadedAtState(new Date());
@@ -1485,6 +1491,29 @@ const startRuntimeInspectorRefresh = () => {
   }, 10000);
 };
 
-mountConnections();
-loadConnections();
-startRuntimeInspectorRefresh();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.connections = {
+  async mount({ outlet }) {
+    connectionsRoot = outlet;
+    connectionsEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("links");
+    mountConnections();
+    await loadConnections();
+    startRuntimeInspectorRefresh();
+  },
+  dispose() {
+    if (runtimeInspectorTimer) window.clearInterval(runtimeInspectorTimer);
+    runtimeInspectorTimer = null;
+    connectionState.mounted = false;
+    connectionsRoot?.replaceChildren();
+    connectionsRoot = null;
+    connectionsEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  mountConnections();
+  void loadConnections();
+  startRuntimeInspectorRefresh();
+}
+})();

@@ -488,6 +488,23 @@ body {
   max-height: none;
 }
 
+.tl-settings-shell.is-embedded {
+  width: 100%;
+}
+
+.tl-settings-shell.is-embedded .tl-settings-topbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: var(--tl-shell-topbar-inset);
+}
+
+.tl-settings-shell.is-embedded .tl-settings-brand {
+  display: none !important;
+}
+
+.tl-settings-shell.is-embedded .tl-settings-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .tl-settings-content-grid>.tl-settings-python-runtime {
   grid-column: 1 / -1;
   min-height: 430px;

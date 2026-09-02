@@ -20,7 +20,7 @@ const graphRelationsPackManifest = require("../runtimes/python/packs/graph-relat
 
 const projectRoot = path.resolve(__dirname, "..");
 const preloadPath = path.join(__dirname, "preload.cjs");
-const entryPoint = path.join(projectRoot, "flowMap.html");
+const entryPoint = path.join(projectRoot, "app.html");
 const websiteLogoIconPath = path.join(projectRoot, "icons", "logo128.png");
 const isDevelopment = process.env.NODE_ENV !== "production";
 const allowDevTools = process.env.TL_ELECTRON_DEVTOOLS === "1";

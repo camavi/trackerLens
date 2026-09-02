@@ -23,6 +23,11 @@ body {
     linear-gradient(180deg, #071016 0%, #03080d 100%);
 }
 
+.tl-analytics-shell.is-embedded { width: 100%; }
+.tl-analytics-shell.is-embedded .tl-analytics-topbar { grid-template-columns: minmax(0, 1fr) auto; padding-left: var(--tl-shell-topbar-inset); }
+.tl-analytics-shell.is-embedded .tl-analytics-brand { display: none !important; }
+.tl-analytics-shell.is-embedded .tl-analytics-body { grid-template-columns: minmax(0, 1fr); }
+
 .tl-analytics-topbar {
   height: 70px;
   padding: 0 22px 0 0;

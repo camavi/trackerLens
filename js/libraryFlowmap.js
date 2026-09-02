@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 
@@ -35,7 +36,7 @@ const FLOW_LOG_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_FL
 const CONNECTION_STORE = (typeof tlConfig !== "undefined" ? tlConfig.TABLES?.TL_CONNECTIONS : null) || "tl_connections";
 
 const normalizeText = (value, fallback = "") => value === null || value === undefined ? fallback : String(value).trim() || fallback;
-const openChromePage = (url) => window.location.assign(url);
+const openChromePage = (url) => window.TrackerLensSidebar?.navigate?.(url) || window.location.assign(url);
 const openFlowMap = (workspaceId) => openChromePage(`flowMap.html?workspaceId=${encodeURIComponent(workspaceId)}`);
 const flowColorPalette = ["#38bdf8", "#35c979", "#ffc72c", "#f472b6", "#a78bfa", "#2dd4bf", "#fb7185", "#60a5fa"];
 const safeFlowId = (value = "") =>
@@ -484,10 +485,12 @@ const openCreateFlowMapDialog = () => {
   requestAnimationFrame(() => titleInput.focus?.());
 };
 
+let flowLibraryRoot = null;
+let flowLibraryEmbedded = false;
 const renderTopbar = () =>
   _.header(
     { class: "tl-library-topbar" },
-    window.TrackerLensSidebar.renderBrand({ className: "tl-library-brand" }),
+    flowLibraryEmbedded ? null : window.TrackerLensSidebar.renderBrand({ className: "tl-library-brand" }),
     _.Search({
       class: "tl-library-search-input",
       label: "Cerca Flow Map...",
@@ -699,12 +702,13 @@ const bindCategorySearchInput = (root) => {
 };
 
 const mountFlowLibrary = () => {
-  const root = document.getElementById("tl-flow-library-root");
+  const root = flowLibraryRoot || document.getElementById("tl-flow-library-root");
+  if (!root) return;
   root.replaceChildren(
     _.div(
-      { class: "tl-library-shell" },
+      { class: `tl-library-shell tl-flow-library-shell${flowLibraryEmbedded ? " is-embedded" : ""}` },
       renderTopbar(),
-      _.div({ class: "tl-library-body" }, window.TrackerLensSidebar.render({ activeId: "flow" }), renderPanel(), renderMain())
+      _.div({ class: "tl-library-body" }, flowLibraryEmbedded ? null : window.TrackerLensSidebar.render({ activeId: "flow" }), renderPanel(), renderMain())
     )
   );
   bindSearchInput(root);
@@ -727,4 +731,20 @@ const loadFlowLibrary = async () => {
   mountFlowLibrary();
 };
 
-CMSwift.ready(loadFlowLibrary);
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.flowLibrary = {
+  async mount({ outlet }) {
+    flowLibraryRoot = outlet;
+    flowLibraryEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("flow");
+    await loadFlowLibrary();
+  },
+  dispose() {
+    flowLibraryRoot?.replaceChildren();
+    flowLibraryRoot = null;
+    flowLibraryEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) CMSwift.ready(loadFlowLibrary);
+})();

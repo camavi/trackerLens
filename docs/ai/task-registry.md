@@ -3,9 +3,25 @@
 Purpose: compact task status overview.
 Read when: changing task status or deciding next work.
 Do not read when: doing a local implementation already scoped by `current-focus.md`.
-Last updated: 2026-08-31.
+Last updated: 2026-09-02.
 
 ## Active
+
+### TASK-031: Persistent Desktop Shell Navigation
+
+Status: Started. Replace document-level sidebar navigation with one Electron renderer shell, internal History API routes and explicit view lifecycles. This is a desktop-app migration, not a cosmetic SPA overlay.
+Priority: High.
+Risk: High because Flow Map and Workspace own live runtimes, workers, listeners and unsaved UI state that must not be duplicated, leaked or silently reset.
+
+Current sub-steps:
+
+- Router foundation: implemented in `js/tl-app-router.js`. It provides a framework-neutral registry with `mount` / `dispose`, push/pop navigation and a persistent shell contract.
+- Navigation contract: internal routes use the History API and an explicit `mount` / `dispose` lifecycle; unregistered URLs remain temporary legacy document routes during the migration.
+- Navigation fallback regression: fixed. `TrackerLensSidebar.navigate()` now returns a handled result after starting an internal route; callers using the legacy fallback idiom no longer execute `window.location.assign()` immediately afterward. `test/tl-sidebar-navigation.test.cjs` preserves this contract.
+- First vertical slice: in progress. `app.html` is now Electron's default entry point; Library, Library Flow Map, Workspace Editor, Settings, AI Runtime Center, Runtime Python e Modelli, Statistics, Connections, DevTools, Profile, Database Explorer and Flow Map render inside its stable sidebar/outlet without document navigation. The router normalizes Electron `file://` absolute paths to logical routes, and each migrated view disconnects its local observers/subscriptions/timers before unmounting. Workspace also attaches its keyboard/pointer document handlers only while active and removes them on exit. Contextual jumps from Flow Map to AI, DevTools, Connections and Library Flow Map use that same internal navigation contract.
+- Compatibility: retain current HTML URLs as temporary entry points and map them to their equivalent internal route during the phased migration.
+- Runtime-view safety: Workspace has explicit listener ownership. Flow Map now has explicit lifecycle ownership; interactive QA must still prove that stop/start duplicates neither a runtime owner nor an active Live Test, and that the canvas recovers correctly.
+- Flow Map lifecycle foundation: implemented in `js/flowMapView.js`. Its bootstrap exposes `TrackerLensFlowMapLifecycle.start/stop/status`, tracks the worker subscription, polling timer and Flow-specific global listeners, disconnects the live Event Bus listener and removes page-level listeners on stop. Flow Map is registered in `app.html` and starts only when its internal route is mounted. Next is interactive QA that proves a stop/start leaves exactly one runtime owner and no active Live Test orphaned.
 
 ### TASK-030: Electron Desktop + Managed Python Migration
 

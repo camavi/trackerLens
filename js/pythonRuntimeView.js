@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (tone = "online") => _.span({ class: `tl-python-runtime-dot is-${tone}`, "aria-hidden": "true" });
@@ -22,6 +23,9 @@ const state = {
   openInstallOnLoad: new URLSearchParams(window.location.search).get("install") === "1",
 };
 let activeInstallDialog = null;
+let pythonRuntimeRoot = null;
+let pythonRuntimeEmbedded = false;
+let unsubscribeInstallProgress = null;
 
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-python-runtime-brand" });
 const renderSidebar = () => window.TrackerLensSidebar.render({ activeId: "python-runtime" });
@@ -156,18 +160,18 @@ const renderCatalog = () => {
 };
 
 const renderShell = () => _.div(
-  { class: "tl-python-runtime-shell" },
+  { class: `tl-python-runtime-shell${pythonRuntimeEmbedded ? " is-embedded" : ""}` },
   _.header(
     { class: "tl-python-runtime-topbar" },
-    renderBrand(),
+    pythonRuntimeEmbedded ? null : renderBrand(),
     _.div({ class: "tl-python-runtime-topbar-copy" }, _.strong("Runtime Python e Modelli"), _.span("Gestione locale, trasparente e controllata")),
     _.span({ class: `tl-python-runtime-live ${state.error ? "is-error" : ""}` }, dot(state.error ? "error" : "online"), state.error || state.notice || "Catalogo locale")
   ),
-  _.div({ class: "tl-python-runtime-body" }, renderSidebar(), _.main({ class: "tl-python-runtime-main" }, renderCatalog()))
+  _.div({ class: "tl-python-runtime-body" }, pythonRuntimeEmbedded ? null : renderSidebar(), _.main({ class: "tl-python-runtime-main" }, renderCatalog()))
 );
 
 const mount = () => {
-  const root = document.getElementById("tl-python-runtime-root");
+  const root = pythonRuntimeRoot || document.getElementById("tl-python-runtime-root");
   if (root) root.replaceChildren(renderShell());
 };
 
@@ -298,7 +302,8 @@ const requestPackInstallation = async (pack) => {
 };
 
 const boot = async () => {
-  window.trackers?.runtime?.pythonRuntime?.onInstallProgress?.((progress) => {
+  unsubscribeInstallProgress?.();
+  unsubscribeInstallProgress = window.trackers?.runtime?.pythonRuntime?.onInstallProgress?.((progress) => {
     state.installProgress = progress;
     if (progress.phase === "error") state.error = progress.message || "Installazione Python non riuscita";
     syncInstallDialogProgress(progress);
@@ -314,6 +319,26 @@ const boot = async () => {
   }
 };
 
-if (window.CMSwift?.ready) CMSwift.ready(boot);
-else if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
-else boot();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.pythonRuntime = {
+  async mount({ outlet }) {
+    pythonRuntimeRoot = outlet;
+    pythonRuntimeEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("python-runtime");
+    await boot();
+  },
+  dispose() {
+    unsubscribeInstallProgress?.();
+    unsubscribeInstallProgress = null;
+    pythonRuntimeRoot?.replaceChildren();
+    pythonRuntimeRoot = null;
+    pythonRuntimeEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  if (window.CMSwift?.ready) CMSwift.ready(boot);
+  else if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
+  else void boot();
+}
+})();

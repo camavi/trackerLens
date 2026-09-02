@@ -811,7 +811,7 @@ const renderNodeBuilderPreviewComponent = (node = {}) => {
       { class: `tl-flow-node-builder-preview-form-node is-${node.type}` },
       _.div(
         { class: "tl-flow-node-builder-preview-form-head" },
-        icon(nodeBuilderComponentIcon(node.type), "sm"),
+        flowMapIcon(nodeBuilderComponentIcon(node.type), "sm"),
         _.strong(label),
         _.em(node.type)
       ),
@@ -824,7 +824,7 @@ const renderNodeBuilderPreviewComponent = (node = {}) => {
   if (node.type === "badge" || node.type === "chip") {
     return _.span(
       { class: `tl-flow-node-builder-live-token is-${node.type}` },
-      icon(settings.icon || nodeBuilderComponentIcon(node.type), "sm"),
+      flowMapIcon(settings.icon || nodeBuilderComponentIcon(node.type), "sm"),
       label
     );
   }
@@ -837,7 +837,7 @@ const renderNodeBuilderPreviewComponent = (node = {}) => {
       value: settings.defaultValue || options[0]?.value || "",
       disabled: true,
       options,
-      slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+      slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
     });
   }
   if (node.type === "checkbox") {
@@ -953,7 +953,7 @@ const renderNodeBuilderPreviewFormNodes = (layout = []) => {
     : [
       _.div(
         { class: "tl-flow-node-builder-preview-form-empty is-inline" },
-        icon("view_agenda", "sm"),
+        flowMapIcon("view_agenda", "sm"),
         _.strong("No form layout"),
         _.span("Add a Card or drag components into Form Fields.")
       )
@@ -974,7 +974,7 @@ const renderNodeBuilderPreview = (template = defaultNodeBuilderTemplate()) => {
       { class: `tl-flow-node-builder-preview-node is-${tone}` },
       _.div(
         { class: "tl-flow-node-builder-preview-head" },
-        _.span({ class: `tl-flow-node-icon is-${tone}` }, icon(template.icon || "extension", "md")),
+        _.span({ class: `tl-flow-node-icon is-${tone}` }, flowMapIcon(template.icon || "extension", "md")),
         _.span(
           { class: "tl-flow-node-builder-preview-title" },
           _.strong(template.label || "Custom Node"),
@@ -1000,7 +1000,7 @@ const renderNodeBuilderPreview = (template = defaultNodeBuilderTemplate()) => {
       _.div(
         { class: "tl-flow-node-builder-preview-footer" },
         _.span(`${inputs.length} IN · ${outputs.length} OUT`),
-        btn({ class: "tl-flow-node-test-btn", disabled: true, title: runtimeKind === "form" ? "Preview only" : "Create the node, then use this Play button on the canvas" }, icon("play_arrow", "sm"))
+        flowMapBtn({ class: "tl-flow-node-test-btn", disabled: true, title: runtimeKind === "form" ? "Preview only" : "Create the node, then use this Play button on the canvas" }, flowMapIcon("play_arrow", "sm"))
       )
     )
   );
@@ -1012,7 +1012,7 @@ const renderNodeBuilderFormLayout = (layout = [], depth = 0) => {
     return [
       _.div(
         { class: "tl-flow-node-builder-empty-layout" },
-        icon("dynamic_form", "sm"),
+        flowMapIcon("dynamic_form", "sm"),
         _.strong("No form components"),
         _.span("Add a Card, Row, Col or input-like component.")
       ),
@@ -1031,10 +1031,10 @@ const renderNodeBuilderFormLayout = (layout = [], depth = 0) => {
       ].filter(Boolean);
     const childActions = isContainer ? _.span(
       { class: "tl-flow-node-builder-row-actions" },
-      btn({ title: "Add Row", "aria-label": "Add Row", "data-node-builder-add-child": `${node.id}:row` }, icon("view_stream", "sm")),
-      btn({ title: "Add Col", "aria-label": "Add Col", "data-node-builder-add-child": `${node.id}:col` }, icon("view_column", "sm")),
-      btn({ title: "Add Input", "aria-label": "Add Input", "data-node-builder-add-child": `${node.id}:input` }, icon("input", "sm")),
-      btn({ title: "Add Select", "aria-label": "Add Select", "data-node-builder-add-child": `${node.id}:select` }, icon("arrow_drop_down_circle", "sm"))
+      flowMapBtn({ title: "Add Row", "aria-label": "Add Row", "data-node-builder-add-child": `${node.id}:row` }, flowMapIcon("view_stream", "sm")),
+      flowMapBtn({ title: "Add Col", "aria-label": "Add Col", "data-node-builder-add-child": `${node.id}:col` }, flowMapIcon("view_column", "sm")),
+      flowMapBtn({ title: "Add Input", "aria-label": "Add Input", "data-node-builder-add-child": `${node.id}:input` }, flowMapIcon("input", "sm")),
+      flowMapBtn({ title: "Add Select", "aria-label": "Add Select", "data-node-builder-add-child": `${node.id}:select` }, flowMapIcon("arrow_drop_down_circle", "sm"))
     ) : null;
     return _.div(
       {
@@ -1045,7 +1045,7 @@ const renderNodeBuilderFormLayout = (layout = [], depth = 0) => {
       },
       _.div(
         { class: "tl-flow-node-builder-layout-head" },
-        icon(nodeBuilderComponentIcon(node.type), "sm"),
+        flowMapIcon(nodeBuilderComponentIcon(node.type), "sm"),
         _.span(
           { class: "tl-flow-node-builder-row-main" },
           _.strong(node.label || node.key || node.type),
@@ -1053,8 +1053,8 @@ const renderNodeBuilderFormLayout = (layout = [], depth = 0) => {
         ),
         node.key && !isContainer ? _.code(node.key) : null,
         childActions,
-        btn({ title: "Component settings", "aria-label": "Component settings", "data-node-builder-edit-field": node.id }, icon("tune", "sm")),
-        btn({ title: "Remove component", "aria-label": "Remove component", "data-node-builder-delete-field": node.id, disabled: depth === 0 && nodes.length <= 1 && index === 0 }, icon("delete", "sm"))
+        flowMapBtn({ title: "Component settings", "aria-label": "Component settings", "data-node-builder-edit-field": node.id }, flowMapIcon("tune", "sm")),
+        flowMapBtn({ title: "Remove component", "aria-label": "Remove component", "data-node-builder-delete-field": node.id, disabled: depth === 0 && nodes.length <= 1 && index === 0 }, flowMapIcon("delete", "sm"))
       ),
       isContainer ? _.div(
         { class: "tl-flow-node-builder-layout-children" },
@@ -1069,7 +1069,7 @@ const renderNodeBuilderFormLayout = (layout = [], depth = 0) => {
 const renderNodeBuilderPortRows = (ports = [], side = "in") =>
   normalizeNodeBuilderPorts(ports, side).map((port, index) => _.div(
     { class: `tl-flow-node-builder-port-row${port.visible === false ? " is-hidden-port" : ""}`, "data-node-builder-port-side": side, "data-node-builder-port-index": index },
-    icon("drag_indicator", "sm"),
+    flowMapIcon("drag_indicator", "sm"),
     _.span(
       { class: "tl-flow-node-builder-row-main" },
       _.strong(port.name || port.label || (side === "in" ? "input" : "output")),
@@ -1077,9 +1077,9 @@ const renderNodeBuilderPortRows = (ports = [], side = "in") =>
         ? `${port.type || "object"} · ${port.sourceMode || "runtimeResult"}${port.sourceComponentKey ? `:${port.sourceComponentKey}` : ""}`
         : `${port.type || "object"}${port.required ? " · required" : ""}`)
     ),
-    btn({ title: "Port settings", "aria-label": "Port settings", "data-node-builder-edit-port": `${side}:${index}` }, icon("tune", "sm")),
-    btn({ title: port.visible === false ? "Show on node" : "Hide from node", "aria-label": port.visible === false ? "Show on node" : "Hide from node", "data-node-builder-toggle-port": `${side}:${index}` }, icon(port.visible === false ? "visibility_off" : "visibility", "sm")),
-    btn({ title: "Remove port", "aria-label": "Remove port", "data-node-builder-delete-port": `${side}:${index}`, disabled: ports.length <= 1 }, icon("delete", "sm"))
+    flowMapBtn({ title: "Port settings", "aria-label": "Port settings", "data-node-builder-edit-port": `${side}:${index}` }, flowMapIcon("tune", "sm")),
+    flowMapBtn({ title: port.visible === false ? "Show on node" : "Hide from node", "aria-label": port.visible === false ? "Show on node" : "Hide from node", "data-node-builder-toggle-port": `${side}:${index}` }, flowMapIcon(port.visible === false ? "visibility_off" : "visibility", "sm")),
+    flowMapBtn({ title: "Remove port", "aria-label": "Remove port", "data-node-builder-delete-port": `${side}:${index}`, disabled: ports.length <= 1 }, flowMapIcon("delete", "sm"))
   ));
 
 const renderNodeBuilderCmswiftComponents = () =>
@@ -1091,8 +1091,8 @@ const renderNodeBuilderCmswiftComponents = () =>
       "aria-label": `CMSwift ${component.label}`,
       "data-node-builder-add-component": component.label.toLowerCase(),
     },
-    icon("drag_indicator", "sm"),
-    _.span({ class: "tl-flow-node-builder-component-icon" }, icon(component.icon || "widgets", "sm")),
+    flowMapIcon("drag_indicator", "sm"),
+    _.span({ class: "tl-flow-node-builder-component-icon" }, flowMapIcon(component.icon || "widgets", "sm")),
     _.span(
       { class: "tl-flow-node-builder-template-main" },
       _.strong(component.label),
@@ -1258,7 +1258,7 @@ const openNodeBuilderDialog = (options = {}) => {
             clearable: true,
             filterPlaceholder: "Search icon",
             icon: settingsValue.icon || "auto_awesome",
-            slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+            slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
             onChange: (value) => {
               settingsValue.icon = String(readCmsValue(value) || "").trim() || null;
             },
@@ -1268,7 +1268,7 @@ const openNodeBuilderDialog = (options = {}) => {
             label: "Color",
             value: settingsValue.color || "success",
             options: colorOptions,
-            slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+            slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
             onChange: (value) => {
               settingsValue.color = String(readCmsValue(value) || "success");
             },
@@ -1414,7 +1414,7 @@ const openNodeBuilderDialog = (options = {}) => {
           label: "Type",
           value: typeValue,
           options: typeOptions,
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => {
             typeValue = String(readCmsValue(value) || "string");
           },
@@ -1435,8 +1435,8 @@ const openNodeBuilderDialog = (options = {}) => {
       ),
       actions: ({ close }) => _.Toolbar(
         { align: "end", gap: 8 },
-        btn({ onclick: close }, "Cancel"),
-        btn({ class: "st-btn-primary", onclick: saveFieldSettings }, icon("save", "sm"), "Save Field")
+        flowMapBtn({ onclick: close }, "Cancel"),
+        flowMapBtn({ class: "st-btn-primary", onclick: saveFieldSettings }, flowMapIcon("save", "sm"), "Save Field")
       ),
     });
     fieldDialog.open();
@@ -1722,7 +1722,7 @@ const openNodeBuilderDialog = (options = {}) => {
             value: draft.type,
             options: NODE_BUILDER_PORT_TYPE_OPTIONS,
             filterable: true,
-            slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+            slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
             onChange: (value) => {
               draft.type = String(readCmsValue(value) || "object");
             },
@@ -1769,7 +1769,7 @@ const openNodeBuilderDialog = (options = {}) => {
             label: "Source",
             value: draft.sourceMode,
             options: NODE_BUILDER_OUTPUT_SOURCE_OPTIONS,
-            slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+            slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
             onChange: (value) => {
               draft.sourceMode = String(readCmsValue(value) || "runtimeResult");
             },
@@ -1780,7 +1780,7 @@ const openNodeBuilderDialog = (options = {}) => {
             value: draft.sourceComponentKey,
             options: componentOptions,
             filterable: true,
-            slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+            slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
             onChange: (value) => {
               draft.sourceComponentKey = String(readCmsValue(value) || "");
             },
@@ -1809,8 +1809,8 @@ const openNodeBuilderDialog = (options = {}) => {
       ),
       actions: ({ close }) => _.Toolbar(
         { align: "end", gap: 8 },
-        btn({ onclick: close }, "Cancel"),
-        btn({ class: "st-btn-primary", onclick: savePortSettings }, icon("save", "sm"), "Save Port")
+        flowMapBtn({ onclick: close }, "Cancel"),
+        flowMapBtn({ class: "st-btn-primary", onclick: savePortSettings }, flowMapIcon("save", "sm"), "Save Port")
       ),
     });
     portDialog.open();
@@ -1872,7 +1872,7 @@ const openNodeBuilderDialog = (options = {}) => {
           value: kind,
           options: NODE_BUILDER_RUNTIME_OPTIONS,
           "data-node-builder-runtime": "connector",
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => updateBuilderRuntime(root || document.querySelector(".tl-flow-node-builder"), { runtimeConnector: String(readBuilderRuntimeValue(value) || "form") }, true),
         }),
         isNetwork ? _.Input({
@@ -1893,7 +1893,7 @@ const openNodeBuilderDialog = (options = {}) => {
           value: builder.method || "GET",
           options: NODE_BUILDER_HTTP_METHOD_OPTIONS,
           "data-node-builder-runtime": "method",
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => updateBuilderRuntime(root || document.querySelector(".tl-flow-node-builder"), { method: String(readBuilderRuntimeValue(value) || "GET").toUpperCase() }),
         }) : null,
         kind === "rest" ? _.Input({
@@ -1936,7 +1936,7 @@ const openNodeBuilderDialog = (options = {}) => {
       button.textContent = "Saved";
       window.setTimeout(() => {
         button.classList.remove("is-saved");
-        button.replaceChildren(icon("save", "sm"), "Save Template");
+        button.replaceChildren(flowMapIcon("save", "sm"), "Save Template");
       }, 1200);
     }
   };
@@ -2167,8 +2167,8 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-side-card", "data-node-builder-side-card": "components" },
           _.button(
             { type: "button", class: "tl-flow-node-builder-side-head", "data-node-builder-toggle-side-card": "components", "aria-expanded": "true" },
-            _.span(icon("view_quilt", "sm"), _.strong("Components")),
-            icon("expand_less", "sm")
+            _.span(flowMapIcon("view_quilt", "sm"), _.strong("Components")),
+            flowMapIcon("expand_less", "sm")
           ),
           _.div(
             { class: "tl-flow-node-builder-side-body", "data-node-builder-side-body": "components" },
@@ -2179,14 +2179,14 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-side-card", "data-node-builder-side-card": "templates", hidden: editMode },
           _.button(
             { type: "button", class: "tl-flow-node-builder-side-head", "data-node-builder-toggle-side-card": "templates", "aria-expanded": "true" },
-            _.span(icon("category", "sm"), _.strong("Templates")),
-            icon("expand_less", "sm")
+            _.span(flowMapIcon("category", "sm"), _.strong("Templates")),
+            flowMapIcon("expand_less", "sm")
           ),
           _.div(
             { class: "tl-flow-node-builder-side-body", "data-node-builder-side-body": "templates" },
             _.div(
               { class: "tl-flow-node-builder-search" },
-              icon("search", "sm"),
+              flowMapIcon("search", "sm"),
               _.input({
                 type: "search",
                 placeholder: "Search templates",
@@ -2209,7 +2209,7 @@ const openNodeBuilderDialog = (options = {}) => {
                       "data-node-builder-search": nodeBuilderTemplateSearchText(group, item),
                       onclick: (event) => syncSelection(event.currentTarget.closest(".tl-flow-node-builder"), id),
                     },
-                    _.span({ class: "tl-flow-node-builder-template-icon" }, icon(item.icon || "extension", "sm")),
+                    _.span({ class: "tl-flow-node-builder-template-icon" }, flowMapIcon(item.icon || "extension", "sm")),
                     _.span(
                       { class: "tl-flow-node-builder-template-main" },
                       _.strong(item.label || "Node Template"),
@@ -2220,7 +2220,7 @@ const openNodeBuilderDialog = (options = {}) => {
               )),
               _.div(
                 { class: "tl-flow-palette-empty", "data-node-builder-empty": "true", hidden: true },
-                icon("search_off", "sm"),
+                flowMapIcon("search_off", "sm"),
                 _.strong("No templates found"),
                 _.span("Try another name, type or permission.")
               )
@@ -2234,7 +2234,7 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-card" },
           _.div(
             { class: "tl-flow-node-builder-card-head" },
-            _.span(icon("tune", "sm"), _.strong("General")),
+            _.span(flowMapIcon("tune", "sm"), _.strong("General")),
             _.em({ "data-node-builder-active-meta": "true" }, `${selected.group} · ${selected.item.nodeType || "node"} · ${selected.item.subtype || "custom"}`)
           ),
           _.div(
@@ -2258,7 +2258,7 @@ const openNodeBuilderDialog = (options = {}) => {
               value: builder.category || "custom",
               options: FLOW_NODE_CATEGORY_OPTIONS,
               "data-node-builder-field": "category",
-              slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+              slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
               onChange: (value) => {
                 builder.category = value?.target?.value || value || "custom";
                 refreshNodeBuilder(rootFor(document.querySelector(".tl-flow-node-builder")));
@@ -2286,7 +2286,7 @@ const openNodeBuilderDialog = (options = {}) => {
               filterPlaceholder: "Search icon",
               "data-node-builder-field": "icon",
               icon: builder.icon || "extension",
-              slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+              slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
               onChange: (value) => {
                 builder.icon = value?.target?.value || value || "extension";
                 refreshNodeBuilder(rootFor(document.querySelector(".tl-flow-node-builder")));
@@ -2299,7 +2299,7 @@ const openNodeBuilderDialog = (options = {}) => {
               value: builder.tone || "gold",
               options: FLOW_NODE_TONE_OPTIONS,
               "data-node-builder-field": "tone",
-              slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+              slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
               onChange: (value) => {
                 builder.tone = value?.target?.value || value || "gold";
                 refreshNodeBuilder(rootFor(document.querySelector(".tl-flow-node-builder")));
@@ -2311,11 +2311,11 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-card" },
           _.div(
             { class: "tl-flow-node-builder-card-head" },
-            _.span(icon("dynamic_form", "sm"), _.strong("Form Fields")),
+            _.span(flowMapIcon("dynamic_form", "sm"), _.strong("Form Fields")),
             _.span(
               { class: "tl-flow-node-builder-head-actions" },
-              btn({ title: "Add Card", onclick: (event) => { event.preventDefault(); addBuilderCard(rootFor(event)); } }, icon("view_agenda", "sm"), "Add Card"),
-              btn({ title: "Add Field", onclick: (event) => { event.preventDefault(); addBuilderField(rootFor(event)); } }, icon("add", "sm"), "Add Field")
+              flowMapBtn({ title: "Add Card", onclick: (event) => { event.preventDefault(); addBuilderCard(rootFor(event)); } }, flowMapIcon("view_agenda", "sm"), "Add Card"),
+              flowMapBtn({ title: "Add Field", onclick: (event) => { event.preventDefault(); addBuilderField(rootFor(event)); } }, flowMapIcon("add", "sm"), "Add Field")
             )
           ),
           _.div({ class: "tl-flow-node-builder-rows", "data-node-builder-fields": "true", "data-node-builder-drop-root": "true" }, ...renderNodeBuilderFormLayout(builder.formLayout || []))
@@ -2324,17 +2324,17 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-card" },
           _.div(
             { class: "tl-flow-node-builder-card-head" },
-            _.span(icon("hub", "sm"), _.strong("Ports")),
+            _.span(flowMapIcon("hub", "sm"), _.strong("Ports")),
             _.em("Manifest IN / OUT")
           ),
           _.div(
             { class: "tl-flow-node-builder-ports" },
             _.div(
-              _.h4("Inputs", btn({ title: "Add input", "aria-label": "Add input", "data-node-builder-add-port": "in" }, icon("add", "sm"))),
+              _.h4("Inputs", flowMapBtn({ title: "Add input", "aria-label": "Add input", "data-node-builder-add-port": "in" }, flowMapIcon("add", "sm"))),
               _.div({ "data-node-builder-inputs": "true" }, ...renderNodeBuilderPortRows(builder.inputs, "in"))
             ),
             _.div(
-              _.h4("Outputs", btn({ title: "Add output", "aria-label": "Add output", "data-node-builder-add-port": "out" }, icon("add", "sm"))),
+              _.h4("Outputs", flowMapBtn({ title: "Add output", "aria-label": "Add output", "data-node-builder-add-port": "out" }, flowMapIcon("add", "sm"))),
               _.div({ "data-node-builder-outputs": "true" }, ...renderNodeBuilderPortRows(builder.outputs, "out"))
             )
           )
@@ -2343,7 +2343,7 @@ const openNodeBuilderDialog = (options = {}) => {
           { class: "tl-flow-node-builder-card" },
           _.div(
             { class: "tl-flow-node-builder-card-head" },
-            _.span(icon("bolt", "sm"), _.strong("Runtime")),
+            _.span(flowMapIcon("bolt", "sm"), _.strong("Runtime")),
             _.em("Call + test")
           ),
           _.div({ "data-node-builder-runtime-panel": "true" }, renderNodeBuilderRuntimePanel()),
@@ -2368,11 +2368,11 @@ const openNodeBuilderDialog = (options = {}) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { class: "tl-flow-node-builder-actions", align: "end", gap: 8 },
-      btn({ class: "tl-flow-node-builder-action is-cancel", onclick: close }, "Cancel"),
-      btn({ class: "tl-flow-node-builder-action is-template", "data-node-builder-save-template": "true", onclick: (event) => saveBuilderTemplateAction(rootFor(event)) }, icon("save", "sm"), "Save Template"),
+      flowMapBtn({ class: "tl-flow-node-builder-action is-cancel", onclick: close }, "Cancel"),
+      flowMapBtn({ class: "tl-flow-node-builder-action is-template", "data-node-builder-save-template": "true", onclick: (event) => saveBuilderTemplateAction(rootFor(event)) }, flowMapIcon("save", "sm"), "Save Template"),
       editMode
-        ? btn({ class: "tl-flow-node-builder-action is-create st-btn-primary", onclick: (event) => saveExistingNodeFromBuilderAction(rootFor(event), close) }, icon("save", "sm"), "Save Node")
-        : btn({ class: "tl-flow-node-builder-action is-create st-btn-primary", onclick: (event) => createNodeFromBuilderAction(rootFor(event), close) }, icon("save", "sm"), "Create Node")
+        ? flowMapBtn({ class: "tl-flow-node-builder-action is-create st-btn-primary", onclick: (event) => saveExistingNodeFromBuilderAction(rootFor(event), close) }, flowMapIcon("save", "sm"), "Save Node")
+        : flowMapBtn({ class: "tl-flow-node-builder-action is-create st-btn-primary", onclick: (event) => createNodeFromBuilderAction(rootFor(event), close) }, flowMapIcon("save", "sm"), "Create Node")
     ),
   });
   dialog.open();

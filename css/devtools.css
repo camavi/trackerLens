@@ -5,6 +5,21 @@
   color: #f4f7fb;
 }
 
+.tl-devtools-shell.is-embedded {
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tl-devtools-shell.is-embedded .tl-devtools-topbar {
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: var(--tl-shell-topbar-inset);
+}
+
+.tl-devtools-shell.is-embedded .tl-devtools-brand { display: none !important; }
+.tl-devtools-shell.is-embedded .tl-view-sidebar { display: none; }
+.tl-devtools-shell.is-embedded .tl-devtools-main { grid-column: 1; }
+
 .tl-devtools-shell {
   min-height: 100vh;
   display: grid;

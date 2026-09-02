@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const dot = (tone = "online") => _.span({ class: `tl-settings-dot is-${tone}`, "aria-hidden": "true" });
@@ -340,12 +341,14 @@ const syncSettingsNavigation = () => {
   applySettingsSearch();
 };
 
+let settingsRoot = null;
+let settingsEmbedded = false;
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-settings-brand" });
 
 const renderTopbar = () =>
   _.header(
     { class: "tl-settings-topbar" },
-    renderBrand(),
+    settingsEmbedded ? null : renderBrand(),
     _.div(
       { class: "tl-settings-search" },
       _.Search({
@@ -1065,11 +1068,11 @@ const patchSettingsRuntimeChrome = () => {
 
 const renderShell = () =>
   _.div(
-    { class: "tl-settings-shell" },
+    { class: `tl-settings-shell${settingsEmbedded ? " is-embedded" : ""}` },
     renderTopbar(),
     _.div(
       { class: "tl-settings-body" },
-      renderSidebar(),
+      settingsEmbedded ? null : renderSidebar(),
       _.main(
         { class: "tl-settings-main" },
         _.div({ class: "tl-settings-grid-bg", "aria-hidden": "true" }),
@@ -1305,7 +1308,7 @@ const addApiKey = async () => {
 };
 
 const mountSettings = () => {
-  const root = document.getElementById("tl-settings-root");
+  const root = settingsRoot || document.getElementById("tl-settings-root");
   if (!root) return;
   settingsState.updatedAt = new Date();
   root.replaceChildren(renderShell());
@@ -1330,15 +1333,32 @@ const bootSettings = async () => {
   mountSettings();
 };
 
-if (window.CMSwift?.ready) {
-  CMSwift.ready(bootSettings);
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.settings = {
+  async mount({ outlet }) {
+    settingsRoot = outlet;
+    settingsEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("settings");
+    await bootSettings();
+  },
+  dispose() {
+    settingsSectionObserver?.disconnect();
+    settingsRoot?.replaceChildren();
+    settingsRoot = null;
+    settingsEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  if (window.CMSwift?.ready) CMSwift.ready(bootSettings);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      if (!document.getElementById("tl-settings-root")?.children.length) bootSettings();
+    }, { once: true });
+  } else {
+    window.setTimeout(() => {
+      if (!document.getElementById("tl-settings-root")?.children.length) bootSettings();
+    }, 0);
+  }
 }
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => {
-    if (!document.getElementById("tl-settings-root")?.children.length) bootSettings();
-  }, { once: true });
-} else {
-  window.setTimeout(() => {
-    if (!document.getElementById("tl-settings-root")?.children.length) bootSettings();
-  }, 0);
-}
+})();

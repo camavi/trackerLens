@@ -142,8 +142,8 @@ const requestEdgeDelete = (edge) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      btn({ class: "is-danger", onclick: () => performEdgeDelete(edge, close) }, icon("link_off", "sm"), "Delete Link")
+      flowMapBtn({ onclick: close }, "Cancel"),
+      flowMapBtn({ class: "is-danger", onclick: () => performEdgeDelete(edge, close) }, flowMapIcon("link_off", "sm"), "Delete Link")
     ),
   });
   dialog.open();
@@ -325,7 +325,7 @@ const renderCanvasNodeMenu = () =>
               onClick: (event) => event.stopPropagation(),
               onPointerDown: (event) => event.stopPropagation(),
             }),
-            btn({
+            flowMapBtn({
               class: "tl-flow-node-menu-create",
               title: "Create custom node",
               "aria-label": "Create custom node",
@@ -334,7 +334,7 @@ const renderCanvasNodeMenu = () =>
                 mount({ preserveScroll: true });
                 window.setTimeout(() => openNodeBuilderDialog(), 0);
               },
-            }, icon("add_box", "sm"))
+            }, flowMapIcon("add_box", "sm"))
           ),
         ...(typeof effectiveNodePalette === "function" ? effectiveNodePalette() : nodePalette).map(([title, items]) => {
           const hasVisibleItems = items.some((item) => paletteItemMatchesSearch(item, title));
@@ -356,7 +356,7 @@ const renderCanvasNodeMenu = () =>
                   const toggleIcon = event.currentTarget?.querySelector?.(".cms-icon");
                   if (toggleIcon) toggleIcon.textContent = nextCollapsed ? "chevron_right" : "expand_more";
                 },
-              }, _.span(title), _.em(String(items.filter((item) => paletteItemMatchesSearch(item, title)).length)), icon(collapsed ? "chevron_right" : "expand_more", "sm")),
+              }, _.span(title), _.em(String(items.filter((item) => paletteItemMatchesSearch(item, title)).length)), flowMapIcon(collapsed ? "chevron_right" : "expand_more", "sm")),
               ...items.map((item) =>
                 _.button(
                   {
@@ -370,7 +370,7 @@ const renderCanvasNodeMenu = () =>
                       await createContextMenuNode(item);
                     },
                   },
-                  icon(item.icon, "sm"),
+                  flowMapIcon(item.icon, "sm"),
                   _.span(item.label),
                   item.runtimeBlocked ? _.em("Runtime blocked") : null
                 )
@@ -380,7 +380,7 @@ const renderCanvasNodeMenu = () =>
         }),
         _.div(
           { class: "tl-flow-node-menu-empty", "data-flow-palette-empty": "true", hidden: visiblePalette.length > 0 },
-          icon("search_off", "sm"),
+          flowMapIcon("search_off", "sm"),
           _.strong("No nodes found"),
           _.span("Try another name, type or category.")
         )
@@ -390,12 +390,12 @@ const renderCanvasNodeMenu = () =>
   })();
 
 const renderPromptChatTrigger = () =>
-  btn({
+  flowMapBtn({
     class: "tl-flow-prompt-chat-btn",
     title: "AI Flow Chat",
     "aria-label": "Open AI Flow Chat",
     onclick: () => openFlowPromptChatDialog(),
-  }, icon("auto_awesome", "sm"), "AI Chat");
+  }, flowMapIcon("auto_awesome", "sm"), "AI Chat");
 
 const renderFilterbar = () =>
   _.div(
@@ -418,15 +418,15 @@ const renderFilterbar = () =>
       { value: "errors", label: "Errors only" },
     ]),
     renderSelect("tl-flow-select is-small", filterModel("eventType"), eventTypeOptions()),
-    hasActiveFilters() ? btn({ class: "is-ghost is-filter-reset", onclick: resetFilters }, icon("filter_alt_off", "sm"), "Reset") : null
+    hasActiveFilters() ? flowMapBtn({ class: "is-ghost is-filter-reset", onclick: resetFilters }, flowMapIcon("filter_alt_off", "sm"), "Reset") : null
   );
 
 const renderControls = () =>
   _.div(
     { class: `tl-flow-controls${state.debugMode ? " is-debug" : ""}` },
-    btn({ "aria-label": "Select" }, icon("near_me", "sm")),
-    btn({ "aria-label": "Fit view", onclick: fitVisibleGraph }, icon("fit_screen", "sm")),
-    btn({
+    flowMapBtn({ "aria-label": "Select" }, flowMapIcon("near_me", "sm")),
+    flowMapBtn({ "aria-label": "Fit view", onclick: fitVisibleGraph }, flowMapIcon("fit_screen", "sm")),
+    flowMapBtn({
       "aria-label": state.debugMode ? "Disable debug mode" : "Enable debug mode",
       title: state.debugMode ? "Disable debug mode" : "Enable debug mode",
       class: state.debugMode ? "is-active" : "",
@@ -435,11 +435,11 @@ const renderControls = () =>
         localStorage.setItem("tl_flow_debug_mode", String(state.debugMode));
         mount({ preserveScroll: true });
       },
-    }, icon("bug_report", "sm")),
-    btn({ "aria-label": "Zoom out", onclick: () => setZoom(-0.1) }, icon("remove", "sm")),
+    }, flowMapIcon("bug_report", "sm")),
+    flowMapBtn({ "aria-label": "Zoom out", onclick: () => setZoom(-0.1) }, flowMapIcon("remove", "sm")),
     _.span({ "data-flow-zoom-label": "true" }, `${Math.round(state.viewport.zoom * 100)}%`),
-    btn({ "aria-label": "Zoom in", onclick: () => setZoom(0.1) }, icon("add", "sm")),
-    btn({ "aria-label": "Reset view", onclick: resetViewport }, icon("grid_view", "sm"))
+    flowMapBtn({ "aria-label": "Zoom in", onclick: () => setZoom(0.1) }, flowMapIcon("add", "sm")),
+    flowMapBtn({ "aria-label": "Reset view", onclick: resetViewport }, flowMapIcon("grid_view", "sm"))
   );
 
 const edgePortOffset = (dependency, dependencies = []) => {
@@ -1053,7 +1053,7 @@ const renderNodeRuntimeBanner = (node = {}, live = null) => {
       "data-flow-node-runtime-banner": node.id,
       hidden: !banner,
     },
-    banner ? icon(banner.icon, "sm") : null,
+    banner ? flowMapIcon(banner.icon, "sm") : null,
     banner ? _.strong(banner.label) : null,
     banner ? _.span({ class: "tl-flow-node-runtime-loader", "aria-hidden": "true" }) : null
   );
@@ -1116,7 +1116,7 @@ const renderNodeTokenMetrics = (node = {}) => {
   return _.span(
     { class: "tl-flow-node-token-metrics", title: detail || "Token usage" },
     _.span({ class: "tl-flow-node-token-label" }, "total token:"),
-    btn({
+    flowMapBtn({
       class: "tl-flow-token-value-btn",
       title: "Show total token details",
       onPointerDown: stopNodeControlEvent,
@@ -1127,7 +1127,7 @@ const renderNodeTokenMetrics = (node = {}) => {
       },
     }, formatTokenCount(usage.totalTokens)),
     _.span({ class: "tl-flow-node-token-label" }, "last token:"),
-    btn({
+    flowMapBtn({
       class: "tl-flow-token-value-btn",
       title: "Show last token details",
       onPointerDown: stopNodeControlEvent,
@@ -1137,7 +1137,7 @@ const renderNodeTokenMetrics = (node = {}) => {
         requestTokenUsageDetails(node, "last");
       },
     }, formatTokenCount(usage.lastTokens)),
-    btn({
+    flowMapBtn({
       class: "tl-flow-token-clear-btn",
       "aria-label": "Clear token usage",
       title: "Clear token usage",
@@ -1147,7 +1147,7 @@ const renderNodeTokenMetrics = (node = {}) => {
         event.stopPropagation();
         requestTokenUsageClear(node);
       },
-    }, icon("cleaning_services", "sm"))
+    }, flowMapIcon("cleaning_services", "sm"))
   );
 };
 
@@ -1182,8 +1182,8 @@ const renderAiAgentPolicySummary = (node = {}) => {
   const saveResponses = configBoolEnabled(config.saveResponsesToMemory ?? config.saveResponses, true);
   return _.div(
     { class: "tl-flow-ai-agent-policy-summary" },
-    _.span(icon("shield", "sm"), _.strong("Trigger"), aiAgentPolicyLabel(config.triggerPolicy)),
-    _.span(icon("memory", "sm"), _.strong("Memory"), `read ${readMemory ? "on" : "off"} · save ${saveResponses ? "on" : "off"}`)
+    _.span(flowMapIcon("shield", "sm"), _.strong("Trigger"), aiAgentPolicyLabel(config.triggerPolicy)),
+    _.span(flowMapIcon("memory", "sm"), _.strong("Memory"), `read ${readMemory ? "on" : "off"} · save ${saveResponses ? "on" : "off"}`)
   );
 };
 
@@ -1227,7 +1227,7 @@ const latestOutputPreviewRecordForNode = (node = {}, outputPorts = []) => {
 
 const renderNodeOutputPreviewButton = (node = {}, outputPorts = []) => {
   const record = latestOutputPreviewRecordForNode(node, outputPorts);
-  return btn({
+  return flowMapBtn({
     class: `tl-flow-node-out-preview-btn${record ? "" : " is-empty"}`,
     "data-flow-node-out-preview-btn": node.id || "",
     "aria-label": `View ${node.label || node.id || "node"} OUT payload`,
@@ -1251,7 +1251,7 @@ const renderNodeOutputPreviewButton = (node = {}, outputPorts = []) => {
         icon: "visibility",
       });
     },
-  }, _.span({ class: "tl-flow-node-out-preview-label" }, "OUT"), icon("visibility", "sm"));
+  }, _.span({ class: "tl-flow-node-out-preview-label" }, "OUT"), flowMapIcon("visibility", "sm"));
 };
 
 const replaceRenderedNode = (selector, nextNode, { preserveScroll = false } = {}) => {
@@ -1295,7 +1295,7 @@ const refreshNodeRuntimeDom = (graph, activity) => {
       runtimeBanner.hidden = !banner;
       runtimeBanner.className = `tl-flow-node-runtime-banner${banner ? ` is-visible is-${banner.tone}` : ""}`;
       runtimeBanner.replaceChildren(
-        banner ? icon(banner.icon, "sm") : null,
+        banner ? flowMapIcon(banner.icon, "sm") : null,
         banner ? _.strong(banner.label) : null,
         banner ? _.span({ class: "tl-flow-node-runtime-loader", "aria-hidden": "true" }) : null
       );
@@ -1321,7 +1321,7 @@ const refreshNodeRuntimeDom = (graph, activity) => {
         : "Run real one-shot live test from this root node through connected children";
       testButton.classList.toggle("is-running", busy);
       testButton.disabled = rootBlocked || state.testRun.running || processingNodeIds.has(node.id);
-      testButton.replaceChildren(icon(busy ? "hourglass_top" : "play_arrow", "sm"));
+      testButton.replaceChildren(flowMapIcon(busy ? "hourglass_top" : "play_arrow", "sm"));
     }
   });
 };
@@ -1332,13 +1332,13 @@ const refreshInspectorRuntimeDom = () => {
 
   const edge = selectedEdge();
   if (edge) {
-    status.replaceChildren(dot(), edge.status || "active");
+    status.replaceChildren(flowMapDot(), edge.status || "active");
     return;
   }
 
   const node = selectedNode();
   if (!node) return;
-  status.replaceChildren(dot(), isDraftNode(node) ? "draft" : node.status || "active");
+  status.replaceChildren(flowMapDot(), isDraftNode(node) ? "draft" : node.status || "active");
 };
 
 const refreshStatusBarDom = ({ preserveScroll = false } = {}) => {
@@ -1395,7 +1395,7 @@ const renderNodeQuickActions = (node, view) => {
   const canDeleteRuntimeNode = canDeleteRuntimeCanvasNode(node);
   return _.span(
     { class: "tl-flow-node-quick-actions", onPointerDown: stopNodeControlEvent, onclick: stopNodeControlEvent },
-    btn({
+    flowMapBtn({
       "aria-label": paused || disabled ? "Resume runtime" : "Pause runtime",
       title: paused || disabled ? "Resume runtime" : "Pause runtime",
       onclick: (event) => {
@@ -1403,8 +1403,8 @@ const renderNodeQuickActions = (node, view) => {
         event.stopPropagation();
         paused || disabled ? resumeNodeRuntime(node) : pauseNodeRuntime(node);
       },
-    }, icon(paused || disabled ? "play_arrow" : "pause", "sm")),
-    btn({
+    }, flowMapIcon(paused || disabled ? "play_arrow" : "pause", "sm")),
+    flowMapBtn({
       "aria-label": node.metadata?.collapsed ? "Expand node" : "Collapse node",
       title: node.metadata?.collapsed ? "Expand node" : "Collapse node",
       onclick: (event) => {
@@ -1412,8 +1412,8 @@ const renderNodeQuickActions = (node, view) => {
         event.stopPropagation();
         toggleNodeCollapse(node);
       },
-    }, icon(node.metadata?.collapsed ? "unfold_more" : "unfold_less", "sm")),
-    btn({
+    }, flowMapIcon(node.metadata?.collapsed ? "unfold_more" : "unfold_less", "sm")),
+    flowMapBtn({
       "aria-label": "Duplicate node",
       title: "Duplicate node",
       onclick: (event) => {
@@ -1421,8 +1421,8 @@ const renderNodeQuickActions = (node, view) => {
         event.stopPropagation();
         duplicateRuntimeNode(node);
       },
-    }, icon("content_copy", "sm")),
-    btn({
+    }, flowMapIcon("content_copy", "sm")),
+    flowMapBtn({
       "aria-label": "Rename node",
       title: "Rename node",
       onclick: (event) => {
@@ -1430,8 +1430,8 @@ const renderNodeQuickActions = (node, view) => {
         event.stopPropagation();
         requestNodeRename(node);
       },
-    }, icon("drive_file_rename_outline", "sm")),
-    btn({
+    }, flowMapIcon("drive_file_rename_outline", "sm")),
+    flowMapBtn({
       "aria-label": disabled ? "Enable runtime" : "Disable runtime",
       title: disabled ? "Enable runtime" : "Disable runtime",
       onclick: (event) => {
@@ -1439,8 +1439,8 @@ const renderNodeQuickActions = (node, view) => {
         event.stopPropagation();
         disabled ? resumeNodeRuntime(node) : disableNodeRuntime(node);
       },
-    }, icon(disabled ? "power_settings_new" : "block", "sm")),
-    canDeleteRuntimeNode ? btn({
+    }, flowMapIcon(disabled ? "power_settings_new" : "block", "sm")),
+    canDeleteRuntimeNode ? flowMapBtn({
       class: "is-danger",
       "aria-label": "Delete node",
       title: "Delete node. Alt/Option+click deletes immediately.",
@@ -1450,7 +1450,7 @@ const renderNodeQuickActions = (node, view) => {
         if (event.altKey) performDraftNodeDelete(node);
         else requestDraftNodeDelete(node);
       },
-    }, icon("delete", "sm")) : null
+    }, flowMapIcon("delete", "sm")) : null
   );
 };
 
@@ -1466,10 +1466,10 @@ const renderFlowPortNodeBody = (node, view) => {
       { class: "tl-flow-port-node-head" },
       _.span(
         { class: "tl-flow-port-node-kicker" },
-        icon(isInputGateway ? "login" : "logout", "sm"),
+        flowMapIcon(isInputGateway ? "login" : "logout", "sm"),
         _.strong(isInputGateway ? "IN" : "OUT")
       ),
-      btn({
+      flowMapBtn({
         type: "button",
         class: "tl-flow-port-add-btn",
         title: "Add port",
@@ -1479,7 +1479,7 @@ const renderFlowPortNodeBody = (node, view) => {
           event.stopPropagation();
           requestFlowPortDialog(node);
         },
-      }, icon("add", "sm"), "Add port")
+      }, flowMapIcon("add", "sm"), "Add port")
     ),
     _.p(`${title} · ${sideLabel}`),
     _.div(
@@ -1498,7 +1498,7 @@ const renderFlowPortNodeBody = (node, view) => {
         },
         _.span({ class: "tl-flow-port-node-name" }, port.name),
         _.em(flowPortTypeLabel(port.type)),
-        icon("edit", "sm")
+        flowMapIcon("edit", "sm")
       ))
     ),
     ...renderNodeMetricRows(node, `${ports.length} porte`, view.runtime.status, isInputGateway ? "entry" : "exit")
@@ -1516,9 +1516,9 @@ const renderKnowledgeGraphQueryScope = (node = {}) => {
   };
   return _.div(
     { class: "tl-flow-kg-query-scope", title: `Scope: ${scope} · Collection: ${collectionId || "all"} · Document: ${documentId || "all"}` },
-    _.span(icon("filter_alt", "sm"), _.strong("Scope"), _.em(scope)),
-    _.span(icon("folder", "sm"), _.strong("Collection"), _.em(shortValue(collectionId))),
-    _.span(icon("description", "sm"), _.strong("Document"), _.em(shortValue(documentId)))
+    _.span(flowMapIcon("filter_alt", "sm"), _.strong("Scope"), _.em(scope)),
+    _.span(flowMapIcon("folder", "sm"), _.strong("Collection"), _.em(shortValue(collectionId))),
+    _.span(flowMapIcon("description", "sm"), _.strong("Document"), _.em(shortValue(documentId)))
   );
 };
 
@@ -1639,16 +1639,16 @@ const openAiAgentRuntimeFullOutputDialog = ({ node = {}, text = "", meta = {} } 
       { class: "tl-ai-agent-runtime-full-output" },
       _.div(
         { class: "tl-ai-agent-runtime-output-meta" },
-        _.span(icon("text_fields", "sm"), `${meta.chars || 0} chars`),
-        meta.tokens ? _.span(icon("token", "sm"), `${meta.tokens} tokens`) : null,
-        meta.finishReason ? _.span(icon(meta.finishReason === "length" ? "warning_amber" : "check_circle", "sm"), `finish: ${meta.finishReason}`) : null
+        _.span(flowMapIcon("text_fields", "sm"), `${meta.chars || 0} chars`),
+        meta.tokens ? _.span(flowMapIcon("token", "sm"), `${meta.tokens} tokens`) : null,
+        meta.finishReason ? _.span(flowMapIcon(meta.finishReason === "length" ? "warning_amber" : "check_circle", "sm"), `finish: ${meta.finishReason}`) : null
       ),
       _.pre(text)
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(text) }, icon("content_copy", "sm"), "Copy"),
-      btn({ onclick: close }, "Close")
+      flowMapBtn({ onclick: () => copyRuntimeValue(text) }, flowMapIcon("content_copy", "sm"), "Copy"),
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -1735,13 +1735,13 @@ const openAiAgentRuntimePromptDialog = ({ node = {}, job = null } = {}) => {
     bodyMaxHeight: "76vh",
     content: () => _.div(
       { class: "tl-ai-agent-runtime-full-output" },
-      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(icon("text_fields", "sm"), `${prompt.length} chars`)),
+      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(flowMapIcon("text_fields", "sm"), `${prompt.length} chars`)),
       _.pre(prompt || "No prompt recorded for this run.")
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(prompt) }, icon("content_copy", "sm"), "Copy"),
-      btn({ onclick: close }, "Close")
+      flowMapBtn({ onclick: () => copyRuntimeValue(prompt) }, flowMapIcon("content_copy", "sm"), "Copy"),
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -1762,13 +1762,13 @@ const openAiAgentRuntimeTraceDialog = ({ node = {}, job = null } = {}) => {
     bodyMaxHeight: "76vh",
     content: () => _.div(
       { class: "tl-ai-agent-runtime-full-output" },
-      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(icon("data_object", "sm"), `${traceText.length} chars`)),
+      _.div({ class: "tl-ai-agent-runtime-output-meta" }, _.span(flowMapIcon("data_object", "sm"), `${traceText.length} chars`)),
       _.pre(traceText)
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(trace) }, icon("content_copy", "sm"), "Copy"),
-      btn({ onclick: close }, "Close")
+      flowMapBtn({ onclick: () => copyRuntimeValue(trace) }, flowMapIcon("content_copy", "sm"), "Copy"),
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -1845,7 +1845,7 @@ const renderAiAgentRuntimeStep = (step = {}, index = 0, { open = false } = {}) =
       _.span({ class: "tl-ai-agent-runtime-step-index" }, String(index + 1)),
       _.strong(step.label || step.type || "Runtime step"),
       _.span({ class: `tl-ai-agent-runtime-pill is-${tone}` }, aiAgentRuntimeStatusLabel(status)),
-      icon("expand_more", "sm")
+      flowMapIcon("expand_more", "sm")
     ),
     _.div(
       { class: "tl-ai-agent-runtime-step-main" },
@@ -1868,16 +1868,16 @@ const renderAiAgentRuntimeOutput = ({ node = {}, job = null, text = "" } = {}) =
         _.span({ class: `tl-ai-agent-runtime-pill is-${meta.finishReason === "length" ? "warn" : "complete"}` }, meta.finishReason ? `finish: ${meta.finishReason}` : "output"),
         _.span({ class: "tl-ai-agent-runtime-output-stat" }, `${meta.chars} chars`),
         meta.tokens ? _.span({ class: "tl-ai-agent-runtime-output-stat" }, `${meta.tokens} tokens`) : null,
-        btn({ class: "is-ghost is-compact", title: "Copy full output", onclick: () => copyRuntimeValue(text) }, icon("content_copy", "sm"), "Copy"),
-        btn({
+        flowMapBtn({ class: "is-ghost is-compact", title: "Copy full output", onclick: () => copyRuntimeValue(text) }, flowMapIcon("content_copy", "sm"), "Copy"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Open full output",
           onclick: () => openAiAgentRuntimeFullOutputDialog({ node, text, meta }),
-        }, icon("open_in_full", "sm"), "Full Output")
+        }, flowMapIcon("open_in_full", "sm"), "Full Output")
       )
     ),
     meta.finishReason === "length"
-      ? _.div({ class: "tl-ai-agent-runtime-output-warning" }, icon("warning_amber", "sm"), _.span("Output stopped by max tokens. Increase Max Tokens to continue longer generations."))
+      ? _.div({ class: "tl-ai-agent-runtime-output-warning" }, flowMapIcon("warning_amber", "sm"), _.span("Output stopped by max tokens. Increase Max Tokens to continue longer generations."))
       : null,
     _.p(String(text || ""))
   );
@@ -1899,31 +1899,31 @@ const renderAiAgentRuntimeInputTrace = ({ node = {}, job = null } = {}) => {
       _.h4("Input Trace"),
       _.div(
         { class: "tl-ai-agent-runtime-output-actions" },
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Open full prompt sent to the model",
           disabled: !hasPrompt,
           onclick: () => openAiAgentRuntimePromptDialog({ node, job }),
-        }, icon("article", "sm"), "Full Prompt"),
-        btn({
+        }, flowMapIcon("article", "sm"), "Full Prompt"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Open full runtime trace with every prompt attempt, step and result",
           onclick: () => openAiAgentRuntimeTraceDialog({ node, job }),
-        }, icon("account_tree", "sm"), "Full Runtime")
+        }, flowMapIcon("account_tree", "sm"), "Full Runtime")
       )
     ),
     _.div(
       { class: "tl-ai-agent-runtime-trace-grid" },
-      _.span(icon("input", "sm"), _.strong("channel"), trace.inputEvent?.channel || "unknown"),
-      _.span(icon("bolt", "sm"), _.strong("trigger"), trigger.mode || "unknown"),
-      _.span(icon("shield", "sm"), _.strong("policy"), trigger.triggerPolicy || trace.config?.triggerPolicy || "connected_event"),
-      _.span(icon("account_tree", "sm"), _.strong("from"), trigger.sourceLabel || trigger.sourceNodeId || "unknown"),
-      _.span(icon("link", "sm"), _.strong("link"), trigger.dependencyId || trigger.connectionId || trigger.dependencyChannel || "none"),
-      _.span(icon("article", "sm"), _.strong("prompt"), `${trace.promptChars || 0} chars`),
-      _.span(icon("memory", "sm"), _.strong("memory"), hasMemory ? `${trace.memoryChars || String(trace.memoryContext || "").length} chars` : "none"),
-      _.span(icon("history", "sm"), _.strong("history"), inputDataChannels ? `${inputDataChannels} channel${inputDataChannels === 1 ? "" : "s"}` : "none"),
-      _.span(icon("construction", "sm"), _.strong("tools"), toolObservations ? `${toolObservations} observation${toolObservations === 1 ? "" : "s"}` : "none"),
-      trace.objective ? _.span({ class: "is-wide" }, icon("flag", "sm"), _.strong("objective"), String(trace.objective)) : null
+      _.span(flowMapIcon("input", "sm"), _.strong("channel"), trace.inputEvent?.channel || "unknown"),
+      _.span(flowMapIcon("bolt", "sm"), _.strong("trigger"), trigger.mode || "unknown"),
+      _.span(flowMapIcon("shield", "sm"), _.strong("policy"), trigger.triggerPolicy || trace.config?.triggerPolicy || "connected_event"),
+      _.span(flowMapIcon("account_tree", "sm"), _.strong("from"), trigger.sourceLabel || trigger.sourceNodeId || "unknown"),
+      _.span(flowMapIcon("link", "sm"), _.strong("link"), trigger.dependencyId || trigger.connectionId || trigger.dependencyChannel || "none"),
+      _.span(flowMapIcon("article", "sm"), _.strong("prompt"), `${trace.promptChars || 0} chars`),
+      _.span(flowMapIcon("memory", "sm"), _.strong("memory"), hasMemory ? `${trace.memoryChars || String(trace.memoryContext || "").length} chars` : "none"),
+      _.span(flowMapIcon("history", "sm"), _.strong("history"), inputDataChannels ? `${inputDataChannels} channel${inputDataChannels === 1 ? "" : "s"}` : "none"),
+      _.span(flowMapIcon("construction", "sm"), _.strong("tools"), toolObservations ? `${toolObservations} observation${toolObservations === 1 ? "" : "s"}` : "none"),
+      trace.objective ? _.span({ class: "is-wide" }, flowMapIcon("flag", "sm"), _.strong("objective"), String(trace.objective)) : null
     )
   );
 };
@@ -1940,13 +1940,13 @@ const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
     _.div(
       { class: "tl-ai-agent-runtime-summary" },
       _.span({ class: `tl-ai-agent-runtime-pill is-${tone}` }, aiAgentRuntimeStatusLabel(status)),
-        _.span(icon("assignment", "sm"), latest?.task || raw.task || "No task yet"),
-        _.span(icon("dns", "sm"), [latest?.provider || raw.provider || "", latest?.model || raw.model || ""].filter(Boolean).join(" · ") || "No provider run"),
-      _.span(icon("schedule", "sm"), latest?.durationMs ? `${latest.durationMs}ms` : raw.updatedAt || latest?.updatedAt || ""),
-      window.TrackerLensAiAgentEditor?.openMemoryManager ? btn({
+        _.span(flowMapIcon("assignment", "sm"), latest?.task || raw.task || "No task yet"),
+        _.span(flowMapIcon("dns", "sm"), [latest?.provider || raw.provider || "", latest?.model || raw.model || ""].filter(Boolean).join(" · ") || "No provider run"),
+      _.span(flowMapIcon("schedule", "sm"), latest?.durationMs ? `${latest.durationMs}ms` : raw.updatedAt || latest?.updatedAt || ""),
+      window.TrackerLensAiAgentEditor?.openMemoryManager ? flowMapBtn({
         class: "is-ghost is-compact",
         onclick: () => window.TrackerLensAiAgentEditor.openMemoryManager({ ...node, name: node.label || node.id, nodeId: node.id, runtimeNodeId: node.id, workspaceId: node.workspaceId || raw.workspaceId || "" }),
-      }, icon("memory", "sm"), "Memory") : null
+      }, flowMapIcon("memory", "sm"), "Memory") : null
     ),
     latest
       ? _.div(
@@ -1957,7 +1957,7 @@ const renderAiAgentRuntimeDialogContent = ({ node = {}, jobs = [] } = {}) => {
       )
       : _.div(
         { class: "tl-ai-agent-runtime-empty" },
-        icon("terminal", "md"),
+        flowMapIcon("terminal", "md"),
         _.strong("No runtime jobs yet"),
         _.p("Run this Agent from a connected input event to populate the runtime timeline.")
       ),
@@ -2023,14 +2023,14 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
     content: () => body,
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({
+      flowMapBtn({
         onclick: () => {
           const entry = aiAgentRuntimeDialogViews.get(node.id);
           if (entry) entry.lastJobSignature = "";
           updateAiAgentRuntimeDialogView(entry);
         },
-      }, icon("refresh", "sm"), "Refresh"),
-      btn({
+      }, flowMapIcon("refresh", "sm"), "Refresh"),
+      flowMapBtn({
         onclick: () => {
           const entry = aiAgentRuntimeDialogViews.get(node.id);
           stopAiAgentRuntimeDialogLiveRefresh(entry);
@@ -2044,7 +2044,7 @@ const openAiAgentRuntimeDialog = async (node = {}) => {
 };
 
 const renderKnowledgeRuntimeButton = (node = {}) =>
-  btn({
+  flowMapBtn({
     class: "tl-flow-embedded-map-view-btn",
     title: "View Node runtime timeline",
     onPointerDown: stopNodeControlEvent,
@@ -2053,13 +2053,13 @@ const renderKnowledgeRuntimeButton = (node = {}) =>
       event.stopPropagation();
       openAiAgentRuntimeDialog(node);
     },
-  }, icon("terminal", "sm"), "View Runtime");
+  }, flowMapIcon("terminal", "sm"), "View Runtime");
 
 const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
   if (isAgentBridgeNode(node)) {
     return [_.div(
       { class: "tl-flow-agent-bridge-core" },
-      icon("network_node", "lg")
+      flowMapIcon("network_node", "lg")
     )];
   }
   if (node.type === "aiAgent" && !node.metadata?.library) {
@@ -2067,7 +2067,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       renderAiAgentPolicySummary(node),
       _.p(view.description),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "View AI Agent runtime timeline",
         onPointerDown: stopNodeControlEvent,
@@ -2076,8 +2076,8 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           openAiAgentRuntimeDialog(node);
         },
-      }, icon("terminal", "sm"), "View Runtime"),
-      node.metadata?.aiAgentAlias && typeof openAiAgentAliasDiagnostics === "function" ? btn({
+      }, flowMapIcon("terminal", "sm"), "View Runtime"),
+      node.metadata?.aiAgentAlias && typeof openAiAgentAliasDiagnostics === "function" ? flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "Inspect alias source, local overrides and resolved policy",
         onPointerDown: stopNodeControlEvent,
@@ -2086,7 +2086,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           openAiAgentAliasDiagnostics(node);
         },
-      }, icon("account_tree", "sm"), "Alias Diagnostics") : null,
+      }, flowMapIcon("account_tree", "sm"), "Alias Diagnostics") : null,
       _.label(
         {
           class: "tl-flow-kdoc-replay-toggle",
@@ -2107,7 +2107,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           onChange: (checked) => persistInlineRuntimeNodeConfig({ node, patch: { freshRun: Boolean(checked) } }),
         })
       ),
-      window.TrackerLensAiAgentEditor?.openMemoryManager ? btn({
+      window.TrackerLensAiAgentEditor?.openMemoryManager ? flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "Manage AI Agent memory",
         onPointerDown: stopNodeControlEvent,
@@ -2116,7 +2116,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           window.TrackerLensAiAgentEditor.openMemoryManager({ ...node, name: node.label || node.id, nodeId: node.id, runtimeNodeId: node.id, workspaceId: node.workspaceId || "" });
         },
-      }, icon("memory", "sm"), "Memory") : null,
+      }, flowMapIcon("memory", "sm"), "Memory") : null,
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2128,10 +2128,10 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.div(
         { class: "tl-flow-embedded-map-interface" },
-        _.span(icon("login", "sm"), _.strong("Flow In"), _.em(String(inputPorts.length))),
-        _.span(icon("logout", "sm"), _.strong("Flow Out"), _.em(String(outputPorts.length)))
+        _.span(flowMapIcon("login", "sm"), _.strong("Flow In"), _.em(String(inputPorts.length))),
+        _.span(flowMapIcon("logout", "sm"), _.strong("Flow Out"), _.em(String(outputPorts.length)))
       ),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "View Flow Map",
         onPointerDown: stopNodeControlEvent,
@@ -2140,7 +2140,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           openEmbeddedFlowMapPreviewDialog(node);
         },
-      }, icon("visibility", "sm"), "View Flow Map"),
+      }, flowMapIcon("visibility", "sm"), "View Flow Map"),
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · v${node.metadata?.version || node.metadata?.config?.version || "0.1.0"}`),
     ];
   }
@@ -2152,7 +2152,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "Upload Document",
         onPointerDown: stopNodeControlEvent,
@@ -2161,8 +2161,8 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeDocumentUpload(node);
         },
-      }, icon("upload_file", "sm"), "Upload Document"),
-      btn({
+      }, flowMapIcon("upload_file", "sm"), "Upload Document"),
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: documentState.loading ? "Loading documents" : `View ${documentCount} uploaded document${documentCount === 1 ? "" : "s"}`,
         onPointerDown: stopNodeControlEvent,
@@ -2171,8 +2171,8 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           openKnowledgeDocumentsDialog(node);
         },
-      }, icon("folder_open", "sm"), documentState.loading ? "Documents..." : `${documentCount} Document${documentCount === 1 ? "" : "s"}`),
-      btn({
+      }, flowMapIcon("folder_open", "sm"), documentState.loading ? "Documents..." : `${documentCount} Document${documentCount === 1 ? "" : "s"}`),
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear derived Knowledge memory for this document scope",
         onPointerDown: stopNodeControlEvent,
@@ -2181,7 +2181,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeDocumentMemoryClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Memory"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Memory"),
       _.label(
         {
           class: "tl-flow-kdoc-replay-toggle",
@@ -2209,7 +2209,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
     return [
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn",
         title: "View Knowledge Graph",
         onPointerDown: stopNodeControlEvent,
@@ -2218,8 +2218,8 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           openKnowledgeGraphViewDialog(node);
         },
-      }, icon("account_tree", "sm"), "View Graph"),
-      btn({
+      }, flowMapIcon("account_tree", "sm"), "View Graph"),
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Knowledge Graph",
         onPointerDown: stopNodeControlEvent,
@@ -2228,7 +2228,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeGraphClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Graph"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Graph"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2238,7 +2238,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeRuntimeButton(node),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Entity Extractor graph records for this scope",
         onPointerDown: stopNodeControlEvent,
@@ -2247,7 +2247,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeEntityGraphClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Entities"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Entities"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2257,7 +2257,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeRuntimeButton(node),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Semantic Relation Enricher records for this scope",
         onPointerDown: stopNodeControlEvent,
@@ -2266,7 +2266,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeSemanticRelationsClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Semantic"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Semantic"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2276,7 +2276,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeRuntimeButton(node),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Graph Builder Agent records for this scope",
         onPointerDown: stopNodeControlEvent,
@@ -2285,7 +2285,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeGraphBuilderClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Builder"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Builder"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2305,7 +2305,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeRuntimeButton(node),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Knowledge Dictionary records for this scope",
         onPointerDown: stopNodeControlEvent,
@@ -2314,7 +2314,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeDictionaryClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Dictionary"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Dictionary"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2324,7 +2324,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
       _.small({ class: "tl-flow-node-meta" }, `${view.category} · ${view.subtype} · ${channelName || "no channel"}`),
       _.p(view.description),
       renderKnowledgeRuntimeButton(node),
-      btn({
+      flowMapBtn({
         class: "tl-flow-embedded-map-view-btn is-danger",
         title: "Clear Knowledge Event records for this scope",
         onPointerDown: stopNodeControlEvent,
@@ -2333,7 +2333,7 @@ const renderRuntimeNodeBody = (node, view, channelName, fieldCount) => {
           event.stopPropagation();
           requestKnowledgeEventsClear(node);
         },
-      }, icon("delete_sweep", "sm"), "Clear Events"),
+      }, flowMapIcon("delete_sweep", "sm"), "Clear Events"),
       renderInlineNodeSettings(node),
       ...renderNodeMetricRows(node, `${view.runtime.eventsPerMin}/min`, `${view.runtime.latency || 0}ms`, `${view.metrics.listeners || 0} listeners`),
     ];
@@ -2363,7 +2363,7 @@ const renderNodeContextMenu = () => {
       disabled: Boolean(options.disabled),
       onclick: () => runNodeContextAction(action, node),
     },
-    icon(iconName, "sm"),
+    flowMapIcon(iconName, "sm"),
     _.span(label)
   );
   return _.div(
@@ -2630,7 +2630,7 @@ const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
     _.div({ class: "tl-flow-minimap-head" },
       _.strong("Runtime Minimap"),
       _.span(`${(graph.nodes || []).length} nodes`),
-      btn({
+      flowMapBtn({
         class: "tl-flow-minimap-toggle",
         "aria-label": state.minimapCollapsed ? "Expand minimap" : "Minimize minimap",
         title: state.minimapCollapsed ? "Expand minimap" : "Minimize minimap",
@@ -2639,7 +2639,7 @@ const renderFlowMinimap = (graph = {}, renderGraph = {}) => {
           event.stopPropagation();
           toggleFlowMinimap();
         },
-      }, icon(state.minimapCollapsed ? "unfold_more" : "remove", "sm"))
+      }, flowMapIcon(state.minimapCollapsed ? "unfold_more" : "remove", "sm"))
     ),
     state.minimapCollapsed ? null : _.div(
       {
@@ -2710,9 +2710,9 @@ const renderCanvas = () => {
     renderFilterbar(),
     (validation.issues || []).length ? _.div(
       { class: "tl-flow-graph-health" },
-      icon(validation.ok ? "verified" : "report", "sm"),
+      flowMapIcon(validation.ok ? "verified" : "report", "sm"),
       _.span(validation.ok ? "Graph validation OK" : `${validation.errors?.length || 0} errori · ${validation.warnings?.length || 0} warning`),
-      btn({ class: "is-compact", onclick: repairGraphIssues }, icon("auto_fix_high", "sm"), "Repair")
+      flowMapBtn({ class: "is-compact", onclick: repairGraphIssues }, flowMapIcon("auto_fix_high", "sm"), "Repair")
     ) : null,
     renderControls(),
     _.div(
@@ -2782,7 +2782,7 @@ const renderCanvas = () => {
                 event.stopPropagation();
                 requestEdgeDelete(dependency);
               },
-            }, icon("delete", "sm"))
+            }, flowMapIcon("delete", "sm"))
           );
         }).filter(Boolean),
         ...renderGraph.renderedNodes.map((node) => {
@@ -2855,7 +2855,7 @@ const renderCanvas = () => {
               onPointerDown: isAgentControlPort(port)
                 ? (event) => beginPortLinkDrag(event, node, index, "in", port.name)
                 : undefined,
-            }, ...(isAgentControlPort(port) ? [icon(isAgentBridge ? "psychology" : "network_intel_node", "sm")] : [])))),
+            }, ...(isAgentControlPort(port) ? [flowMapIcon(isAgentBridge ? "psychology" : "network_intel_node", "sm")] : [])))),
             ...outputPorts.flatMap((port, portIndex) => visualPortInstances(node, port, "out", portIndex, outputPorts.length).map((visual) => _.span({
               class: `tl-flow-node-port is-output is-${port.type}${isAgentBridge && port.name === "action" ? " is-bridge-action" : ""}${isAgentControlPort(port) ? ` is-agent-control-port${agentControlCornerClass(visual.corner)}` : ""}${port.name === "all" ? " is-pass" : ""}${isPortConnected(graph, node.id, "out", port.name) ? " is-connected" : ""}${live ? " is-event-active" : ""}`,
               title: portTooltip(port, "out", outputPorts),
@@ -2872,12 +2872,12 @@ const renderCanvas = () => {
               },
               onPointerLeave: () => setGraphHover(node.id, ""),
               onPointerDown: (event) => beginPortLinkDrag(event, node, index, "out", port.name),
-            }, ...(isAgentControlPort(port) ? [icon("network_intel_node", "sm")] : [])))),
+            }, ...(isAgentControlPort(port) ? [flowMapIcon("network_intel_node", "sm")] : [])))),
             _.span(
               { class: "tl-flow-node-title" },
-              icon(graphIcon(node), "sm"),
+              flowMapIcon(graphIcon(node), "sm"),
               _.strong(view.title),
-              btn({
+              flowMapBtn({
                 class: "tl-flow-node-menu",
                 "aria-label": `${state.inspectorOpen && state.focus.nodeId === node.id ? "Close" : "Open"} menu for ${view.title}`,
                 "aria-pressed": state.inspectorOpen && state.focus.nodeId === node.id ? "true" : "false",
@@ -2895,8 +2895,8 @@ const renderCanvas = () => {
                   }
                   selectNode(node, { openInspector: true });
                 },
-              }, icon("menu", "sm")),
-              btn({
+              }, flowMapIcon("menu", "sm")),
+              flowMapBtn({
                 class: "tl-flow-node-settings",
                 "aria-label": `Configure ${view.title}`,
                 title: node.type === "boxTracker" ? "Open Box Tracker editor" : node.type === "boxLens" ? "Open Box Lens editor" : "Configure node",
@@ -2909,7 +2909,7 @@ const renderCanvas = () => {
                   event.stopPropagation();
                   configureNode(node);
                 },
-              }, icon(node.type === "boxTracker" || node.type === "boxLens" ? "open_in_new" : "settings", "sm")),
+              }, flowMapIcon(node.type === "boxTracker" || node.type === "boxLens" ? "open_in_new" : "settings", "sm")),
               _.span({ class: `tl-flow-runtime-dot is-${view.runtime.status}`, title: `Runtime: ${view.runtime.status}` })
             ),
             _.span(
@@ -2926,7 +2926,7 @@ const renderCanvas = () => {
               _.span(
                 { class: "tl-flow-node-footer-main" },
                 _.em({ "data-flow-node-footer-info": "true" }, footerInfo),
-                canRunNodeTest || blockedChildTest ? btn({
+                canRunNodeTest || blockedChildTest ? flowMapBtn({
                   class: "tl-flow-node-test-btn",
                   "data-flow-node-test-btn": node.id,
                   "data-root-blocked": blockedChildTest ? "true" : "false",
@@ -2943,7 +2943,7 @@ const renderCanvas = () => {
                     if (blockedChildTest) return;
                     runFlowMapLiveTest(node);
                   },
-                }, icon((state.testRun.running && isInTestRun) || processingNode ? "hourglass_top" : "play_arrow", "sm")) : null,
+                }, flowMapIcon((state.testRun.running && isInTestRun) || processingNode ? "hourglass_top" : "play_arrow", "sm")) : null,
                 _.span({ class: "tl-flow-node-footer-ports", "data-flow-node-footer-ports": "true" }, isAgentBridge ? "1 agent · 1 in/out" : `${fullInputPorts.length} in · ${fullOutputPorts.length} out`)
               ),
               isAgentBridge || isPreviewNode(node) ? null : renderNodeOutputPreviewButton(node, fullOutputPorts)
@@ -3253,7 +3253,7 @@ const renderInspectorPorts = (node, side = "in") => {
     _.div(
       { class: "tl-flow-port-manager-head" },
       _.h3(normalizedSide === "out" ? "Outputs" : "Inputs"),
-      btn({
+      flowMapBtn({
         class: "tl-flow-port-hide-all",
         disabled: !hideablePorts.length,
         title: hideablePorts.length ? "Hide all unlinked ports on node" : "No unlinked visible ports to hide",
@@ -3286,18 +3286,18 @@ const renderInspectorPorts = (node, side = "in") => {
         ),
         _.span(
           { class: "tl-flow-port-manager-actions" },
-          btn({
+          flowMapBtn({
             class: `tl-flow-port-icon${isConnected ? " is-linked" : ""}${isHidden ? " is-hidden" : ""}`,
             disabled: isConnected || isControlPort,
             "aria-label": visibilityTitle,
             title: visibilityTitle,
             onclick: () => togglePortVisibility(port),
-          }, icon(stateIcon, "sm")),
+          }, flowMapIcon(stateIcon, "sm")),
           _.span({
             class: "tl-flow-port-drag",
             title: "Drag to reorder",
             onPointerDown: (event) => beginInspectorPortDrag(event, node, normalizedSide, ports, port),
-          }, icon("drag_indicator", "sm"))
+          }, flowMapIcon("drag_indicator", "sm"))
         )
       );
     }) : [_.p({ class: "tl-flow-muted" }, normalizedSide === "out" ? "Nessun output dichiarato." : "Nessun input dichiarato.")])
@@ -3438,11 +3438,11 @@ const renderInspectorStorageRecord = (node = {}) => {
         _.div(
           { class: "tl-flow-storage-record-actions" },
           copyRuntimeButton(payload, "Copy stored payload"),
-          btn({
+          flowMapBtn({
             class: "is-ghost is-compact",
             title: "Refresh stored record",
             onclick: () => loadStorageInspectorRecord(node, { force: true }),
-          }, icon("sync", "sm"), "Refresh")
+          }, flowMapIcon("sync", "sm"), "Refresh")
         ),
         _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue(payload))
       )
@@ -3543,11 +3543,11 @@ const renderInspectorAiRag = (node = {}) => {
         _.div(
           { class: "tl-flow-storage-record-actions" },
           copyRuntimeButton(ragContext, "Copy RAG context"),
-          btn({
+          flowMapBtn({
             class: "is-ghost is-compact",
             title: "Refresh AI job",
             onclick: () => loadAiInspectorJob(node, { force: true }),
-          }, icon("sync", "sm"), "Refresh")
+          }, flowMapIcon("sync", "sm"), "Refresh")
         ),
         _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue({
           query: ragContext.query,
@@ -3563,11 +3563,11 @@ const renderInspectorAiRag = (node = {}) => {
         _.div(
           { class: "tl-flow-storage-record-actions" },
           copyRuntimeButton(graphContext, "Copy Graph context"),
-          btn({
+          flowMapBtn({
             class: "is-ghost is-compact",
             title: "Refresh AI job",
             onclick: () => loadAiInspectorJob(node, { force: true }),
-          }, icon("sync", "sm"), "Refresh")
+          }, flowMapIcon("sync", "sm"), "Refresh")
         ),
         _.pre({ class: "tl-flow-storage-record-preview" }, prettyRuntimeValue({
           query: graphContext.query,
@@ -4211,8 +4211,8 @@ const requestKnowledgeDocumentDelete = ({ node = {}, document = null, onDeleted 
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      flowMapBtn({
         class: "is-danger",
         onclick: async () => {
           await deleteKnowledgeDocumentRecord({ node, document });
@@ -4220,7 +4220,7 @@ const requestKnowledgeDocumentDelete = ({ node = {}, document = null, onDeleted 
           await onDeleted?.();
           mount({ preserveScroll: true });
         },
-      }, icon("delete", "sm"), "Delete")
+      }, flowMapIcon("delete", "sm"), "Delete")
     ),
   });
   dialog.open();
@@ -4251,7 +4251,7 @@ const openKnowledgeDocumentFullTextDialog = (document = {}) => {
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
       copyRuntimeButton(document, "Copy document"),
-      btn({ class: "st-btn-primary", onclick: close }, "Close")
+      flowMapBtn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -4613,7 +4613,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
             rerender();
           },
         }),
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact tl-kdoc-action-refresh",
           onclick: async () => {
             const refreshed = await knowledgeDocumentRecordsForNode(node);
@@ -4623,8 +4623,8 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
             rerender();
             loadKnowledgeInspectorDocument(node, { force: true });
           },
-        }, icon("sync", "sm"), "Refresh"),
-        btn({
+        }, flowMapIcon("sync", "sm"), "Refresh"),
+        flowMapBtn({
           class: "st-btn-primary is-compact",
           onclick: () => requestKnowledgeDocumentUpload(node, {
             onComplete: async () => {
@@ -4635,7 +4635,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
               rerender();
             },
           }),
-        }, icon("upload_file", "sm"), "Upload")
+        }, flowMapIcon("upload_file", "sm"), "Upload")
       ),
       ...knowledgeUploadProgressNodes(node),
       _.div(
@@ -4663,7 +4663,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
               _.span(document.title || "Untitled document"),
               _.small(`${chunks.length} chunks · ${meta.collectionId || "all"} · ${document.createdAt ? formatShortDate(document.createdAt) : "N/D"}`));
             })
-            : [_.div({ class: "tl-kdoc-view-empty" }, icon("folder_open", "lg"), _.strong("No documents"), _.span("Upload a text, markdown, JSON or CSV file."))]
+            : [_.div({ class: "tl-kdoc-view-empty" }, flowMapIcon("folder_open", "lg"), _.strong("No documents"), _.span("Upload a text, markdown, JSON or CSV file."))]
         ),
         _.aside(
           { class: "tl-kdoc-view-detail" },
@@ -4704,19 +4704,19 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
               _.div(_.span("Text length"), _.strong(`${String(selected.text || "").length.toLocaleString()} chars`)),
               _.div(
                 { class: "tl-kdoc-view-detail-actions" },
-                btn({
+                flowMapBtn({
                   class: "is-ghost is-compact tl-kdoc-action-copy",
                   onclick: () => copyRuntimeValue(selected),
-                }, icon("content_copy", "sm"), "Copy Document"),
-                selectedChunks.length ? btn({
+                }, flowMapIcon("content_copy", "sm"), "Copy Document"),
+                selectedChunks.length ? flowMapBtn({
                   class: "is-ghost is-compact tl-kdoc-action-copy",
                   onclick: () => copyRuntimeValue(selectedChunks),
-                }, icon("content_copy", "sm"), "Copy Chunks") : null,
-                String(selected.text || "").length > 1800 ? btn({
+                }, flowMapIcon("content_copy", "sm"), "Copy Chunks") : null,
+                String(selected.text || "").length > 1800 ? flowMapBtn({
                   class: "is-ghost is-compact tl-kdoc-action-view",
                   onclick: () => openKnowledgeDocumentFullTextDialog(selected),
-                }, icon("article", "sm"), "View Full Document") : null,
-                btn({
+                }, flowMapIcon("article", "sm"), "View Full Document") : null,
+                flowMapBtn({
                   class: "is-danger is-compact tl-kdoc-action-delete",
                   onclick: () => requestKnowledgeDocumentDelete({
                     node,
@@ -4729,7 +4729,7 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
                       rerender();
                     },
                   }),
-                }, icon("delete", "sm"), "Delete")
+                }, flowMapIcon("delete", "sm"), "Delete")
               ),
               _.pre({ class: "tl-flow-storage-record-preview" }, knowledgeDocumentPreviewText(selected, 1800)),
             ]
@@ -4753,8 +4753,8 @@ const openKnowledgeDocumentsDialog = async (node = {}) => {
     },
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ class: "tl-kdoc-action-copy", onclick: () => copyRuntimeValue(data.documents) }, icon("content_copy", "sm"), "Copy List"),
-      btn({ class: "st-btn-primary", onclick: close }, "Close")
+      flowMapBtn({ class: "tl-kdoc-action-copy", onclick: () => copyRuntimeValue(data.documents) }, flowMapIcon("content_copy", "sm"), "Copy List"),
+      flowMapBtn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -4885,8 +4885,8 @@ const openAgentToolProbeDialog = ({ selected = {}, manifest = {}, tool = {} } = 
     },
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Close"),
-      btn({
+      flowMapBtn({ onclick: close }, "Close"),
+      flowMapBtn({
         class: "st-btn-primary",
         onclick: async () => {
           const args = flowMapParseJsonLoose(model.argsText);
@@ -4919,7 +4919,7 @@ const openAgentToolProbeDialog = ({ selected = {}, manifest = {}, tool = {} } = 
             model.running = false;
           }
         },
-      }, icon(model.running ? "hourglass_top" : "play_arrow", "sm"), model.running ? "Running" : "Run Probe")
+      }, flowMapIcon(model.running ? "hourglass_top" : "play_arrow", "sm"), model.running ? "Running" : "Run Probe")
     ),
   });
   dialog.open();
@@ -4950,11 +4950,11 @@ const renderInspectorAgentTools = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         manifest ? copyRuntimeButton(manifest, "Copy tool manifest") : null,
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh Agent tools",
           onclick: () => loadAgentToolDebug(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, flowMapIcon("sync", "sm"), "Refresh")
       )
     ),
     manifests.length
@@ -4973,12 +4973,12 @@ const renderInspectorAgentTools = (node = {}) => {
                   { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
                   _.code(tool.mcpName || tool.name),
                   _.span(`${tool.mode || "read"}${tool.requiresEvidence ? " · evidence" : ""}`),
-                  btn({
+                  flowMapBtn({
                     class: "is-ghost is-compact",
                     title: `Probe ${tool.name}`,
                     disabled: tool.mode !== "read" || !window.TrackerLensAgentRuntime?.callConnectedNodeTool,
                     onclick: () => openAgentToolProbeDialog({ selected: node, manifest: item, tool }),
-                  }, icon("terminal", "sm"), "Probe")
+                  }, flowMapIcon("terminal", "sm"), "Probe")
                 )
               )
             )
@@ -5026,27 +5026,27 @@ const renderInspectorKnowledgeDocument = (node = {}) => {
       _.span("Actions"),
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Upload Document",
           onclick: () => requestKnowledgeDocumentUpload(node),
-        }, icon("upload_file", "sm"), "Upload Document"),
-        btn({
+        }, flowMapIcon("upload_file", "sm"), "Upload Document"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "View uploaded documents",
           onclick: () => openKnowledgeDocumentsDialog(node),
-        }, icon("folder_open", "sm"), "View Documents"),
-        btn({
+        }, flowMapIcon("folder_open", "sm"), "View Documents"),
+        flowMapBtn({
           class: "is-danger is-compact",
           title: "Clear derived Knowledge memory",
           onclick: () => requestKnowledgeDocumentMemoryClear(node),
-        }, icon("delete_sweep", "sm"), "Clear Memory"),
+        }, flowMapIcon("delete_sweep", "sm"), "Clear Memory"),
         documentRecord ? copyRuntimeButton(documentRecord, "Copy document record") : null,
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh document",
           onclick: () => loadKnowledgeInspectorDocument(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, flowMapIcon("sync", "sm"), "Refresh")
       )
     ),
     documentRecord?.text
@@ -5055,10 +5055,10 @@ const renderInspectorKnowledgeDocument = (node = {}) => {
         _.span("Preview"),
         _.div(
           { class: "tl-kdoc-preview-actions" },
-          String(documentRecord.text || "").length > 1800 ? btn({
+          String(documentRecord.text || "").length > 1800 ? flowMapBtn({
             class: "is-ghost is-compact",
             onclick: () => openKnowledgeDocumentFullTextDialog(documentRecord),
-          }, icon("article", "sm"), "View Full Document") : null
+          }, flowMapIcon("article", "sm"), "View Full Document") : null
         ),
         _.pre({ class: "tl-flow-storage-record-preview" }, knowledgeDocumentPreviewText(documentRecord, 1800))
       )
@@ -5116,16 +5116,16 @@ const renderInspectorKnowledgeDictionary = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(exportPayload, "Copy dictionary export"),
-        btn({
+        flowMapBtn({
           class: "is-danger is-compact",
           title: "Clear Knowledge dictionary records",
           onclick: () => requestKnowledgeDictionaryClear(node),
-        }, icon("delete_sweep", "sm"), "Clear Dictionary"),
-        btn({
+        }, flowMapIcon("delete_sweep", "sm"), "Clear Dictionary"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh Knowledge dictionary",
           onclick: () => loadKnowledgeInspectorDictionary(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, flowMapIcon("sync", "sm"), "Refresh")
       )
     ),
     entries.length
@@ -5204,16 +5204,16 @@ const renderInspectorKnowledgeEvents = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(exportPayload, "Copy event export"),
-        btn({
+        flowMapBtn({
           class: "is-danger is-compact",
           title: "Clear Knowledge event records",
           onclick: () => requestKnowledgeEventsClear(node),
-        }, icon("delete_sweep", "sm"), "Clear Events"),
-        btn({
+        }, flowMapIcon("delete_sweep", "sm"), "Clear Events"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh Knowledge events",
           onclick: () => loadKnowledgeInspectorEvents(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, flowMapIcon("sync", "sm"), "Refresh")
       )
     ),
     events.length
@@ -5291,11 +5291,11 @@ const renderInspectorStructuredKnowledge = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(exportPayload, "Copy structured export"),
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh structured records",
           onclick: () => loadStructuredKnowledgeInspector(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh")
+        }, flowMapIcon("sync", "sm"), "Refresh")
       )
     ),
     records.length
@@ -6031,7 +6031,7 @@ const requestTokenUsageDetails = (node = {}, scope = "total") => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Close")
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -6075,14 +6075,14 @@ const requestTokenUsageClear = (node = {}) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      childCount ? btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      childCount ? flowMapBtn({
         onclick: () => performClear({ close, cascade: false }),
-      }, icon("cleaning_services", "sm"), "Solo Node") : null,
-      btn({
+      }, flowMapIcon("cleaning_services", "sm"), "Solo Node") : null,
+      flowMapBtn({
         class: "is-danger",
         onclick: () => performClear({ close, cascade: Boolean(childCount) }),
-      }, icon(childCount ? "account_tree" : "cleaning_services", "sm"), childCount ? "Node + figli" : "Clear Token")
+      }, flowMapIcon(childCount ? "account_tree" : "cleaning_services", "sm"), childCount ? "Node + figli" : "Clear Token")
     ),
   });
   dialog.open();
@@ -6197,14 +6197,14 @@ const requestKnowledgeGraphClear = (node = {}) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      childCount ? btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      childCount ? flowMapBtn({
         onclick: () => performClear({ close, cascade: false }),
-      }, icon("delete_sweep", "sm"), "Solo Node") : null,
-      btn({
+      }, flowMapIcon("delete_sweep", "sm"), "Solo Node") : null,
+      flowMapBtn({
         class: "is-danger",
         onclick: () => performClear({ close, cascade: Boolean(childCount) }),
-      }, icon(childCount ? "account_tree" : "delete_sweep", "sm"), childCount ? "Node + figli" : "Clear Graph")
+      }, flowMapIcon(childCount ? "account_tree" : "delete_sweep", "sm"), childCount ? "Node + figli" : "Clear Graph")
     ),
   });
   dialog.open();
@@ -6255,14 +6255,14 @@ const requestKnowledgeStoreClear = (node = {}, options = {}) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      childCount ? btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      childCount ? flowMapBtn({
         onclick: () => performClear({ close, cascade: false }),
-      }, icon(options.icon || "delete_sweep", "sm"), "Solo Node") : null,
-      btn({
+      }, flowMapIcon(options.icon || "delete_sweep", "sm"), "Solo Node") : null,
+      flowMapBtn({
         class: "is-danger",
         onclick: () => performClear({ close, cascade: Boolean(childCount) }),
-      }, icon(childCount ? "account_tree" : options.icon || "delete_sweep", "sm"), childCount ? "Node + figli" : actionLabel)
+      }, flowMapIcon(childCount ? "account_tree" : options.icon || "delete_sweep", "sm"), childCount ? "Node + figli" : actionLabel)
     ),
   });
   dialog.open();
@@ -7448,7 +7448,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
           label: "Type",
           value: model.type,
           options: types.map((type) => ({ value: type, label: type === "all" ? "All types" : type })),
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => {
             model.type = String(cmsInputValue(value) || "all");
             rerender();
@@ -7459,7 +7459,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
           label: "Relation",
           value: model.relationType,
           options: relationTypes.map((type) => ({ value: type, label: type === "all" ? "All relations" : type })),
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => {
             model.relationType = String(cmsInputValue(value) || "all");
             rerender();
@@ -7470,7 +7470,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
           label: "Layout",
           value: model.mode,
           options: [{ value: "force", label: "Force" }, { value: "groups", label: "Groups" }],
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => {
             model.mode = String(cmsInputValue(value) || "force");
             rerender();
@@ -7481,7 +7481,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
           label: "Limit",
           value: String(model.limit),
           options: [40, 80, 120, 200].map((limit) => ({ value: String(limit), label: `${limit} nodes` })),
-          slots: { arrow: () => icon("keyboard_arrow_down", "sm") },
+          slots: { arrow: () => flowMapIcon("keyboard_arrow_down", "sm") },
           onChange: (value) => {
             model.limit = Number(cmsInputValue(value)) || 80;
             rerender();
@@ -7567,7 +7567,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 model.zoom = Math.max(0.75, Number((model.zoom - 0.1).toFixed(2)));
                 rerender();
               },
-            }, icon("zoom_out", "sm")),
+            }, flowMapIcon("zoom_out", "sm")),
             _.button({
               type: "button",
               title: "Fit graph",
@@ -7579,7 +7579,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 model.panY = 0;
                 rerender();
               },
-            }, icon("center_focus_strong", "sm")),
+            }, flowMapIcon("center_focus_strong", "sm")),
             _.button({
               type: "button",
               title: "Zoom in",
@@ -7589,7 +7589,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 model.zoom = Math.min(2.2, Number((model.zoom + 0.1).toFixed(2)));
                 rerender();
               },
-            }, icon("zoom_in", "sm")),
+            }, flowMapIcon("zoom_in", "sm")),
             _.span({ class: "tl-kg-view-zoom-label" }, `${Math.round(model.zoom * 100)}%`)
           ),
           visible.entities.length
@@ -7632,7 +7632,7 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
                 focusGraphEntity(entity);
               },
             })
-            : _.div({ class: "tl-kg-view-empty" }, icon("account_tree", "lg"), _.strong("No entities"), _.span("Try changing filters or run Entity Extractor."))
+            : _.div({ class: "tl-kg-view-empty" }, flowMapIcon("account_tree", "lg"), _.strong("No entities"), _.span("Try changing filters or run Entity Extractor."))
         ),
         _.aside(
           { class: "tl-kg-view-side" },
@@ -7784,9 +7784,9 @@ const openKnowledgeGraphViewDialog = async (node = {}) => {
     },
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: false })) }, icon("account_tree", "sm"), "Copy Graph"),
-      btn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: true })) }, icon("content_copy", "sm"), "Copy With Isolated"),
-      btn({ class: "st-btn-primary", onclick: close }, "Close")
+      flowMapBtn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: false })) }, flowMapIcon("account_tree", "sm"), "Copy Graph"),
+      flowMapBtn({ onclick: () => copyRuntimeValue(knowledgeGraphExportData(graphData, { includeIsolated: true })) }, flowMapIcon("content_copy", "sm"), "Copy With Isolated"),
+      flowMapBtn({ class: "st-btn-primary", onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -7847,21 +7847,21 @@ const renderInspectorKnowledgeGraph = (node = {}) => {
       _.div(
         { class: "tl-flow-storage-record-actions tl-flow-kg-actions" },
         copyRuntimeButton(snapshot, "Copy graph snapshot"),
-        btn({
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "View Knowledge Graph",
           onclick: () => openKnowledgeGraphViewDialog(node),
-        }, icon("account_tree", "sm"), "View Graph"),
-        btn({
+        }, flowMapIcon("account_tree", "sm"), "View Graph"),
+        flowMapBtn({
           class: "is-ghost is-compact",
           title: "Refresh Knowledge graph",
           onclick: () => loadKnowledgeInspectorGraph(node, { force: true }),
-        }, icon("sync", "sm"), "Refresh"),
-        btn({
+        }, flowMapIcon("sync", "sm"), "Refresh"),
+        flowMapBtn({
           class: "is-danger is-compact",
           title: "Clear Knowledge graph index",
           onclick: () => requestKnowledgeGraphClear(node),
-        }, icon("delete_sweep", "sm"), "Clear Graph")
+        }, flowMapIcon("delete_sweep", "sm"), "Clear Graph")
       )
     ),
     graph.topEntities?.length
@@ -7968,7 +7968,7 @@ const renderInspectorLogs = (events = [], flowLogs = []) =>
         { class: "tl-flow-log-filter-row" },
         _.span("Run filter"),
         _.strong(state.filters.runId),
-        btn({ class: "is-ghost is-compact", onclick: () => setFilter("runId", "all") }, "Clear")
+        flowMapBtn({ class: "is-ghost is-compact", onclick: () => setFilter("runId", "all") }, "Clear")
       )
     ) : null,
     _.section(
@@ -7983,11 +7983,11 @@ const renderInspectorLogs = (events = [], flowLogs = []) =>
             _.strong(`${event.status || "ok"} · ${formatShortDate(event.createdAt)}`),
             _.div(
               { class: "tl-flow-runtime-log-actions" },
-              btn({
+              flowMapBtn({
                 class: "is-ghost is-compact tl-flow-replay-btn",
                 title: "Replay this payload through downstream routes",
                 onclick: () => replayRuntimeEvent(event),
-              }, icon("replay", "sm"), "Replay"),
+              }, flowMapIcon("replay", "sm"), "Replay"),
               copyRuntimeButton(event.originalPayload ?? event.payload ?? {}, "Copy payload")
             )
           ),
@@ -8257,10 +8257,10 @@ const renderInspectorSectionCard = (kind = "node", panels = [], panel = {}) => {
       },
       _.span(
         { class: "tl-flow-inspector-card-toggle" },
-        icon(collapsed ? "chevron_right" : "keyboard_arrow_down", "sm"),
+        flowMapIcon(collapsed ? "chevron_right" : "keyboard_arrow_down", "sm"),
         _.span(panel.title)
       ),
-      _.span({ class: "tl-flow-inspector-card-grip", "aria-hidden": "true" }, icon("drag_indicator", "sm"))
+      _.span({ class: "tl-flow-inspector-card-grip", "aria-hidden": "true" }, flowMapIcon("drag_indicator", "sm"))
     ),
     collapsed ? null : _.div({ class: "tl-flow-inspector-card-body" }, panel.content)
   );
@@ -8275,22 +8275,22 @@ const renderInspectorPanelStack = (kind = "node", panels = []) => {
 };
 
 const inspectorActionButton = ({ label = "", iconName = "", className = "", ...props } = {}) =>
-  _.Tooltip ? _.Tooltip(btn(
+  _.Tooltip ? _.Tooltip(flowMapBtn(
     {
       ...props,
       class: ["tl-flow-inspector-action", className, props.class].filter(Boolean).join(" "),
       title: label,
       "aria-label": label,
     },
-    icon(iconName, "sm")
-  ), label) : btn(
+    flowMapIcon(iconName, "sm")
+  ), label) : flowMapBtn(
     {
       ...props,
       class: ["tl-flow-inspector-action", className, props.class].filter(Boolean).join(" "),
       title: label,
       "aria-label": label,
     },
-    icon(iconName, "sm")
+    flowMapIcon(iconName, "sm")
   );
 
 const inspectorSourceChip = (linkingSource = {}) => {
@@ -8303,7 +8303,7 @@ const inspectorSourceChip = (linkingSource = {}) => {
       role: "img",
       tabindex: "0",
     },
-    icon("hub", "sm")
+    flowMapIcon("hub", "sm")
   );
   return _.Tooltip ? _.Tooltip(chip, label) : chip;
 };
@@ -8313,7 +8313,7 @@ const renderInspectorTitleHero = ({ tone = "cyan", iconName = "hub", title = "",
     { class: "tl-flow-panel-title is-hero" },
     _.div(
       { class: "tl-flow-node-hero tl-flow-inspector-title-hero" },
-      _.span({ class: `tl-flow-node-icon is-${tone}` }, icon(iconName, "md")),
+      _.span({ class: `tl-flow-node-icon is-${tone}` }, flowMapIcon(iconName, "md")),
       _.div(
         { class: "tl-flow-inspector-title-copy" },
         _.div(
@@ -8323,11 +8323,11 @@ const renderInspectorTitleHero = ({ tone = "cyan", iconName = "hub", title = "",
         ),
         _.p(
           subtitle || "Runtime Graph",
-          _.span({ class: "tl-flow-status", "data-flow-inspector-status": "true" }, dot(), status || "active")
+          _.span({ class: "tl-flow-status", "data-flow-inspector-status": "true" }, flowMapDot(), status || "active")
         )
       )
     ),
-    btn({ "aria-label": closeLabel, title: `${closeLabel} (Esc)`, onclick: closeInspector }, icon("close", "sm"))
+    flowMapBtn({ "aria-label": closeLabel, title: `${closeLabel} (Esc)`, onclick: closeInspector }, flowMapIcon("close", "sm"))
   );
 
 const renderEdgeInspector = (edge) => {
@@ -8559,7 +8559,7 @@ const renderInspector = () => {
       subtitle: node.type || "Runtime Node",
       status: draft ? "draft" : node.status || "active",
       renameAction: () => requestNodeRename(node),
-    }) : _.div({ class: "tl-flow-panel-title" }, _.strong("Inspector"), btn({ "aria-label": "Close Inspector", title: "Close Inspector (Esc)", onclick: closeInspector }, icon("close", "sm"))),
+    }) : _.div({ class: "tl-flow-panel-title" }, _.strong("Inspector"), flowMapBtn({ "aria-label": "Close Inspector", title: "Close Inspector (Esc)", onclick: closeInspector }, flowMapIcon("close", "sm"))),
     node ? _.section(
       { class: "tl-flow-inspector-card is-controls" },
       _.div(
@@ -8600,8 +8600,8 @@ const renderEvents = () => {
       { class: "tl-flow-events-head" },
       _.h2("Event Inspector"),
       renderSelect("tl-flow-select is-tiny", state.filters.eventType || "all", eventTypeOptions(), (value) => setFilter("eventType", value)),
-      state.filters.eventType !== "all" ? btn({ class: "is-ghost is-compact", onclick: () => setFilter("eventType", "all") }, "Clear") : null,
-      state.filters.runId !== "all" ? btn({ class: "is-ghost is-compact", title: state.filters.runId, onclick: () => setFilter("runId", "all") }, "Clear run") : null,
+      state.filters.eventType !== "all" ? flowMapBtn({ class: "is-ghost is-compact", onclick: () => setFilter("eventType", "all") }, "Clear") : null,
+      state.filters.runId !== "all" ? flowMapBtn({ class: "is-ghost is-compact", title: state.filters.runId, onclick: () => setFilter("runId", "all") }, "Clear run") : null,
       _.span(`${events.length} live`)
     ),
     renderLiveTestVerification(),
@@ -8629,7 +8629,7 @@ const renderEvents = () => {
         { value: "warning", label: "Warning" },
         { value: "error", label: "Error" },
       ], (value) => setFilter("logLevel", value)),
-      logLevel !== "all" ? btn({ class: "is-ghost is-compact", onclick: () => setFilter("logLevel", "all") }, "Clear") : null,
+      logLevel !== "all" ? flowMapBtn({ class: "is-ghost is-compact", onclick: () => setFilter("logLevel", "all") }, "Clear") : null,
       _.span(`${flowLogs.length} recent`)
     ),
     _.table(
@@ -8709,7 +8709,7 @@ const renderAgentRuntimeNodeRecord = (record = {}) => {
     { class: "tl-flow-record-summary" },
     _.section(
       { class: "tl-flow-record-hero" },
-      icon(node.type === "aiAgent" ? "psychology" : "account_tree", "sm"),
+      flowMapIcon(node.type === "aiAgent" ? "psychology" : "account_tree", "sm"),
       _.span(
         _.strong(node.label || record.nodeId || "Runtime Node"),
         _.em([node.type, node.subtype, node.status].filter(Boolean).join(" · ") || node.id || "")
@@ -8735,12 +8735,12 @@ const renderAgentRuntimeNodeRecord = (record = {}) => {
     ),
     _.details(
       { class: "tl-flow-record-section" },
-      _.summary(icon("add_link", "sm"), _.strong("Dependencies"), _.em(`${dependencies.length}`), icon("expand_more", "sm")),
+      _.summary(flowMapIcon("add_link", "sm"), _.strong("Dependencies"), _.em(`${dependencies.length}`), flowMapIcon("expand_more", "sm")),
       dependencies.length ? _.div(
         { class: "tl-flow-record-list" },
         ...dependencies.slice(0, 12).map((dependency) =>
           _.span(
-            icon("link", "sm"),
+            flowMapIcon("link", "sm"),
             _.strong(`${dependency.sourceNodeId || "source"} -> ${dependency.targetNodeId || "target"}`),
             _.em([dependency.channel, dependency.status].filter(Boolean).join(" · ") || dependency.id || "")
           )
@@ -8749,12 +8749,12 @@ const renderAgentRuntimeNodeRecord = (record = {}) => {
     ),
     _.details(
       { class: "tl-flow-record-section" },
-      _.summary(icon("bolt", "sm"), _.strong("Recent Events"), _.em(`${events.length}`), icon("expand_more", "sm")),
+      _.summary(flowMapIcon("bolt", "sm"), _.strong("Recent Events"), _.em(`${events.length}`), flowMapIcon("expand_more", "sm")),
       events.length ? _.div(
         { class: "tl-flow-record-list" },
         ...events.slice(0, 12).map((event) =>
           _.span(
-            icon(event.status === "error" ? "error" : "bolt", "sm"),
+            flowMapIcon(event.status === "error" ? "error" : "bolt", "sm"),
             _.strong(event.eventType || event.channel || "event"),
             _.em([event.channel, event.status, event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ""].filter(Boolean).join(" · "))
           )
@@ -8763,12 +8763,12 @@ const renderAgentRuntimeNodeRecord = (record = {}) => {
     ),
     _.details(
       { class: "tl-flow-record-section" },
-      _.summary(icon("account_tree", "sm"), _.strong("Impact"), _.em(impact.risk || "runtime"), icon("expand_more", "sm")),
+      _.summary(flowMapIcon("account_tree", "sm"), _.strong("Impact"), _.em(impact.risk || "runtime"), flowMapIcon("expand_more", "sm")),
       _.pre({ class: "tl-flow-record-json is-compact" }, JSON.stringify(impact || {}, null, 2))
     ),
     _.details(
       { class: "tl-flow-record-section" },
-      _.summary(icon("data_object", "sm"), _.strong("Raw JSON"), copyRuntimeButton(record, "Copy raw JSON"), icon("expand_more", "sm")),
+      _.summary(flowMapIcon("data_object", "sm"), _.strong("Raw JSON"), copyRuntimeButton(record, "Copy raw JSON"), flowMapIcon("expand_more", "sm")),
       _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2))
     )
   );
@@ -8786,7 +8786,7 @@ const openFlowRecordDialog = ({ title = "Runtime record", subtitle = "", iconNam
     content: () => record?.version === "agent-runtime-v1" && record?.node
       ? renderAgentRuntimeNodeRecord(record)
       : _.pre({ class: "tl-flow-record-json" }, JSON.stringify(record || {}, null, 2)),
-    actions: ({ close }) => btn({ class: "st-btn-primary", onclick: close }, "Close"),
+    actions: ({ close }) => flowMapBtn({ class: "st-btn-primary", onclick: close }, "Close"),
   });
   dialog.open();
 };
@@ -8995,7 +8995,7 @@ const renderStatusLogsPanel = (level = "all") => {
           _.td(log.message || log.context?.action || "runtime log"),
           _.td(log.nodeId || log.context?.sourceNodeId || "runtime"),
           _.td(log.connectionId || log.context?.connectionId || "N/D"),
-          _.td(btn({
+          _.td(flowMapBtn({
             class: "is-compact",
             title: "Open log detail",
             onclick: () => openFlowRecordDialog({
@@ -9004,7 +9004,7 @@ const renderStatusLogsPanel = (level = "all") => {
               iconName: (log.level || "info") === "error" ? "error" : "receipt_long",
               record: log,
             }),
-          }, icon("data_object", "sm")))
+          }, flowMapIcon("data_object", "sm")))
         )
       ) : [_.tr(_.td({ colspan: 6 }, level === "all" ? "Nessun flow log runtime registrato." : `Nessun log ${level}.`))])
     )
@@ -9022,9 +9022,9 @@ const renderStatusPopover = () => {
       { class: "tl-flow-status-popover-head" },
       _.h2(active.title),
       runId !== "all"
-        ? btn({ class: "is-ghost is-compact", title: runId, onclick: () => setFilter("runId", "all") }, icon("filter_alt_off", "sm"), "Run")
+        ? flowMapBtn({ class: "is-ghost is-compact", title: runId, onclick: () => setFilter("runId", "all") }, flowMapIcon("filter_alt_off", "sm"), "Run")
         : null,
-      _.button({ type: "button", "aria-label": "Close", onclick: () => toggleStatusPanel(active.id) }, icon("close", "sm"))
+      _.button({ type: "button", "aria-label": "Close", onclick: () => toggleStatusPanel(active.id) }, flowMapIcon("close", "sm"))
     ),
     active.id === "runtime" ? renderStatusRuntimePanel()
       : active.id === "edges" ? renderStatusEdgesPanel()
@@ -9052,7 +9052,7 @@ const renderStatusBar = () =>
             "data-status-item": item.id,
             onclick: () => toggleStatusPanel(item.id),
           },
-          icon(item.icon, "sm"),
+          flowMapIcon(item.icon, "sm"),
           _.span({ "data-status-label": item.id }, item.label)
         )
       )
@@ -9062,15 +9062,15 @@ const renderStatusBar = () =>
 
 const renderShell = () =>
   _.div(
-    { class: "tl-flow-shell" },
+    { class: `tl-flow-shell${flowMapEmbedded ? " is-embedded" : ""}` },
     renderHeader(),
-    window.TrackerLensSidebar.render({ activeId: "flow" }),
+    flowMapEmbedded ? null : window.TrackerLensSidebar.render({ activeId: "flow" }),
     _.div(
       { class: "tl-flow-main" },
       state.error ? _.div(
         { class: "tl-flow-error", role: "alert" },
         _.span({ class: "tl-flow-error-message" }, state.error),
-        btn({
+        flowMapBtn({
           class: "tl-flow-error-close",
           dense: true,
           title: "Chiudi errore",
@@ -9080,7 +9080,7 @@ const renderShell = () =>
             event.stopPropagation();
             clearFlowMapError({ remount: true });
           },
-        }, icon("close", "sm"))
+        }, flowMapIcon("close", "sm"))
       ) : null,
       _.div(
         { class: "tl-flow-grid" },

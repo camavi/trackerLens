@@ -57,6 +57,7 @@ const openChromePage = (url) => {
   window.location.assign(url);
 };
 
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const WORKSPACE_ASSET_MIME = "application/x-trackerlens-workspace-asset";
@@ -388,10 +389,13 @@ const exportCurrentWorkspace = async () => {
   mountWorkspace();
 };
 
+let workspaceRoot = null;
+let workspaceEmbedded = false;
+let workspaceListenersAttached = false;
 const renderHeader = () =>
   _.header(
     { class: "tl-workspace-header" },
-    window.TrackerLensSidebar.renderBrand({ className: "tl-app-brand" }),
+    workspaceEmbedded ? null : window.TrackerLensSidebar.renderBrand({ className: "tl-app-brand" }),
     _.div(
       { class: "tl-workspace-title" },
       _.h1(workspaceState.workspace.name, btn({ class: "tl-title-edit", "aria-label": "Modifica workspace", onclick: openWorkspaceProperties }, icon("edit", "sm"))),
@@ -414,6 +418,7 @@ const renderHeader = () =>
   );
 
 const renderRail = () => {
+  if (workspaceEmbedded) return null;
   return window.TrackerLensSidebar.render({
     activeId: "dashboard",
     onHelp: () => setNotice("Suggerimento: seleziona un box e usa la toolbar in basso."),
@@ -2257,10 +2262,11 @@ const handleWorkspaceKeys = (event) => {
 };
 
 const mountWorkspace = () => {
-  const root = document.getElementById("tl-workspace-root");
+  const root = workspaceRoot || document.getElementById("tl-workspace-root");
+  if (!root) return;
   root.replaceChildren(
     _.div(
-      { class: "tl-workspace-shell" },
+      { class: `tl-workspace-shell${workspaceEmbedded ? " is-embedded" : ""}` },
       renderHeader(),
       _.div({ class: "tl-workspace-body" }, renderRail(), renderAddPanel(), renderCanvas()),
       renderProperties(),
@@ -2312,9 +2318,45 @@ const initializeWorkspace = async () => {
   }
 };
 
-CMSwift.ready(initializeWorkspace);
-document.addEventListener("keydown", handleWorkspaceKeys);
-document.addEventListener("mousemove", updatePointerInteraction);
-document.addEventListener("mousemove", updateAssetPointerDrag);
-document.addEventListener("mouseup", finishPointerInteraction);
-document.addEventListener("mouseup", finishAssetPointerDrop);
+const attachWorkspaceListeners = () => {
+  if (workspaceListenersAttached) return;
+  workspaceListenersAttached = true;
+  document.addEventListener("keydown", handleWorkspaceKeys);
+  document.addEventListener("mousemove", updatePointerInteraction);
+  document.addEventListener("mousemove", updateAssetPointerDrag);
+  document.addEventListener("mouseup", finishPointerInteraction);
+  document.addEventListener("mouseup", finishAssetPointerDrop);
+};
+
+const detachWorkspaceListeners = () => {
+  if (!workspaceListenersAttached) return;
+  workspaceListenersAttached = false;
+  document.removeEventListener("keydown", handleWorkspaceKeys);
+  document.removeEventListener("mousemove", updatePointerInteraction);
+  document.removeEventListener("mousemove", updateAssetPointerDrag);
+  document.removeEventListener("mouseup", finishPointerInteraction);
+  document.removeEventListener("mouseup", finishAssetPointerDrop);
+};
+
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.workspace = {
+  async mount({ outlet }) {
+    workspaceRoot = outlet;
+    workspaceEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("dashboard");
+    attachWorkspaceListeners();
+    await initializeWorkspace();
+  },
+  dispose() {
+    detachWorkspaceListeners();
+    workspaceRoot?.replaceChildren();
+    workspaceRoot = null;
+    workspaceEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) {
+  attachWorkspaceListeners();
+  CMSwift.ready(initializeWorkspace);
+}
+})();

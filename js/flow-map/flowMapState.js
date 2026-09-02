@@ -1,22 +1,24 @@
 // Flow Map state, stores, graph loading and global helpers.
 // Extracted from js/flowMapView.js; loaded in order by flowMap.html.
-const icon = (name, size = "md") => _.Icon({ name, size });
-const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
-const dot = (className = "") => _.span({ class: `tl-flow-dot${className ? ` ${className}` : ""}` });
-const params = new URLSearchParams(window.location.search);
+// Flow Map is still split across classic scripts. These names stay global to
+// the Flow group but are explicitly prefixed to avoid shell-view collisions.
+const flowMapIcon = (name, size = "md") => _.Icon({ name, size });
+const flowMapBtn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
+const flowMapDot = (className = "") => _.span({ class: `tl-flow-dot${className ? ` ${className}` : ""}` });
+const flowMapParams = new URLSearchParams(window.location.search);
 const defaultViewport = () => ({ zoom: 1, panX: 0, panY: 0 });
 const FLOW_CANVAS_POSITION_MIN = -1000000;
 const FLOW_CANVAS_POSITION_MAX = 1000000;
 const FLOW_NODE_DEFAULT_WIDTH = 218;
 const FLOW_NODE_MIN_WIDTH = 160;
 const FLOW_NODE_MAX_WIDTH = 720;
-const flowMapRepairMode = () => String(params.get("repair") || "").trim().toLowerCase();
+const flowMapRepairMode = () => String(flowMapParams.get("repair") || "").trim().toLowerCase();
 const isFlowMapRecoveryMode = () => {
   const repair = flowMapRepairMode();
-  return Boolean(params.get("safe") || ["knowledge-graph", "kg", "runtime", "hard", "workspace-hard", "clear-workspace"].includes(repair));
+  return Boolean(flowMapParams.get("safe") || ["knowledge-graph", "kg", "runtime", "hard", "workspace-hard", "clear-workspace"].includes(repair));
 };
 const viewportWorkspaceId = (workspaceId = "") => {
-  const candidate = String(workspaceId || params.get("workspaceId") || state.filters.workspaceId || "workspace_global").trim();
+  const candidate = String(workspaceId || flowMapParams.get("workspaceId") || state.filters.workspaceId || "workspace_global").trim();
   return candidate && candidate !== "all" ? candidate : "workspace_global";
 };
 const viewportStorageKey = (workspaceId = "") => `tl_flow_viewport:${viewportWorkspaceId(workspaceId)}`;
@@ -103,27 +105,27 @@ const state = {
   performance: [],
   libraryItems: [],
   focus: {
-    mode: params.get("runtime") || "",
-    nodeId: params.get("nodeId") || "",
-    edgeId: params.get("edgeId") || "",
-    nodeType: params.get("nodeType") || "",
-    channel: params.get("channel") || "",
-    connectionId: params.get("connectionId") || "",
+    mode: flowMapParams.get("runtime") || "",
+    nodeId: flowMapParams.get("nodeId") || "",
+    edgeId: flowMapParams.get("edgeId") || "",
+    nodeType: flowMapParams.get("nodeType") || "",
+    channel: flowMapParams.get("channel") || "",
+    connectionId: flowMapParams.get("connectionId") || "",
   },
   filters: {
-    workspaceId: params.get("workspaceId") || "",
-    channel: params.get("channel") || "all",
-    activity: params.get("activity") || "all",
-    type: params.get("type") || "all",
-    origin: params.get("origin") || "all",
-    state: params.get("state") || "all",
-    eventType: params.get("eventType") || "all",
-    logLevel: params.get("logLevel") || "all",
-    runId: params.get("runId") || "all",
+    workspaceId: flowMapParams.get("workspaceId") || "",
+    channel: flowMapParams.get("channel") || "all",
+    activity: flowMapParams.get("activity") || "all",
+    type: flowMapParams.get("type") || "all",
+    origin: flowMapParams.get("origin") || "all",
+    state: flowMapParams.get("state") || "all",
+    eventType: flowMapParams.get("eventType") || "all",
+    logLevel: flowMapParams.get("logLevel") || "all",
+    runId: flowMapParams.get("runId") || "all",
   },
   viewport: { zoom: 1, panX: 0, panY: 0 },
   nodePositions: {},
-  frontNodeId: params.get("nodeId") || "",
+  frontNodeId: flowMapParams.get("nodeId") || "",
   paletteSearch: "",
   paletteDragItem: null,
   palettePointer: null,
@@ -244,7 +246,7 @@ const recentRuntimeRecords = (records = [], limit = 0) =>
     .sort((a, b) => Date.parse(b.createdAt || b.updatedAt || "") - Date.parse(a.createdAt || a.updatedAt || ""))
     .slice(0, Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : Number.POSITIVE_INFINITY);
 
-state.viewport = params.get("workspaceId") ? loadStoredViewport(params.get("workspaceId")) || state.viewport : state.viewport;
+state.viewport = flowMapParams.get("workspaceId") ? loadStoredViewport(flowMapParams.get("workspaceId")) || state.viewport : state.viewport;
 
 const flowReactive = CMSwift.reactive;
 const [getRuntimeState, setRuntimeSignal] = flowReactive.signal(state.runtime);
@@ -298,7 +300,7 @@ const setFlowMapError = (message = "", { timeout = true, remount = false } = {})
   if (remount && state.mounted && typeof mount === "function") mount({ preserveScroll: true });
 };
 
-window.addEventListener("trackers:runtime-error", (event) => {
+const onFlowMapRuntimeError = (event) => {
   const detail = event?.detail || {};
   const workspaceId = String(detail.workspaceId || "");
   const activeWorkspaceId = String(state.filters.workspaceId || "workspace_global");
@@ -310,7 +312,11 @@ window.addEventListener("trackers:runtime-error", (event) => {
     finishFlowMapTestRun({ runId, summary: `Live test stopped: ${nodeLabel} reported an error` });
   }
   setFlowMapError(`${nodeLabel}: ${message}`, { remount: true });
-});
+};
+
+if (!window.TrackerLensAppRouter) {
+  window.addEventListener("trackers:runtime-error", onFlowMapRuntimeError);
+}
 
 const syncReactiveState = () => {
   scheduleFlowMapErrorDismiss();
@@ -715,7 +721,7 @@ const cleanupWorkspaceRuntimeData = async (workspaceId = "") => {
 const runFlowMapStartupRepair = async () => {
   const repair = flowMapRepairMode();
   if (!repair || repair === "0" || repair === "false") return null;
-  const workspaceId = normalizeRuntimeWorkspaceId(params.get("workspaceId") || state.filters.workspaceId || await resolveInitialWorkspaceId());
+  const workspaceId = normalizeRuntimeWorkspaceId(flowMapParams.get("workspaceId") || state.filters.workspaceId || await resolveInitialWorkspaceId());
   if (repair === "knowledge-graph" || repair === "kg" || repair === "runtime" || repair === "hard" || repair === "workspace-hard" || repair === "clear-workspace") {
     state.loading = true;
     setLoadingSignal(true);

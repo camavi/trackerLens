@@ -44,6 +44,7 @@ body .tl-brand-lockup .cms-icon {
   background: rgba(8, 15, 21, 0.74);
   backdrop-filter: blur(14px);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+  height: calc(100% - var(--tl-shell-topbar-height) - 22px);
 }
 
 .tl-view-nav {

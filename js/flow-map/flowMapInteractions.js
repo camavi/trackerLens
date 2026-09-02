@@ -153,7 +153,7 @@ const createDraftNodeAtFlowPosition = async ({ item, flowPosition }) => {
 // snapshot of that catalog reference. Reconcile existing nodes on catalog
 // refresh so a node inserted during manifest-only import does not remain
 // permanently disabled after the exact package is explicitly activated.
-window.addEventListener("trackers-custom-node-packages-updated", async (event) => {
+const onFlowMapCustomPackageReconcile = async (event) => {
   const packages = Array.isArray(event.detail?.packages) ? event.detail.packages : [];
   if (!packages.length || !state?.runtime?.nodes?.length) return;
   const byReference = new Map(packages.map((pkg) => [`${pkg.packageId}|${pkg.version}|${pkg.archive?.sha256 || ""}`, pkg]));
@@ -182,13 +182,16 @@ window.addEventListener("trackers-custom-node-packages-updated", async (event) =
     await window.TrackerLensRuntimeGraphStore?.upsertRuntimeNode?.({ node });
     await window.TrackerLensChannelRegistry?.upsertChannelsForRuntimeNode?.({ node });
   }));
+  if (!state.mounted) return;
   await loadRuntime({ force: true, silent: true });
-});
+};
 
-// The first catalog refresh happens before this interaction module is loaded.
-// Request one more read after installing the listener to reconcile persisted
-// Flow Map nodes when the page is reopened.
-void window.TrackerLensCustomNodePackages?.refreshInstalled?.();
+if (!window.TrackerLensAppRouter) {
+  window.addEventListener("trackers-custom-node-packages-updated", onFlowMapCustomPackageReconcile);
+  // The standalone page needs this initial read. The persistent shell does
+  // it from the Flow lifecycle, only once the Flow route is active.
+  void window.TrackerLensCustomNodePackages?.refreshInstalled?.();
+}
 
 const flowPythonInstallProgressText = (progress = {}) => {
   const downloaded = Number(progress.downloadedBytes || 0);
@@ -243,8 +246,8 @@ const openFlowPythonPackInstallDialog = async (packId = "", onComplete = null) =
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ id: `${progressId}-close`, onclick: () => { unsubscribe(); close(); } }, "Annulla"),
-      btn({ id: `${progressId}-start`, class: "st-btn-primary", onclick: async (event) => {
+      flowMapBtn({ id: `${progressId}-close`, onclick: () => { unsubscribe(); close(); } }, "Annulla"),
+      flowMapBtn({ id: `${progressId}-start`, class: "st-btn-primary", onclick: async (event) => {
         const startButton = event.currentTarget;
         const closeButton = document.getElementById(`${progressId}-close`);
         startButton.disabled = true;
@@ -260,7 +263,7 @@ const openFlowPythonPackInstallDialog = async (packId = "", onComplete = null) =
           syncProgress({ packId, phase: "error", progress: 0, message: error?.message || "Installazione Python non riuscita" });
           if (closeButton) { closeButton.disabled = false; closeButton.textContent = "Chiudi"; }
         }
-      } }, icon("download", "sm"), "Installa pack")
+      } }, flowMapIcon("download", "sm"), "Installa pack")
     )
   });
   dialog.open();
@@ -293,8 +296,8 @@ const promptMissingManagedPythonPack = async (node = {}, item = {}) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Non ora"),
-      btn({ class: "st-btn-primary", onclick: async () => {
+      flowMapBtn({ onclick: close }, "Non ora"),
+      flowMapBtn({ class: "st-btn-primary", onclick: async () => {
         close();
         try {
           await openFlowPythonPackInstallDialog(packId, async () => {
@@ -304,7 +307,7 @@ const promptMissingManagedPythonPack = async (node = {}, item = {}) => {
         } catch (error) {
           window.alert(error?.message || "Piano di installazione Python non disponibile");
         }
-      } }, icon("download", "sm"), "Installa")
+      } }, flowMapIcon("download", "sm"), "Installa")
     )
   });
   dialog.open();
@@ -723,7 +726,7 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
   if (!nodes.length) {
     return _.div(
       { class: "tl-flow-map-preview-empty" },
-      icon("account_tree", "lg"),
+      flowMapIcon("account_tree", "lg"),
       _.strong("Flow Map vuoto"),
       _.span("Non ci sono nodi da visualizzare.")
     );
@@ -756,7 +759,7 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
           const current = Number(root?.dataset.previewZoom || 1);
           root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, current - 0.15));
         },
-      }, icon("zoom_out", "md")),
+      }, flowMapIcon("zoom_out", "md")),
       _.button({
         type: "button",
         class: "is-dense",
@@ -772,7 +775,7 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
           const fit = Math.min(1, (viewport?.clientWidth || baseWidth) / baseWidth, (viewport?.clientHeight || baseHeight) / baseHeight);
           root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, Math.max(0.45, fit)));
         },
-      }, icon("center_focus_strong", "md")),
+      }, flowMapIcon("center_focus_strong", "md")),
       _.button({
         type: "button",
         class: "is-dense",
@@ -784,7 +787,7 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
           const current = Number(root?.dataset.previewZoom || 1);
           root.dataset.previewZoom = String(setFlowMapPreviewZoom(root, current + 0.15));
         },
-      }, icon("zoom_in", "md")),
+      }, flowMapIcon("zoom_in", "md")),
       _.span({ "data-flow-map-preview-zoom-label": "true" }, "100%")
     ),
     _.div(
@@ -833,7 +836,7 @@ const renderEmbeddedFlowMapPreview = ({ nodes = [], dependencies = [] } = {}) =>
                 },
                 _.div(
                   { class: "tl-flow-map-preview-node-head" },
-                  _.span({ class: "tl-flow-map-preview-node-icon" }, icon(node.metadata?.icon || "extension", "sm")),
+                  _.span({ class: "tl-flow-map-preview-node-icon" }, flowMapIcon(node.metadata?.icon || "extension", "sm")),
                   _.span(
                     { class: "tl-flow-map-preview-node-copy" },
                     _.strong(node.label || node.id),
@@ -1034,7 +1037,7 @@ const openEmbeddedFlowMapPreviewDialog = async (aliasNode = {}) => {
     content: () => renderEmbeddedFlowMapPreview(graph),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ class: "st-btn-primary", onclick: close }, "Chiudi")
+      flowMapBtn({ class: "st-btn-primary", onclick: close }, "Chiudi")
     ),
   });
   dialog.open();
@@ -1564,7 +1567,7 @@ const openExistingAiAgentsDialog = async (options = {}) => {
               {
                 class: "tl-flow-library-asset",
               },
-              _.span({ class: "tl-flow-library-asset-icon" }, icon(agent.icon || "psychology", "sm")),
+              _.span({ class: "tl-flow-library-asset-icon" }, flowMapIcon(agent.icon || "psychology", "sm")),
               _.span(
                 { class: "tl-flow-library-asset-main" },
                 _.strong(agent.name || agent.id),
@@ -1573,7 +1576,7 @@ const openExistingAiAgentsDialog = async (options = {}) => {
               ),
               _.span(
                 { class: "tl-flow-library-asset-actions" },
-                btn({
+                flowMapBtn({
                   class: "tl-flow-library-asset-action",
                   onclick: () => materializeAiAgentNode({
                     agent,
@@ -1581,8 +1584,8 @@ const openExistingAiAgentsDialog = async (options = {}) => {
                     close: () => dialog?.close?.(),
                     mode: "alias",
                   }),
-                }, icon("link", "sm"), "Insert Alias"),
-                btn({
+                }, flowMapIcon("link", "sm"), "Insert Alias"),
+                flowMapBtn({
                   class: "tl-flow-library-duplicate",
                   onclick: (event) => {
                     event.preventDefault();
@@ -1594,22 +1597,22 @@ const openExistingAiAgentsDialog = async (options = {}) => {
                       mode: "duplicate",
                     });
                   },
-                }, icon("content_copy", "sm"), "Duplicate")
+                }, flowMapIcon("content_copy", "sm"), "Duplicate")
               )
             );
           })
         )
         : _.div(
           { class: "tl-flow-library-empty" },
-          icon("psychology", "md"),
+          flowMapIcon("psychology", "md"),
           _.strong("Nessun AI Agent salvato."),
           _.span("Crea e salva un agent da AI Runtime Center, poi torna nella Flow Map.")
         )
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Close"),
-      btn({ class: "st-btn-primary", onclick: () => window.location.assign("ai.html") }, icon("add", "sm"), "AI Runtime Center")
+      flowMapBtn({ onclick: close }, "Close"),
+      flowMapBtn({ class: "st-btn-primary", onclick: () => window.TrackerLensSidebar?.navigate?.("ai.html") || window.location.assign("ai.html") }, flowMapIcon("add", "sm"), "AI Runtime Center")
     ),
   });
   dialog.open();
@@ -1651,7 +1654,7 @@ const openExistingFlowMapDialog = async (options = {}) => {
                 });
               },
             },
-            _.span({ class: "tl-flow-library-asset-icon" }, icon("account_tree", "sm")),
+            _.span({ class: "tl-flow-library-asset-icon" }, flowMapIcon("account_tree", "sm")),
             _.span(
               { class: "tl-flow-library-asset-main" },
               _.strong(flowMap.name || flowMap.id),
@@ -1660,23 +1663,23 @@ const openExistingFlowMapDialog = async (options = {}) => {
             ),
             _.span(
               { class: "tl-flow-library-asset-action" },
-              icon(flowMap.hasInput || flowMap.hasOutput ? "check_circle" : "warning", "sm"),
+              flowMapIcon(flowMap.hasInput || flowMap.hasOutput ? "check_circle" : "warning", "sm"),
               flowMap.hasInput || flowMap.hasOutput ? "Seleziona" : "Non compatibile"
             )
           ))
         )
         : _.div(
           { class: "tl-flow-library-empty" },
-          icon("account_tree", "md"),
+          flowMapIcon("account_tree", "md"),
           _.strong("Nessun Flow Map disponibile."),
           _.span("Crea un Flow Map nella Library Flow Map, poi torna qui.")
         )
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Chiudi"),
-      btn({ onclick: () => window.location.assign("libraryFlowmap.html") }, icon("account_tree", "sm"), "Library Flow Map"),
-      btn({
+      flowMapBtn({ onclick: close }, "Chiudi"),
+      flowMapBtn({ onclick: () => window.TrackerLensSidebar?.navigate?.("libraryFlowmap.html") || window.location.assign("libraryFlowmap.html") }, flowMapIcon("account_tree", "sm"), "Library Flow Map"),
+      flowMapBtn({
         class: "st-btn-primary",
         onclick: async () => {
           if (isInserting) return;
@@ -1700,7 +1703,7 @@ const openExistingFlowMapDialog = async (options = {}) => {
             isInserting = false;
           }
         },
-      }, icon("add_circle", "sm"), "Inserisci")
+      }, flowMapIcon("add_circle", "sm"), "Inserisci")
     ),
   });
   dialog.open();
@@ -1745,27 +1748,27 @@ const openExistingLibraryDialog = async (item, options = {}) => {
                 close: () => dialog?.close?.(),
               }),
             },
-            _.span({ class: "tl-flow-library-asset-icon" }, icon(asset.icon || (kind === "boxTracker" ? "storage" : "dashboard"), "sm")),
+            _.span({ class: "tl-flow-library-asset-icon" }, flowMapIcon(asset.icon || (kind === "boxTracker" ? "storage" : "dashboard"), "sm")),
             _.span(
               { class: "tl-flow-library-asset-main" },
               _.strong(asset.name || asset.id),
               _.em(`${asset.category || kind} · ${asset.outputChannel || "default"} · v${asset.version || "0.1.0"}`),
               _.small(asset.description || "Nessuna descrizione disponibile.")
             ),
-            _.span({ class: "tl-flow-library-asset-action" }, icon("add_circle", "sm"), "Insert")
+            _.span({ class: "tl-flow-library-asset-action" }, flowMapIcon("add_circle", "sm"), "Insert")
           ))
         )
         : _.div(
           { class: "tl-flow-library-empty" },
-          icon(kind === "boxTracker" ? "inventory_2" : "dashboard", "md"),
+          flowMapIcon(kind === "boxTracker" ? "inventory_2" : "dashboard", "md"),
           _.strong(emptyText),
           _.span("Crea e salva un asset dalla Library o dagli editor dedicati, poi torna nella Flow Map.")
         )
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Close"),
-      btn({
+      flowMapBtn({ onclick: close }, "Close"),
+      flowMapBtn({
         class: "st-btn-primary",
         onclick: () => {
           if (window.TrackerLensBoxEditorDialog?.open) {
@@ -1781,7 +1784,7 @@ const openExistingLibraryDialog = async (item, options = {}) => {
           }
           CMSwift.notify?.error?.("Editor universale non disponibile.");
         },
-      }, icon("add", "sm"), kind === "boxTracker" ? "New Tracker" : "New Lens")
+      }, flowMapIcon("add", "sm"), kind === "boxTracker" ? "New Tracker" : "New Lens")
     ),
   });
   dialog.open();
@@ -2902,10 +2905,10 @@ const openChannelInspector = (channelName = "", workspaceId = "") => {
     content: () => renderChannelReportBlocks(channel, report),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: () => { selectChannel(report.name, channel.workspaceId); close(); } }, icon("filter_alt", "sm"), "Filter"),
-      btn({ onclick: () => requestChannelRename(channel, close) }, icon("edit", "sm"), "Rename"),
-      btn({ class: "is-danger", onclick: () => requestChannelDelete(channel, close) }, icon("delete", "sm"), "Delete"),
-      btn({ onclick: close }, "Close")
+      flowMapBtn({ onclick: () => { selectChannel(report.name, channel.workspaceId); close(); } }, flowMapIcon("filter_alt", "sm"), "Filter"),
+      flowMapBtn({ onclick: () => requestChannelRename(channel, close) }, flowMapIcon("edit", "sm"), "Rename"),
+      flowMapBtn({ class: "is-danger", onclick: () => requestChannelDelete(channel, close) }, flowMapIcon("delete", "sm"), "Delete"),
+      flowMapBtn({ onclick: close }, "Close")
     ),
   });
   dialog.open();
@@ -3004,11 +3007,11 @@ const requestChannelRenameWarning = ({ channel, target, validation, closeParent 
     }),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      conflict ? null : btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      conflict ? null : flowMapBtn({
         class: "is-danger",
         onclick: () => performChannelRename({ channel, target, close, closeParent, force: true }),
-      }, icon("warning_amber", "sm"), "Force Rename")
+      }, flowMapIcon("warning_amber", "sm"), "Force Rename")
     ),
   });
   dialog.open();
@@ -3044,8 +3047,8 @@ const requestChannelRename = (channel, closeParent = null) => {
     ),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      btn({ class: "st-btn-primary", onclick: () => performChannelRename({ channel, form: formRef || document.getElementById(formId), close, closeParent }) }, icon("save", "sm"), "Validate Rename")
+      flowMapBtn({ onclick: close }, "Cancel"),
+      flowMapBtn({ class: "st-btn-primary", onclick: () => performChannelRename({ channel, form: formRef || document.getElementById(formId), close, closeParent }) }, flowMapIcon("save", "sm"), "Validate Rename")
     ),
   });
   dialog.open();
@@ -3115,11 +3118,11 @@ const requestChannelDelete = async (channel, closeParent = null) => {
     }),
     actions: ({ close }) => _.Toolbar(
       { align: "end", gap: 8 },
-      btn({ onclick: close }, "Cancel"),
-      btn({
+      flowMapBtn({ onclick: close }, "Cancel"),
+      flowMapBtn({
         class: blocked ? "is-danger" : "st-btn-primary",
         onclick: () => performChannelDelete({ channel, close, closeParent, force: blocked }),
-      }, icon(blocked ? "delete_forever" : "delete", "sm"), blocked ? "Force Delete" : "Delete")
+      }, flowMapIcon(blocked ? "delete_forever" : "delete", "sm"), blocked ? "Force Delete" : "Delete")
     ),
   });
   dialog.open();

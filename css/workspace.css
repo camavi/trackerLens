@@ -105,6 +105,11 @@ body {
   overflow: hidden;
 }
 
+.tl-workspace-shell.is-embedded { width: 100%; }
+.tl-workspace-shell.is-embedded .tl-workspace-header { grid-template-columns: minmax(0, 1fr) auto; padding-left: var(--tl-shell-topbar-inset); }
+.tl-workspace-shell.is-embedded .tl-app-brand { display: none !important; }
+.tl-workspace-shell.is-embedded .tl-workspace-body { grid-template-columns: 230px minmax(520px, 1fr); }
+
 .tl-add-panel {
   padding: 24px 16px 16px;
   border-right: 1px solid var(--tl-border-soft);

@@ -1,4 +1,6 @@
-const root = document.getElementById("tl-devtools-root");
+(function () {
+let root = document.getElementById("tl-devtools-root");
+let devtoolsEmbedded = false;
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 const params = new URLSearchParams(window.location.search);
@@ -825,17 +827,17 @@ const mount = () => {
   if (!root) return;
   root.replaceChildren(
     _.div(
-      { class: "tl-devtools-shell" },
+      { class: `tl-devtools-shell${devtoolsEmbedded ? " is-embedded" : ""}` },
       _.header(
         { class: "tl-devtools-topbar" },
-        window.TrackerLensSidebar.renderBrand({ className: "tl-devtools-brand" }),
+        devtoolsEmbedded ? null : window.TrackerLensSidebar.renderBrand({ className: "tl-devtools-brand" }),
         _.div(
           _.p({ class: "tl-devtools-kicker" }, "Trackers Lens"),
           _.h1("Runtime DevTools")
         ),
         _.div({ class: "tl-devtools-status" }, _.span({ class: "tl-devtools-dot" }), "Core")
       ),
-      window.TrackerLensSidebar?.render({ activeId: "devtools" }),
+      devtoolsEmbedded ? null : window.TrackerLensSidebar?.render({ activeId: "devtools" }),
       _.div(
         { class: "tl-devtools-main" },
         _.div({ class: "tl-devtools-grid-bg" }, ...[].concat(renderContent()))
@@ -860,4 +862,20 @@ async function loadDevTools() {
   }
 }
 
-loadDevTools();
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.devtools = {
+  async mount({ outlet }) {
+    root = outlet;
+    devtoolsEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("devtools");
+    await loadDevTools();
+  },
+  dispose() {
+    root?.replaceChildren();
+    root = null;
+    devtoolsEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) void loadDevTools();
+})();

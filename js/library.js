@@ -1,3 +1,4 @@
+(function () {
 const icon = (name, size = "md") => _.Icon({ name, size });
 const btn = (props, ...children) => _.Btn({ type: "button", ...props }, ...children);
 
@@ -44,9 +45,7 @@ const WORKSPACE_SCOPED_STORES = [
 ];
 const FAVORITES_RECORD_ID = "library_favorites";
 
-const openChromePage = (url) => {
-  window.location.assign(url);
-};
+const openChromePage = (url) => window.TrackerLensSidebar?.navigate?.(url) || window.location.assign(url);
 
 const openUniversalBoxEditor = (options = {}) => {
   if (!window.TrackerLensBoxEditorDialog?.open) {
@@ -400,10 +399,13 @@ const categoryCounts = () => {
 
 const renderBrand = () => window.TrackerLensSidebar.renderBrand({ className: "tl-library-brand" });
 
+let libraryRoot = null;
+let libraryEmbedded = false;
+
 const renderTopbar = () =>
   _.header(
     { class: "tl-library-topbar" },
-    renderBrand(),
+    libraryEmbedded ? null : renderBrand(),
     _.Search({
       class: "tl-library-search-input",
       label: "Cerca nella libreria...",
@@ -744,12 +746,13 @@ const bindSearchInput = (root) => {
 };
 
 const mountLibrary = () => {
-  const root = document.getElementById("tl-library-root");
+  const root = libraryRoot || document.getElementById("tl-library-root");
+  if (!root) return;
   root.replaceChildren(
     _.div(
-      { class: "tl-library-shell" },
+      { class: `tl-library-shell${libraryEmbedded ? " is-embedded" : ""}` },
       renderTopbar(),
-      _.div({ class: "tl-library-body" }, renderSidebar(), renderFilterPanel(), renderMain())
+      _.div({ class: "tl-library-body" }, libraryEmbedded ? null : renderSidebar(), renderFilterPanel(), renderMain())
     )
   );
 
@@ -762,8 +765,7 @@ const loadLibrary = async () => {
   mountLibrary();
 
   try {
-    const report = await window.TrackerLensLocalLibrary.inspect();
-    console.info("[TrackerLens SQLite]", report);
+    await window.TrackerLensLocalLibrary.inspect();
     const items = await window.TrackerLensLocalLibrary.listLibraryItems();
     const favoriteIds = await loadFavoriteIds()
       .catch((error) => {
@@ -786,4 +788,20 @@ const loadLibrary = async () => {
   mountLibrary();
 };
 
-CMSwift.ready(loadLibrary);
+window.TrackerLensViews = window.TrackerLensViews || {};
+window.TrackerLensViews.library = {
+  async mount({ outlet }) {
+    libraryRoot = outlet;
+    libraryEmbedded = true;
+    window.TrackerLensAppShell?.setActive?.("library");
+    await loadLibrary();
+  },
+  dispose() {
+    libraryRoot?.replaceChildren();
+    libraryRoot = null;
+    libraryEmbedded = false;
+  },
+};
+
+if (!window.TrackerLensAppRouter) CMSwift.ready(loadLibrary);
+})();

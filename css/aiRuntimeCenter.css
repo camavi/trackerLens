@@ -23,6 +23,23 @@ body {
     linear-gradient(180deg, #071016 0%, #03080d 100%);
 }
 
+.tl-ai-shell.is-embedded {
+  width: 100%;
+}
+
+.tl-ai-shell.is-embedded .tl-ai-topbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: var(--tl-shell-topbar-inset);
+}
+
+.tl-ai-shell.is-embedded .tl-ai-brand {
+  display: none !important;
+}
+
+.tl-ai-shell.is-embedded .tl-ai-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .tl-ai-topbar {
   height: 70px;
   padding: 0 22px 0 0;

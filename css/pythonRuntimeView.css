@@ -1,6 +1,10 @@
 body { min-width: 1180px; min-height: 760px; overflow: hidden; }
 .tl-python-runtime-root { min-height: 100vh; color: var(--tl-text); background: #03080d; }
 .tl-python-runtime-shell { width: 100vw; height: 100vh; display: grid; grid-template-rows: 70px minmax(0, 1fr); overflow: hidden; background: radial-gradient(circle at 15% 0%, rgba(255,199,44,.16), transparent 32%), radial-gradient(circle at 86% 9%, rgba(53,201,121,.10), transparent 28%), linear-gradient(180deg,#071016 0%,#03080d 100%); }
+.tl-python-runtime-shell.is-embedded { width:100%; }
+.tl-python-runtime-shell.is-embedded .tl-python-runtime-topbar { grid-template-columns:minmax(0,1fr) auto; padding-left: var(--tl-shell-topbar-inset); }
+.tl-python-runtime-shell.is-embedded .tl-python-runtime-brand { display:none !important; }
+.tl-python-runtime-shell.is-embedded .tl-python-runtime-body { grid-template-columns:minmax(0,1fr); }
 .tl-python-runtime-topbar { display: grid; grid-template-columns: 256px minmax(0,1fr) auto; align-items: center; gap: 22px; padding: 0 22px 0 0; border-bottom: 1px solid rgba(214,226,235,.09); background: rgba(7,13,19,.78); backdrop-filter: blur(16px); }
 .tl-python-runtime-brand { height: 70px; display: flex; align-items: center; gap: 13px; padding: 0 18px; border-right: 1px solid var(--tl-border-soft); }
 .tl-python-runtime-brand .tl-brand-mark { width: 34px; height: 34px; background: url("../icons/logo.svg") center / contain no-repeat; }
