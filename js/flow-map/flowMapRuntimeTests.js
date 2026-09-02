@@ -5516,7 +5516,15 @@ const renderSelect = (className, value, options, onChange) => {
   });
 };
 
+let activeFlowMenu = null;
+
+const closeActiveFlowMenu = () => {
+  activeFlowMenu?.close?.();
+  activeFlowMenu = null;
+};
+
 const bindFlowMenu = (trigger, menuProps, content) => {
+  const { onOpen, onClose, ...props } = menuProps || {};
   const menu = _.Menu(
     {
       trigger: "click",
@@ -5525,7 +5533,16 @@ const bindFlowMenu = (trigger, menuProps, content) => {
       closeOnOutside: true,
       closeOnEsc: true,
       panelClass: "tl-flow-dropdown-menu",
-      ...menuProps,
+      ...props,
+      onOpen: (entry) => {
+        activeFlowMenu?.close?.();
+        activeFlowMenu = menu;
+        onOpen?.(entry);
+      },
+      onClose: (entry) => {
+        if (activeFlowMenu === menu) activeFlowMenu = null;
+        onClose?.(entry);
+      },
     },
     content
   );
@@ -5708,6 +5725,14 @@ const renderFileMenu = () =>
       renderFileMenuItem({ iconName: "download", label: "Download", meta: ".tlflow con asset e runtime graph", onclick: downloadCurrentWorkspace }),
       renderFileMenuItem({ iconName: "image", label: "Export JPG", meta: "Immagine completa del Flow Map", onclick: exportCurrentFlowMapImage }),
       renderFileMenuItem({ iconName: "upload_file", label: "Import", meta: "Sostituisce il Flow Map importato", onclick: importWorkspaceFile }),
+      window.TrackerLensCustomNodePackages?.isAvailable?.()
+        ? renderFileMenuItem({
+          iconName: "extension",
+          label: "Import Node",
+          meta: "Importa o gestisci Custom Node .tl-node.zip",
+          onclick: () => window.TrackerLensCustomNodePackages.openDialog(),
+        })
+        : null,
       _.span({ class: "tl-flow-menu-separator" }),
       renderFileMenuItem({ iconName: "settings", label: "Settings", meta: "Nome, titolo e stato workspace", onclick: openWorkspaceSettings })
     )
@@ -5770,6 +5795,94 @@ const renderSampleTestMenu = () =>
       })
     )
   );
+
+const renderTopbarMenuItem = ({ iconName, label, meta = "", onclick, disabled = false }, close) =>
+  _.button(
+    {
+      type: "button",
+      class: "tl-flow-menu-item",
+      disabled,
+      "data-popover-select": "true",
+      onclick: (event) => {
+        if (disabled) return;
+        close?.();
+        onclick?.(event);
+      },
+    },
+    icon(iconName, "sm"),
+    _.span(_.strong(label), meta ? _.small(meta) : null)
+  );
+
+const renderTopbarMenu = ({ iconName, label, title, items = [], primary = false }) =>
+  bindFlowMenu(
+    btn(
+      {
+        class: `tl-flow-top-menu-trigger${primary ? " st-btn-primary" : ""}`,
+        title,
+        "aria-label": label,
+      },
+      icon(iconName, "sm"),
+      label,
+      icon("keyboard_arrow_down", "sm")
+    ),
+    { width: 296, closeOnSelect: true },
+    ({ close } = {}) =>
+      _.div(
+        { class: "tl-flow-menu-content" },
+        ...items.map((item) => renderTopbarMenuItem(item, close))
+      )
+  );
+
+const renderRunMenu = () =>
+  renderTopbarMenu({
+    iconName: state.testRun.running ? "hourglass_top" : "play_arrow",
+    label: state.testRun.running ? "Testing" : "Run",
+    title: "Run and runtime tools",
+    primary: state.testRun.running,
+    items: [
+      {
+        iconName: "offline_bolt",
+        label: "Pulse Test",
+        meta: "Test graph pulse from root sources and trackers",
+        disabled: state.testRun.running,
+        onclick: () => runFlowMapTest(),
+      },
+      {
+        iconName: "play_arrow",
+        label: "Live Test",
+        meta: "Run a real one-shot test from root nodes",
+        disabled: state.testRun.running,
+        onclick: () => runFlowMapLiveTest(),
+      },
+      {
+        iconName: "smart_toy",
+        label: "Agent Runtime",
+        meta: "Open trace and controlled runtime tools",
+        onclick: () => openAgentRuntimeDialog(),
+      },
+    ],
+  });
+
+const renderToolsMenu = () =>
+  renderTopbarMenu({
+    iconName: "build",
+    label: "Tools",
+    title: "Flow Map tools",
+    items: [
+      {
+        iconName: "sync",
+        label: "Refresh runtime",
+        meta: "Reload the workspace runtime state",
+        onclick: () => loadRuntime(),
+      },
+      {
+        iconName: "developer_board",
+        label: "DevTools",
+        meta: "Inspect the focused graph, node or channel",
+        onclick: () => openDevTools(),
+      },
+    ],
+  });
 
 const openAgentRuntimeDialog = async () => {
   if (!window.TrackerLensAgentRuntime?.inspectFlow) {
@@ -6254,31 +6367,12 @@ const renderHeader = () =>
       state.lastChannelAction
         ? btn({ onclick: restoreLastChannelAction }, icon("undo", "sm"), "Undo Channel")
         : null,
-      btn({ onclick: loadRuntime }, icon("sync", "sm"), "Refresh"),
-      window.TrackerLensCustomNodePackages?.isAvailable?.()
-        ? btn({ title: "Importa e gestisci Custom Node .tl-node.zip", onclick: () => window.TrackerLensCustomNodePackages.openDialog() }, icon("extension", "sm"), "Import Node")
-        : null,
-      btn({
-        class: state.testRun.running ? "is-primary is-running" : "",
-        title: state.testRun.summary || "Run graph pulse test from root Sources and Trackers only; child nodes start from parent payloads",
-        disabled: state.testRun.running,
-        onclick: () => runFlowMapTest(),
-      }, icon(state.testRun.running ? "hourglass_top" : "offline_bolt", "sm"), state.testRun.running ? "Testing" : "Pulse Test"),
-      btn({
-        class: state.testRun.running ? "is-primary is-running" : "",
-        title: state.testRun.summary || "Run real one-shot test from root nodes only; child nodes start from parent payloads",
-        disabled: state.testRun.running,
-        onclick: () => runFlowMapLiveTest(),
-      }, icon(state.testRun.running ? "hourglass_top" : "play_arrow", "sm"), state.testRun.running ? "Testing" : "Live Test"),
-      btn({
-        title: "Open Agent Runtime trace/debug tools",
-        onclick: () => openAgentRuntimeDialog(),
-      }, icon("smart_toy", "sm"), "Agent Run"),
+      renderRunMenu(),
       renderSampleTestMenu(),
       state.testRun.running
         ? btn({ class: "is-danger", title: state.testRun.keepOpen ? "Stop streaming live test" : "Stop current test", onclick: stopFlowMapTestRun }, icon("stop", "sm"), "Stop")
         : null,
-      btn({ onclick: openDevTools }, icon("developer_board", "sm"), "DevTools"),
+      renderToolsMenu(),
       btn({ class: "st-btn-primary", onclick: () => window.location.assign("connections.html") }, icon("link", "sm"), "Connections")
     )
   );

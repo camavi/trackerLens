@@ -2,6 +2,7 @@
 // Extracted from js/flowMapView.js; loaded in order by flowMap.html.
 const beginPan = (event) => {
   if (event.button !== 0 || event.ctrlKey) return;
+  closeActiveFlowMenu?.();
   if (event.target.closest?.(".tl-flow-node, .tl-flow-panel, .tl-flow-controls, .tl-flow-filterbar, .tl-flow-minimap")) return;
   const edge = edgeAtPointer(event);
   if (edge) {

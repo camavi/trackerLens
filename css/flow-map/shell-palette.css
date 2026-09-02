@@ -108,6 +108,16 @@ body {
   flex-wrap: nowrap;
 }
 
+.tl-flow-top-menu-trigger.cms-btn {
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tl-flow-top-menu-trigger.cms-btn .cms-icon:last-child {
+  margin-left: -2px;
+  opacity: 0.72;
+}
+
 .tl-flow-top-actions .cms-btn.is-running {
   border-color: rgba(34, 197, 94, 0.46);
   background: rgba(34, 197, 94, 0.12);
